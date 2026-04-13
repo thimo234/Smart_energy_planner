@@ -57,6 +57,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     persisted_state = await _async_load_runtime_state(hass, entry.entry_id)
     runtime_state[entry.entry_id] = {
         "manual_temperature": persisted_state.get("manual_temperature", _default_manual_temperature(merged)),
+        "manual_eco_temperature": persisted_state.get(
+            "manual_eco_temperature",
+            _default_manual_eco_temperature(merged),
+        ),
         "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
         "manual_preset_mode": persisted_state.get("manual_preset_mode", "none"),
         "last_switch_change": None,
@@ -253,6 +257,13 @@ def _default_manual_temperature(merged: dict[str, Any]) -> float:
     return round(min(max(20.0, min_temp), max_temp), 2)
 
 
+def _default_manual_eco_temperature(merged: dict[str, Any]) -> float:
+    min_temp = float(merged.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
+    max_temp = float(merged.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
+    configured = float(merged.get("thermostat_eco_temperature", 18.0))
+    return round(min(max(configured, min_temp), max_temp), 2)
+
+
 async def _async_load_runtime_state(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     """Load persisted runtime state for a planner entry."""
     store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
@@ -266,6 +277,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
     data = await store.async_load() or {}
     data[entry_id] = {
         "manual_temperature": runtime_state.get("manual_temperature"),
+        "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
         "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
         "manual_preset_mode": runtime_state.get("manual_preset_mode", "none"),
         "cooling_model": runtime_state.get("cooling_model", {}),

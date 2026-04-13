@@ -104,13 +104,13 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def target_temperature(self) -> float | None:
-        target = self.coordinator.data.thermostat_setpoint_c
-        if target is not None:
-            return target
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
-        manual = runtime_state.get("manual_temperature")
+        is_eco = self.preset_mode == PRESET_ECO
+        key = "manual_eco_temperature" if is_eco else "manual_temperature"
+        fallback = self.coordinator.data.thermostat_eco_setpoint_c if is_eco else self.coordinator.data.thermostat_setpoint_c
+        manual = runtime_state.get(key, fallback)
         if manual is None:
-            manual = min(self.max_temp, max(self.min_temp, 20.0))
+            manual = min(self.max_temp, max(self.min_temp, 18.0 if is_eco else 20.0))
         return round(float(manual), 2)
 
     @property
@@ -135,7 +135,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     def hvac_action(self) -> HVACAction:
         if self.hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
-        if self.coordinator.data.heat_pump_strategy == "energy_saving_on":
+        if self.preset_mode == PRESET_ECO:
             if self.current_temperature is not None and self.coordinator.data.thermostat_eco_setpoint_c is not None:
                 if self.current_temperature <= self.coordinator.data.thermostat_eco_setpoint_c:
                     return HVACAction.HEATING
@@ -171,11 +171,9 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return {
             "status": data.status,
             "planner_kind": data.planner_kind,
-            "thermostat_setpoint_c": self.target_temperature,
+            "thermostat_setpoint_c": data.thermostat_setpoint_c,
             "thermostat_eco_setpoint_c": data.thermostat_eco_setpoint_c,
-            "effective_target_temperature": data.thermostat_eco_setpoint_c
-            if data.heat_pump_strategy == "energy_saving_on"
-            else self.target_temperature,
+            "effective_target_temperature": self.target_temperature,
             "cold_tolerance": self._merged_config.get(
                 CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE
             ),
@@ -226,6 +224,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
             self._entry.entry_id, {}
         )
-        runtime_state["manual_temperature"] = round(clamped_temperature, 2)
+        key = "manual_eco_temperature" if self.preset_mode == PRESET_ECO else "manual_temperature"
+        runtime_state[key] = round(clamped_temperature, 2)
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         await self.coordinator.async_request_refresh()

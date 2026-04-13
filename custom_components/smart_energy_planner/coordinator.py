@@ -29,7 +29,7 @@ from .const import (
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
-    CONF_THERMOSTAT_ECO_SETBACK,
+    CONF_THERMOSTAT_ECO_TEMPERATURE,
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_TOTAL_ENERGY_SENSOR,
@@ -40,7 +40,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
-    DEFAULT_THERMOSTAT_ECO_SETBACK,
+    DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
@@ -206,12 +206,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             room_temperature = _coerce_float(room_temperature_state.state if room_temperature_state else None)
             thermostat_setpoint = self._get_manual_thermostat_setpoint()
-            eco_setback = float(self._config.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK))
-            thermostat_eco_setpoint = (
-                round(max(self._thermostat_min_temp(), thermostat_setpoint - eco_setback), 2)
-                if thermostat_setpoint is not None
-                else None
-            )
+            thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
@@ -359,27 +354,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         total_energy_state,
         planner_kind: str,
     ) -> dict[str, str]:
-        solar_status = self._state_status(solar_sensor, solar_state)
-        temperature_status = self._state_status(temperature_sensor, temperature_state)
-        room_temperature_status = self._state_status(room_temperature_sensor, room_temperature_state)
-        heating_switch_status = self._state_status(heating_switch_entity, heating_switch_state)
-        total_energy_status = self._state_status(total_energy_sensor, total_energy_state)
-
         if planner_kind == PLANNER_KIND_BATTERY:
-            temperature_status = "not_configured"
-            room_temperature_status = "not_configured"
-            heating_switch_status = "not_configured"
-        elif planner_kind == PLANNER_KIND_THERMOSTAT:
-            solar_status = "not_configured"
-            total_energy_status = "not_configured"
+            return {
+                "price_sensor": self._state_status(price_sensor, price_state),
+                "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
+                "total_energy_sensor": self._state_status(total_energy_sensor, total_energy_state),
+            }
 
         return {
             "price_sensor": self._state_status(price_sensor, price_state),
-            "solcast_today_sensor": solar_status,
-            "temperature_sensor": temperature_status,
-            "room_temperature_sensor": room_temperature_status,
-            "heating_switch_entity": heating_switch_status,
-            "total_energy_sensor": total_energy_status,
+            "temperature_sensor": self._state_status(temperature_sensor, temperature_state),
+            "room_temperature_sensor": self._state_status(room_temperature_sensor, room_temperature_state),
+            "heating_switch_entity": self._state_status(heating_switch_entity, heating_switch_state),
         }
 
     def _collect_source_errors(self, source_status: dict[str, str]) -> list[str]:
@@ -449,6 +435,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if manual_temperature is None:
             manual_temperature = min(max(20.0, self._thermostat_min_temp()), self._thermostat_max_temp())
         return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), manual_temperature)), 2)
+
+    def _get_manual_eco_temperature(self, thermostat_setpoint_c: float | None) -> float | None:
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        eco_temperature = _coerce_float(runtime_state.get("manual_eco_temperature"))
+        if eco_temperature is None:
+            eco_temperature = _coerce_float(
+                self._config.get(CONF_THERMOSTAT_ECO_TEMPERATURE, DEFAULT_THERMOSTAT_ECO_TEMPERATURE)
+            )
+        if eco_temperature is None:
+            return None
+        if thermostat_setpoint_c is not None:
+            eco_temperature = min(eco_temperature, thermostat_setpoint_c)
+        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), eco_temperature)), 2)
 
     def _thermostat_min_temp(self) -> float:
         return float(self._config.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))

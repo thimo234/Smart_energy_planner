@@ -28,7 +28,7 @@ from .const import (
     CONF_TEMPERATURE_SENSOR,
     CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
     CONF_THERMOSTAT_COLD_TOLERANCE,
-    CONF_THERMOSTAT_ECO_SETBACK,
+    CONF_THERMOSTAT_ECO_TEMPERATURE,
     CONF_THERMOSTAT_HOT_TOLERANCE,
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
@@ -45,7 +45,7 @@ from .const import (
     DEFAULT_PRICE_RESOLUTION,
     DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
-    DEFAULT_THERMOSTAT_ECO_SETBACK,
+    DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_HOT_TOLERANCE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
@@ -253,10 +253,12 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 domain=None,
             ),
             vol.Required(
-                CONF_THERMOSTAT_ECO_SETBACK,
-                default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
+                CONF_THERMOSTAT_ECO_TEMPERATURE,
+                default=user_input.get(
+                    CONF_THERMOSTAT_ECO_TEMPERATURE, DEFAULT_THERMOSTAT_ECO_TEMPERATURE
+                ),
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
+                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_THERMOSTAT_COLD_TOLERANCE,
