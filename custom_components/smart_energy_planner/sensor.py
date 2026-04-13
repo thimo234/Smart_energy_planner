@@ -95,6 +95,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "non_heating_daily_average_kwh": data.non_heating_daily_average_kwh,
             "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
             "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
+            "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

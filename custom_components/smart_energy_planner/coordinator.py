@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
+    CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PRICE_SENSOR,
@@ -28,6 +29,7 @@ from .const import (
     CONF_TEMPERATURE_SENSOR,
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
+    DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DOMAIN,
     PRICE_RESOLUTION_HOURLY,
 )
@@ -74,6 +76,7 @@ class PlannerResult:
     non_heating_daily_average_kwh: float
     estimated_total_home_demand_kwh: float
     estimated_hourly_home_demand: list[dict[str, str | float]]
+    battery_min_profit_per_kwh: float
     price_resolution: str
     source_status: dict[str, str]
     source_errors: list[str]
@@ -227,6 +230,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=0.0,
             estimated_total_home_demand_kwh=0.0,
             estimated_hourly_home_demand=[],
+            battery_min_profit_per_kwh=float(
+                self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
+            ),
             price_resolution=str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY)),
             source_status=source_status,
             source_errors=source_errors,
@@ -351,6 +357,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             best_solar_window is not None
             and best_solar_window.start <= dt_util.now() < best_solar_window.end
         )
+        now = dt_util.now()
+        future_windows = [window for window in windows if window.start > now]
+        future_min_price = min((window.price for window in future_windows), default=None)
+        future_max_price = max((window.price for window in future_windows), default=None)
+        battery_min_profit = float(
+            self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
+        )
+        future_cheaper_by = (
+            round(current_price - future_min_price, 4)
+            if current_price is not None and future_min_price is not None
+            else None
+        )
+        future_more_expensive_by = (
+            round(future_max_price - current_price, 4)
+            if current_price is not None and future_max_price is not None
+            else None
+        )
+        future_solar_charge_window = best_solar_window is not None and best_solar_window.start > now
 
         battery_enabled = bool(self._config[CONF_BATTERY_ENABLED])
         battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
@@ -407,28 +431,40 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         battery_strategy = "accu_uit"
         if battery_enabled:
-            if solar_covers_today:
+            if solar_covers_today and best_solar_is_now:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
                     f"battery should keep room for solar charging up to {min(max_charge, battery_capacity):.1f} kW"
                 )
-                if cheap_now:
-                    rationale_parts.append("grid charging is not needed because forecast solar covers the expected demand")
-            elif cheap_now and solar_forecast_kwh < 4.0:
+                rationale_parts.append("grid charging is not needed because forecast solar covers the expected demand")
+            elif (
+                current_price is not None
+                and future_cheaper_by is not None
+                and future_cheaper_by >= battery_min_profit
+                and (future_solar_charge_window or future_min_price is not None)
+            ):
+                battery_strategy = "ontladen"
+                score += 10
+                rationale_parts.append(
+                    f"battery can discharge up to {min(max_discharge, battery_capacity):.1f} kW because a later cheaper charging window is at least {battery_min_profit:.2f} EUR/kWh better"
+                )
+                if future_solar_charge_window:
+                    rationale_parts.append("battery may discharge to the grid now to create room for cheap solar charging later")
+            elif (
+                cheap_now
+                and future_more_expensive_by is not None
+                and future_more_expensive_by >= battery_min_profit
+                and not solar_covers_today
+            ):
                 battery_strategy = "laden_van_net"
                 score += 10
                 rationale_parts.append(
-                    f"battery can charge from the grid up to {min(max_charge, battery_capacity):.1f} kW"
+                    f"battery can charge from the grid up to {min(max_charge, battery_capacity):.1f} kW because a later discharge window is at least {battery_min_profit:.2f} EUR/kWh more expensive"
                 )
-            else:
-                expensive_threshold = most_expensive.price - (price_spread * 0.20)
-                if current_price is not None and current_price >= expensive_threshold:
-                    battery_strategy = "ontladen"
-                    score += 5
-                    rationale_parts.append(
-                        f"battery can discharge up to {min(max_discharge, battery_capacity):.1f} kW during high prices"
-                    )
+            elif solar_covers_today and future_solar_charge_window:
+                battery_strategy = "accu_uit"
+                rationale_parts.append("battery can stay idle until the later solar charging window starts")
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
         planner_status = "ready_with_warnings" if source_errors else "ready"
@@ -455,6 +491,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=round(non_heating_daily_average_kwh, 2),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
+            battery_min_profit_per_kwh=battery_min_profit,
             price_resolution=price_resolution,
             source_status=source_status,
             source_errors=source_errors,

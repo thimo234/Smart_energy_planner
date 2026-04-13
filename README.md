@@ -33,6 +33,7 @@ Add the integration from the Home Assistant UI and configure:
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
+- Minimum battery profit per kWh
 - Maximum battery charge power
 - Maximum battery discharge power
 

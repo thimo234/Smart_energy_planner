@@ -14,6 +14,7 @@
           "price_resolution": "Prijsinterval energiecontract",
           "battery_enabled": "Thuisaccu inschakelen",
           "battery_capacity_kwh": "Accucapaciteit (kWh)",
+          "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
         }
@@ -35,6 +36,7 @@
           "price_resolution": "Prijsinterval energiecontract",
           "battery_enabled": "Thuisaccu inschakelen",
           "battery_capacity_kwh": "Accucapaciteit (kWh)",
+          "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
         }

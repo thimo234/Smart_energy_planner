@@ -14,6 +14,7 @@
           "price_resolution": "Energy contract price interval",
           "battery_enabled": "Enable home battery support",
           "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)"
         }
@@ -35,6 +36,7 @@
           "price_resolution": "Energy contract price interval",
           "battery_enabled": "Enable home battery support",
           "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)"
         }
