@@ -21,6 +21,7 @@ from .const import (
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
@@ -100,6 +101,16 @@ class PlannerResult:
     battery_charge_hours_needed_until_sunset: float
     target_battery_full_by_sunset: bool
     planned_grid_charge_windows: list[dict[str, str | float]]
+    battery_soc_percent: float | None
+    battery_energy_available_kwh: float
+    battery_remaining_capacity_kwh: float
+    next_charge_opportunity_start: str | None
+    home_demand_until_next_charge_kwh: float
+    battery_reserved_energy_kwh: float
+    battery_energy_available_for_discharge_kwh: float
+    battery_room_needed_for_solar_kwh: float
+    next_high_price_window_start: str | None
+    next_high_price_window_price: float | None
     room_temperature_c: float | None
     thermostat_setpoint_c: float | None
     thermostat_eco_setpoint_c: float | None
@@ -144,6 +155,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             room_temperature_sensor = self._config.get(CONF_ROOM_TEMPERATURE_SENSOR)
             heating_switch_entity = self._config.get(CONF_HEATING_SWITCH_ENTITY)
             total_energy_sensor = self._config.get(CONF_TOTAL_ENERGY_SENSOR)
+            battery_soc_sensor = self._config.get(CONF_BATTERY_SOC_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
@@ -151,6 +163,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             room_temperature_state = self.hass.states.get(room_temperature_sensor) if room_temperature_sensor else None
             heating_switch_state = self.hass.states.get(heating_switch_entity) if heating_switch_entity else None
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
+            battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
             source_status = self._build_source_status(
                 price_sensor=price_sensor,
@@ -165,6 +178,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 heating_switch_state=heating_switch_state,
                 total_energy_sensor=total_energy_sensor,
                 total_energy_state=total_energy_state,
+                battery_soc_sensor=battery_soc_sensor,
+                battery_soc_state=battery_soc_state,
                 planner_kind=planner_kind,
             )
             source_errors = self._collect_source_errors(source_status)
@@ -201,6 +216,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_state.attributes.get("estimate") if solar_state else None,
                 default=_coerce_float(solar_state.state, default=0.0) if solar_state else 0.0,
             )
+            battery_soc_percent = _coerce_float(battery_soc_state.state if battery_soc_state else None)
+            if battery_soc_percent is not None:
+                battery_soc_percent = max(0.0, min(100.0, battery_soc_percent))
             outdoor_temperature = _coerce_float(
                 temperature_state.state if temperature_state else None, default=12.0
             )
@@ -230,6 +248,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["room_temperature_sensor"] = "invalid_temperature_value"
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
+            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_state and battery_soc_percent is None:
+                source_status["battery_soc_sensor"] = "invalid_battery_soc_value"
 
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
@@ -266,23 +286,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
                 room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
                 cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
+                battery_soc_percent=battery_soc_percent,
                 price_resolution=price_resolution,
                 source_status=source_status,
                 source_errors=self._collect_source_errors(source_status),
             )
         except Exception as err:
             _LOGGER.exception("Planner update failed")
+            planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             return self._build_pending_result(
                 "planner_runtime_error",
-                str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)),
-                {
-                    "price_sensor": "unknown",
-                    "solcast_today_sensor": "unknown",
-                    "temperature_sensor": "unknown",
-                    "room_temperature_sensor": "unknown",
-                    "heating_switch_entity": "unknown",
-                    "total_energy_sensor": "unknown",
-                },
+                planner_kind,
+                self._unknown_source_status(planner_kind),
                 [f"planner_runtime_error: {err!s}"],
             )
 
@@ -319,6 +334,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_charge_hours_needed_until_sunset=0.0,
             target_battery_full_by_sunset=False,
             planned_grid_charge_windows=[],
+            battery_soc_percent=None,
+            battery_energy_available_kwh=0.0,
+            battery_remaining_capacity_kwh=0.0,
+            next_charge_opportunity_start=None,
+            home_demand_until_next_charge_kwh=0.0,
+            battery_reserved_energy_kwh=0.0,
+            battery_energy_available_for_discharge_kwh=0.0,
+            battery_room_needed_for_solar_kwh=0.0,
+            next_high_price_window_start=None,
+            next_high_price_window_price=None,
             room_temperature_c=None,
             thermostat_setpoint_c=None,
             thermostat_eco_setpoint_c=None,
@@ -352,6 +377,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         heating_switch_state,
         total_energy_sensor: str | None,
         total_energy_state,
+        battery_soc_sensor: str | None,
+        battery_soc_state,
         planner_kind: str,
     ) -> dict[str, str]:
         if planner_kind == PLANNER_KIND_BATTERY:
@@ -359,6 +386,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "price_sensor": self._state_status(price_sensor, price_state),
                 "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
                 "total_energy_sensor": self._state_status(total_energy_sensor, total_energy_state),
+                "battery_soc_sensor": self._state_status(battery_soc_sensor, battery_soc_state),
             }
 
         return {
@@ -383,6 +411,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
             return "entity_unavailable"
         return "ok"
+
+    def _unknown_source_status(self, planner_kind: str) -> dict[str, str]:
+        if planner_kind == PLANNER_KIND_BATTERY:
+            return {
+                "price_sensor": "unknown",
+                "solcast_today_sensor": "unknown",
+                "total_energy_sensor": "unknown",
+                "battery_soc_sensor": "unknown",
+            }
+
+        return {
+            "price_sensor": "unknown",
+            "temperature_sensor": "unknown",
+            "room_temperature_sensor": "unknown",
+            "heating_switch_entity": "unknown",
+        }
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
         """Estimate average daily usage from recorder history of a cumulative kWh sensor."""
@@ -631,6 +675,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         room_cooling_hours_to_eco: float | None,
         room_cooling_rate_c_per_hour: float | None,
         cooling_reference_outdoor_temp_c: float | None,
+        battery_soc_percent: float | None,
         price_resolution: str,
         source_status: dict[str, str],
         source_errors: list[str],
@@ -715,9 +760,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         max_discharge = float(
             self._config.get(CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW)
         )
+        battery_energy_available_kwh = (
+            round(battery_capacity * (battery_soc_percent / 100), 3)
+            if battery_soc_percent is not None
+            else 0.0
+        )
+        battery_remaining_capacity_kwh = max(0.0, round(battery_capacity - battery_energy_available_kwh, 3))
         target_battery_full_by_sunset = battery_enabled and sunset_time is not None and sunset_time > now
         grid_charge_needed_until_sunset = (
-            max(0.0, round(battery_capacity - projected_solar_surplus_until_sunset, 3))
+            max(
+                0.0,
+                round(
+                    battery_capacity
+                    - battery_energy_available_kwh
+                    - projected_solar_surplus_until_sunset,
+                    3,
+                ),
+            )
             if target_battery_full_by_sunset
             else 0.0
         )
@@ -746,6 +805,64 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and (window_end := dt_util.parse_datetime(str(window["end"]))) is not None
             and window_start <= now < window_end
             for window in planned_grid_charge_windows
+        )
+        next_planned_grid_charge_start = min(
+            (
+                window_start
+                for window in planned_grid_charge_windows
+                if (window_start := dt_util.parse_datetime(str(window["start"]))) is not None and window_start > now
+            ),
+            default=None,
+        )
+        next_solar_charge_start = min(
+            (window.start for window in solar_windows if window.forecast_kwh > 0 and window.start > now),
+            default=None,
+        )
+        next_charge_opportunity = min(
+            (moment for moment in (next_solar_charge_start, next_planned_grid_charge_start) if moment is not None),
+            default=None,
+        )
+        home_demand_until_next_charge_kwh = round(
+            self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
+            3,
+        )
+        battery_reserved_energy_kwh = min(
+            battery_energy_available_kwh,
+            max(0.0, round(home_demand_until_next_charge_kwh, 3)),
+        )
+        battery_energy_available_for_discharge_kwh = max(
+            0.0,
+            round(battery_energy_available_kwh - battery_reserved_energy_kwh, 3),
+        )
+        battery_room_needed_for_solar_kwh = max(
+            0.0,
+            round(battery_energy_available_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
+        )
+        next_high_price_window = max(
+            (
+                window
+                for window in future_windows
+                if current_price is None or window.price >= current_price + battery_min_profit
+            ),
+            key=lambda item: item.price,
+            default=None,
+        )
+        keep_energy_for_future_peak = (
+            next_high_price_window is not None
+            and current_price is not None
+            and next_high_price_window.price - current_price >= battery_min_profit
+        )
+        future_price_justifies_grid_charge = (
+            current_price is not None
+            and future_max_price is not None
+            and future_max_price - current_price >= battery_min_profit
+        )
+        discharge_profitable_now = (
+            current_price is not None
+            and (
+                (future_min_price is not None and current_price - future_min_price >= battery_min_profit)
+                or current_price >= expensive_threshold
+            )
         )
 
         score = 50
@@ -816,16 +933,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if planner_kind == PLANNER_KIND_THERMOSTAT:
             battery_strategy = "not_applicable"
         elif battery_enabled:
-            if cheap_now and best_solar_is_now:
+            if battery_soc_percent is None:
+                rationale_parts.append("battery state of charge is unavailable, so battery control stays idle")
+            elif cheap_now and best_solar_is_now and battery_remaining_capacity_kwh > 0:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 12
                 rationale_parts.append(
-                    f"battery should use the active solar window and can charge up to {min(max_charge, battery_capacity):.1f} kW"
+                    f"battery should use the active solar window and can charge up to {min(max_charge, battery_remaining_capacity_kwh, max_charge):.1f} kW"
+                )
+            elif (
+                battery_room_needed_for_solar_kwh > 0
+                and battery_energy_available_for_discharge_kwh > 0
+                and current_price is not None
+                and current_price >= expensive_threshold
+            ):
+                battery_strategy = "ontladen"
+                score += 12
+                rationale_parts.append(
+                    f"battery can discharge about {min(battery_energy_available_for_discharge_kwh, max_discharge):.1f} kWh-equivalent now to create room for the coming solar surplus"
                 )
             elif (
                 target_battery_full_by_sunset
                 and grid_charge_needed_until_sunset > 0
                 and in_planned_grid_charge_window
+                and battery_remaining_capacity_kwh > 0
             ):
                 battery_strategy = "laden_van_net"
                 score += 12
@@ -839,19 +970,35 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
-                    f"battery should keep room for solar charging up to {min(max_charge, battery_capacity):.1f} kW"
+                    f"battery should keep room for solar charging up to {min(max_charge, battery_remaining_capacity_kwh):.1f} kW"
                 )
                 rationale_parts.append("grid charging is not needed because forecast solar covers the expected demand")
             elif (
-                current_price is not None
-                and future_cheaper_by is not None
-                and future_cheaper_by >= battery_min_profit
-                and (future_solar_charge_window or future_min_price is not None)
+                keep_energy_for_future_peak
+                and battery_energy_available_for_discharge_kwh <= 0
+            ):
+                battery_strategy = "accu_uit"
+                rationale_parts.append(
+                    "battery stays idle because the remaining charge is reserved for household use until the next charging moment"
+                )
+            elif (
+                keep_energy_for_future_peak
+                and current_price is not None
+                and next_high_price_window is not None
+            ):
+                battery_strategy = "accu_uit"
+                rationale_parts.append(
+                    f"battery saves charge for a later higher-price window around {next_high_price_window.start.isoformat()}"
+                )
+            elif (
+                discharge_profitable_now
+                and battery_energy_available_for_discharge_kwh > 0
+                and (future_solar_charge_window or future_min_price is not None or battery_room_needed_for_solar_kwh > 0)
             ):
                 battery_strategy = "ontladen"
                 score += 10
                 rationale_parts.append(
-                    f"battery can discharge up to {min(max_discharge, battery_capacity):.1f} kW because a later cheaper charging window is at least {battery_min_profit:.2f} EUR/kWh better"
+                    f"battery can discharge up to {min(max_discharge, battery_energy_available_for_discharge_kwh):.1f} kW because a later charging opportunity is at least {battery_min_profit:.2f} EUR/kWh cheaper"
                 )
                 if future_solar_charge_window:
                     rationale_parts.append("battery may discharge to the grid now to create room for cheap solar charging later")
@@ -862,6 +1009,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and not in_planned_grid_charge_window
                 and target_battery_full_by_sunset
                 and grid_charge_needed_until_sunset > 0
+                and battery_energy_available_for_discharge_kwh > 0
             ):
                 battery_strategy = "ontladen"
                 score += 8
@@ -870,14 +1018,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             elif (
                 cheap_now
-                and future_more_expensive_by is not None
-                and future_more_expensive_by >= battery_min_profit
+                and future_price_justifies_grid_charge
                 and not solar_covers_today
+                and battery_remaining_capacity_kwh > 0
             ):
                 battery_strategy = "laden_van_net"
                 score += 10
                 rationale_parts.append(
-                    f"battery can charge from the grid up to {min(max_charge, battery_capacity):.1f} kW because a later discharge window is at least {battery_min_profit:.2f} EUR/kWh more expensive"
+                    f"battery can charge from the grid up to {min(max_charge, battery_remaining_capacity_kwh):.1f} kW because a later discharge window is at least {battery_min_profit:.2f} EUR/kWh more expensive"
                 )
             elif solar_covers_today and future_solar_charge_window:
                 battery_strategy = "accu_uit"
@@ -890,6 +1038,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             elif target_battery_full_by_sunset and planned_grid_charge_price_ceiling is not None:
                 rationale_parts.append(
                     f"grid charging only makes sense in pre-sunset windows up to about {planned_grid_charge_price_ceiling:.3f} EUR/kWh"
+                )
+            elif battery_energy_available_for_discharge_kwh <= 0 and battery_energy_available_kwh > 0:
+                rationale_parts.append(
+                    "battery keeps its remaining charge for household demand until the next charging opportunity"
                 )
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
@@ -925,6 +1077,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_charge_hours_needed_until_sunset=battery_charge_hours_needed_until_sunset,
             target_battery_full_by_sunset=target_battery_full_by_sunset,
             planned_grid_charge_windows=planned_grid_charge_windows,
+            battery_soc_percent=battery_soc_percent,
+            battery_energy_available_kwh=battery_energy_available_kwh,
+            battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
+            next_charge_opportunity_start=next_charge_opportunity.isoformat() if next_charge_opportunity else None,
+            home_demand_until_next_charge_kwh=home_demand_until_next_charge_kwh,
+            battery_reserved_energy_kwh=battery_reserved_energy_kwh,
+            battery_energy_available_for_discharge_kwh=battery_energy_available_for_discharge_kwh,
+            battery_room_needed_for_solar_kwh=battery_room_needed_for_solar_kwh,
+            next_high_price_window_start=next_high_price_window.start.isoformat() if next_high_price_window else None,
+            next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
             thermostat_setpoint_c=thermostat_setpoint_c,
             thermostat_eco_setpoint_c=thermostat_eco_setpoint_c,

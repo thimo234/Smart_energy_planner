@@ -18,6 +18,7 @@ from .const import (
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
@@ -104,6 +105,17 @@ def _filter_energy_sensors(hass: HomeAssistant) -> list[str]:
     ]
 
 
+def _filter_battery_soc_sensors(hass: HomeAssistant) -> list[str]:
+    """Return likely battery state-of-charge percentage sensors."""
+    return [
+        state.entity_id
+        for state in _sensor_options(hass)
+        if state.attributes.get("device_class")
+        in (SensorDeviceClass.BATTERY, SensorDeviceClass.BATTERY.value)
+        or state.attributes.get("unit_of_measurement") == "%"
+    ]
+
+
 def _entity_selector(
     include_entities: list[str],
     *,
@@ -171,6 +183,11 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ): _entity_selector(
                 _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
+            ),
+            vol.Required(
+                CONF_BATTERY_SOC_SENSOR, default=user_input.get(CONF_BATTERY_SOC_SENSOR)
+            ): _entity_selector(
+                _filter_battery_soc_sensors(hass), current_value=user_input.get(CONF_BATTERY_SOC_SENSOR)
             ),
             vol.Required(
                 CONF_HEATING_LOOKBACK_DAYS,

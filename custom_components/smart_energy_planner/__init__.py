@@ -16,6 +16,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_KIND,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
     CONF_ROOM_TEMPERATURE_SENSOR,
@@ -74,6 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     tracked_entities = [merged.get(CONF_PRICE_SENSOR)]
     if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(merged.get(CONF_SOLCAST_TODAY_SENSOR))
+        tracked_entities.append(merged.get(CONF_BATTERY_SOC_SENSOR))
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         tracked_entities.extend(
             [

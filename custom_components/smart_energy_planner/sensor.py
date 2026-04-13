@@ -113,7 +113,6 @@ class BatteryPlannerSensor(PlannerSensor):
     @property
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
         data: PlannerResult = self.coordinator.data
-        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
         return super().extra_state_attributes | {
             "current_price": data.current_price,
             "price_spread": data.price_spread,
@@ -147,6 +146,18 @@ class BatteryPlannerSensor(PlannerSensor):
             ),
             "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
             "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
+            "battery_soc_percent": getattr(data, "battery_soc_percent", None),
+            "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),
+            "battery_remaining_capacity_kwh": getattr(data, "battery_remaining_capacity_kwh", 0.0),
+            "next_charge_opportunity_start": getattr(data, "next_charge_opportunity_start", None),
+            "home_demand_until_next_charge_kwh": getattr(data, "home_demand_until_next_charge_kwh", 0.0),
+            "battery_reserved_energy_kwh": getattr(data, "battery_reserved_energy_kwh", 0.0),
+            "battery_energy_available_for_discharge_kwh": getattr(
+                data, "battery_energy_available_for_discharge_kwh", 0.0
+            ),
+            "battery_room_needed_for_solar_kwh": getattr(data, "battery_room_needed_for_solar_kwh", 0.0),
+            "next_high_price_window_start": getattr(data, "next_high_price_window_start", None),
+            "next_high_price_window_price": getattr(data, "next_high_price_window_price", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
