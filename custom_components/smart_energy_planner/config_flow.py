@@ -194,7 +194,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
     @staticmethod
     def async_get_options_flow(config_entry):
         """Return the options flow."""
-        return SmartEnergyPlannerOptionsFlow(config_entry)
+        return SmartEnergyPlannerOptionsFlow()
 
 
 class SmartEnergyPlannerOptionsFlow(OptionsFlow):
