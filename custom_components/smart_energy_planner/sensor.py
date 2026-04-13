@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfTemperature
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -44,23 +44,6 @@ async def async_setup_entry(
     if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
         entities.extend(
             [
-                PlannerSensor(coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"),
-                PlannerSensor(
-                    coordinator,
-                    entry,
-                    "heating_estimate",
-                    "Heating Estimate",
-                    "heating_estimate_kwh",
-                    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-                ),
-                PlannerSensor(
-                    coordinator,
-                    entry,
-                    "thermostat_eco_setpoint",
-                    "Thermostat Eco Setpoint",
-                    "thermostat_eco_setpoint_c",
-                    native_unit_of_measurement=UnitOfTemperature.CELSIUS,
-                ),
                 PlannerSensor(
                     coordinator,
                     entry,
@@ -68,6 +51,13 @@ async def async_setup_entry(
                     "Room Cooling Hours To Eco",
                     "room_cooling_hours_to_eco",
                     native_unit_of_measurement="h",
+                ),
+                PlannerSensor(
+                    coordinator,
+                    entry,
+                    "thermostat_eco_start_time",
+                    "Thermostat Eco Start Time",
+                    "planned_eco_window_start",
                 ),
             ]
         )

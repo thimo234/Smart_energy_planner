@@ -55,6 +55,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_has_entity_name = True
     _attr_name = "Planner Thermostat"
+    _attr_target_temperature_step = 0.5
+    _attr_precision = 0.1
 
     def __init__(self, coordinator: SmartEnergyPlannerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -69,6 +71,10 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @property
     def target_temperature(self) -> float | None:
         return self.coordinator.data.thermostat_setpoint_c
+
+    @property
+    def target_temperature_step(self) -> float:
+        return 0.5
 
     @property
     def hvac_action(self) -> HVACAction:
@@ -92,6 +98,13 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @property
     def max_temp(self) -> float:
         return float(self._merged_config.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Keep a simple heat-only thermostat interface."""
+        if hvac_mode != HVACMode.HEAT:
+            return
+        self._attr_hvac_mode = hvac_mode
+        self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float | None]:
