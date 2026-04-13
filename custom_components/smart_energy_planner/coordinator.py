@@ -73,6 +73,7 @@ class PlannerResult:
     total_energy_daily_average_kwh: float
     non_heating_daily_average_kwh: float
     estimated_total_home_demand_kwh: float
+    estimated_hourly_home_demand: list[dict[str, str | float]]
     price_resolution: str
     source_status: dict[str, str]
     source_errors: list[str]
@@ -225,6 +226,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_daily_average_kwh=0.0,
             non_heating_daily_average_kwh=0.0,
             estimated_total_home_demand_kwh=0.0,
+            estimated_hourly_home_demand=[],
             price_resolution=str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY)),
             source_status=source_status,
             source_errors=source_errors,
@@ -336,6 +338,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         price_spread = round(most_expensive.price - cheapest.price, 4)
         best_solar_window = self._select_best_solar_window(solar_windows)
         estimated_total_home_demand_kwh = round(non_heating_daily_average_kwh + heating_estimate_kwh, 2)
+        estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=non_heating_daily_average_kwh,
+            heating_estimate_kwh=heating_estimate_kwh,
+        )
 
         cheap_threshold = cheapest.price + (price_spread * 0.25)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
@@ -437,11 +443,48 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_daily_average_kwh=round(total_energy_daily_average_kwh, 2),
             non_heating_daily_average_kwh=round(non_heating_daily_average_kwh, 2),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
+            estimated_hourly_home_demand=estimated_hourly_home_demand,
             price_resolution=price_resolution,
             source_status=source_status,
             source_errors=source_errors,
             rationale=rationale,
         )
+
+    def _build_hourly_home_demand_forecast(
+        self,
+        *,
+        non_heating_daily_average_kwh: float,
+        heating_estimate_kwh: float,
+    ) -> list[dict[str, str | float]]:
+        """Build a simple hourly demand forecast for today."""
+        base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
+
+        # Higher heating share during morning and evening hours.
+        heating_profile = [
+            0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
+            0.06, 0.07, 0.06, 0.045, 0.035, 0.03,
+            0.025, 0.025, 0.025, 0.03, 0.04, 0.055,
+            0.07, 0.075, 0.065, 0.05, 0.04, 0.035,
+        ]
+        profile_sum = sum(heating_profile) or 1.0
+        now = dt_util.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        forecast: list[dict[str, str | float]] = []
+        for hour in range(24):
+            slot_start = today_start + timedelta(hours=hour)
+            slot_end = slot_start + timedelta(hours=1)
+            heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
+            total_hourly = round(base_hourly + heating_hourly, 3)
+            forecast.append(
+                {
+                    "start": slot_start.isoformat(),
+                    "end": slot_end.isoformat(),
+                    "estimated_kwh": total_hourly,
+                }
+            )
+
+        return forecast
 
     def _extract_price_windows(
         self, attributes: dict[str, Any], current_price: float | None, price_resolution: str

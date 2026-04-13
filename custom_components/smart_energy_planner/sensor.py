@@ -29,6 +29,14 @@ async def async_setup_entry(
             PlannerSensor(
                 coordinator,
                 entry,
+                "estimated_home_demand_today",
+                "Estimated Home Demand Today",
+                "estimated_total_home_demand_kwh",
+                native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+            ),
+            PlannerSensor(
+                coordinator,
+                entry,
                 "heating_estimate",
                 "Heating Estimate",
                 "heating_estimate_kwh",
@@ -86,6 +94,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "total_energy_daily_average_kwh": data.total_energy_daily_average_kwh,
             "non_heating_daily_average_kwh": data.non_heating_daily_average_kwh,
             "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
+            "estimated_hourly_home_demand": data.estimated_hourly_home_demand,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

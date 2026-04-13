@@ -47,9 +47,11 @@ The planner derives non-heating household usage from the history of your total h
 - `sensor.smart_energy_planner_recommendation`
 - `sensor.smart_energy_planner_battery_strategy`
 - `sensor.smart_energy_planner_heat_pump_strategy`
+- `sensor.smart_energy_planner_estimated_home_demand_today`
 - `sensor.smart_energy_planner_heating_estimate`
 
 The sensors also expose extra attributes such as the next cheap window, the price spread for the current day, and the Solcast production forecast used by the planner.
+The estimated home demand sensor includes `estimated_hourly_home_demand` with a per-hour forecast for today.
 
 For Solcast, the planner works best with the sensor that exposes today's forecast total plus `detailedHourly`.
 For heating, the integration expects a cumulative energy sensor from the heat pump and derives daily usage from recorder history.
