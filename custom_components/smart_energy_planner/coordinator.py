@@ -860,6 +860,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (moment for moment in (next_solar_charge_start, next_planned_grid_charge_start) if moment is not None),
             default=None,
         )
+        charge_window_active_now = best_solar_is_now or in_planned_grid_charge_window
+        charge_session_consumed_today = (
+            next_charge_opportunity is not None
+            and next_charge_opportunity.date() == now.date()
+            and now > next_charge_opportunity
+            and not charge_window_active_now
+        )
+        charge_allowed_today = charge_window_active_now or not charge_session_consumed_today
         home_demand_until_next_charge_kwh = round(
             self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
@@ -983,7 +991,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         elif battery_enabled:
             if battery_soc_percent is None:
                 rationale_parts.append("battery state of charge is unavailable, so battery control stays idle")
-            elif cheap_now and best_solar_is_now and battery_remaining_capacity_kwh > 0:
+            elif cheap_now and best_solar_is_now and battery_remaining_capacity_kwh > 0 and charge_allowed_today:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 12
                 rationale_parts.append(
@@ -1005,6 +1013,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and grid_charge_needed_until_sunset > 0
                 and in_planned_grid_charge_window
                 and battery_remaining_capacity_kwh > 0
+                and charge_allowed_today
             ):
                 battery_strategy = "laden_van_net"
                 score += 12
@@ -1014,7 +1023,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 rationale_parts.append(
                     f"the planner reserved roughly {battery_charge_hours_needed_until_sunset:.1f} charging hours in the cheapest pre-sunset windows"
                 )
-            elif solar_covers_today and best_solar_is_now:
+            elif solar_covers_today and best_solar_is_now and charge_allowed_today:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
@@ -1069,15 +1078,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and future_price_justifies_grid_charge
                 and not solar_covers_today
                 and battery_remaining_capacity_kwh > 0
+                and charge_allowed_today
             ):
                 battery_strategy = "laden_van_net"
                 score += 10
                 rationale_parts.append(
                     f"battery can charge from the grid up to {min(max_charge, battery_remaining_capacity_kwh):.1f} kW because a later discharge window is at least {battery_min_profit:.2f} EUR/kWh more expensive"
                 )
-            elif solar_covers_today and future_solar_charge_window:
+            elif solar_covers_today and future_solar_charge_window and charge_allowed_today:
                 battery_strategy = "accu_uit"
                 rationale_parts.append("battery can stay idle until the later solar charging window starts")
+            elif charge_session_consumed_today and next_charge_opportunity is not None:
+                rationale_parts.append(
+                    "battery uses one charge window per day, so after the daytime charge block it only allows idle or discharge until tomorrow"
+                )
             elif target_battery_full_by_sunset and grid_charge_needed_until_sunset <= 0:
                 battery_strategy = "laden_met_zonne_energie" if best_solar_is_now else "accu_uit"
                 rationale_parts.append(
