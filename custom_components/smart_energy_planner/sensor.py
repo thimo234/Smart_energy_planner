@@ -30,6 +30,9 @@ async def async_setup_entry(
                 coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"
             ),
             PlannerSensor(
+                coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"
+            ),
+            PlannerSensor(
                 coordinator,
                 entry,
                 "heating_estimate",
@@ -75,11 +78,16 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         """Return shared planner attributes."""
         data: PlannerResult = self.coordinator.data
         return {
+            "status": data.status,
             "current_price": data.current_price,
             "price_spread": data.price_spread,
             "next_cheap_window_start": data.next_window_start,
             "next_cheap_window_end": data.next_window_end,
             "next_cheap_window_price": data.next_window_price,
+            "best_solar_window_start": data.best_solar_window_start,
+            "best_solar_window_end": data.best_solar_window_end,
+            "best_solar_window_kwh": data.best_solar_window_kwh,
+            "solcast_confidence": data.solcast_confidence,
             "solar_forecast_kwh": data.solar_forecast_kwh,
             "heating_estimate_kwh": data.heating_estimate_kwh,
             "lookback_daily_average_kwh": data.lookback_daily_average_kwh,

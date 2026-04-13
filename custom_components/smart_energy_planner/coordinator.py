@@ -42,12 +42,25 @@ class PlannerWindow:
 
 
 @dataclass(slots=True)
+class SolarWindow:
+    """A solar forecast window."""
+
+    start: datetime
+    end: datetime
+    forecast_kwh: float
+    forecast_kwh_p10: float | None
+    forecast_kwh_p90: float | None
+
+
+@dataclass(slots=True)
 class PlannerResult:
     """Planner output payload."""
 
+    status: str
     score: int
     recommendation: str
     battery_strategy: str
+    heat_pump_strategy: str
     heating_estimate_kwh: float
     solar_forecast_kwh: float
     current_price: float | None
@@ -55,6 +68,10 @@ class PlannerResult:
     next_window_start: str | None
     next_window_end: str | None
     next_window_price: float | None
+    best_solar_window_start: str | None
+    best_solar_window_end: str | None
+    best_solar_window_kwh: float | None
+    solcast_confidence: float | None
     lookback_daily_average_kwh: float
     rationale: str
 
@@ -92,24 +109,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         heating_state = self.hass.states.get(heating_sensor)
 
         if not price_state:
-            raise UpdateFailed(f"Price sensor not found: {price_sensor}")
+            return self._build_pending_result("waiting_for_price_sensor")
         if not solar_state:
-            raise UpdateFailed(f"Solar forecast sensor not found: {solar_sensor}")
+            return self._build_pending_result("waiting_for_solcast_sensor")
         if not temperature_state:
-            raise UpdateFailed(f"Temperature sensor not found: {temperature_sensor}")
+            return self._build_pending_result("waiting_for_temperature_sensor")
         if not heating_state:
-            raise UpdateFailed(f"Heating energy sensor not found: {heating_sensor}")
+            return self._build_pending_result("waiting_for_heating_sensor")
 
         windows = self._extract_price_windows(price_state.attributes)
         if not windows:
-            raise UpdateFailed("No hourly Nord Pool prices found on the selected price sensor")
+            return self._build_pending_result("waiting_for_nordpool_prices")
 
         current_price = _coerce_float(price_state.state)
-        solar_forecast = _coerce_float(solar_state.state, default=0.0)
+        solar_forecast = _coerce_float(
+            solar_state.attributes.get("estimate"),
+            default=_coerce_float(solar_state.state, default=0.0),
+        )
         outdoor_temperature = _coerce_float(temperature_state.state, default=12.0)
+        solar_windows = self._extract_solar_windows(solar_state.attributes)
+        solcast_confidence = _coerce_float(
+            solar_state.attributes.get("analysis", {}).get("confidence")
+        )
         lookback_average = await self._async_get_average_heating_usage(heating_sensor)
         fallback_heating = _coerce_float(heating_state.state, default=0.0)
-        base_heating = lookback_average if lookback_average > 0 else fallback_heating
+        base_heating = lookback_average
+        if base_heating <= 0:
+            # A cumulative meter reading should not be used as a daily fallback estimate.
+            base_heating = 0.0
 
         heating_estimate = self._estimate_heating_need(
             outdoor_temperature=outdoor_temperature,
@@ -119,10 +146,35 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows=windows,
             current_price=current_price,
             solar_forecast_kwh=solar_forecast,
+            solar_windows=solar_windows,
+            solcast_confidence=solcast_confidence,
             heating_estimate_kwh=heating_estimate,
             lookback_average_kwh=lookback_average,
         )
         return result
+
+    def _build_pending_result(self, status: str) -> PlannerResult:
+        """Return a placeholder result while dependent sensors are still starting."""
+        return PlannerResult(
+            status=status,
+            score=0,
+            recommendation="waiting_for_data",
+            battery_strategy="accu_uit",
+            heat_pump_strategy="normal",
+            heating_estimate_kwh=0.0,
+            solar_forecast_kwh=0.0,
+            current_price=None,
+            price_spread=0.0,
+            next_window_start=None,
+            next_window_end=None,
+            next_window_price=None,
+            best_solar_window_start=None,
+            best_solar_window_end=None,
+            best_solar_window_kwh=None,
+            solcast_confidence=None,
+            lookback_daily_average_kwh=0.0,
+            rationale=status.replace("_", " "),
+        )
 
     async def _async_get_average_heating_usage(self, entity_id: str) -> float:
         """Estimate average daily heating usage from recorder history."""
@@ -184,6 +236,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         windows: list[PlannerWindow],
         current_price: float | None,
         solar_forecast_kwh: float,
+        solar_windows: list[SolarWindow],
+        solcast_confidence: float | None,
         heating_estimate_kwh: float,
         lookback_average_kwh: float,
     ) -> PlannerResult:
@@ -192,6 +246,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cheapest = sorted_by_price[0]
         most_expensive = sorted_by_price[-1]
         price_spread = round(most_expensive.price - cheapest.price, 4)
+        best_solar_window = self._select_best_solar_window(solar_windows)
 
         cheap_threshold = cheapest.price + (price_spread * 0.25)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
@@ -212,40 +267,69 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         else:
             rationale_parts.append("current price is above the preferred cheap band")
 
-        if solar_forecast_kwh >= max(2.0, heating_estimate_kwh * 0.35):
+        if (
+            best_solar_window is not None
+            and best_solar_window.forecast_kwh >= 1.0
+            and solar_forecast_kwh >= max(2.0, heating_estimate_kwh * 0.35)
+        ):
             recommendation = "shift_loads_to_solar_window"
             score += 15
-            rationale_parts.append("forecast solar production can offset daytime loads")
+            rationale_parts.append("Solcast shows a useful daytime solar production window")
 
         if heating_estimate_kwh >= lookback_average_kwh * 1.1 and lookback_average_kwh > 0:
             score -= 10
             rationale_parts.append("heating demand is elevated because of lower outdoor temperature")
+        elif lookback_average_kwh <= 0:
+            rationale_parts.append("recent heating history is not available yet, so heating demand is conservative")
 
-        battery_strategy = "battery_disabled"
+        heat_pump_strategy = "normal"
+        if (
+            current_price is not None
+            and current_price > cheap_threshold
+            and best_solar_window is not None
+            and best_solar_window.start > dt_util.now()
+            and best_solar_window.forecast_kwh >= 1.0
+        ):
+            heat_pump_strategy = "energy_saving_on"
+            score += 5
+            rationale_parts.append("heat pump can wait for a cheaper or sunnier period")
+        elif current_price is not None and current_price >= most_expensive.price - (price_spread * 0.15):
+            heat_pump_strategy = "energy_saving_on"
+            score += 5
+            rationale_parts.append("current price is close to the daily peak")
+
+        battery_strategy = "accu_uit"
         if battery_enabled:
             if solar_forecast_kwh > heating_estimate_kwh:
-                battery_strategy = (
-                    f"reserve_capacity_for_solar_charge (up to {min(max_charge, battery_capacity):.1f} kW)"
-                )
+                battery_strategy = "laden_met_zonne_energie"
                 score += 10
-            elif current_price is not None and current_price <= cheap_threshold:
-                battery_strategy = (
-                    f"charge_from_grid_during_cheap_window (up to {min(max_charge, battery_capacity):.1f} kW)"
+                rationale_parts.append(
+                    f"battery should keep room for solar charging up to {min(max_charge, battery_capacity):.1f} kW"
                 )
+            elif current_price is not None and current_price <= cheap_threshold and solar_forecast_kwh < 4.0:
+                battery_strategy = "laden_van_net"
                 score += 10
+                rationale_parts.append(
+                    f"battery can charge from the grid up to {min(max_charge, battery_capacity):.1f} kW"
+                )
             else:
-                battery_strategy = (
-                    f"discharge_during_peak_prices (up to {min(max_discharge, battery_capacity):.1f} kW)"
-                )
-                score += 5
+                expensive_threshold = most_expensive.price - (price_spread * 0.20)
+                if current_price is not None and current_price >= expensive_threshold:
+                    battery_strategy = "ontladen"
+                    score += 5
+                    rationale_parts.append(
+                        f"battery can discharge up to {min(max_discharge, battery_capacity):.1f} kW during high prices"
+                    )
 
         score = max(0, min(100, score))
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
 
         return PlannerResult(
+            status="ready",
             score=score,
             recommendation=recommendation,
             battery_strategy=battery_strategy,
+            heat_pump_strategy=heat_pump_strategy,
             heating_estimate_kwh=heating_estimate_kwh,
             solar_forecast_kwh=solar_forecast_kwh,
             current_price=current_price,
@@ -253,6 +337,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_window_start=next_cheap.start.isoformat(),
             next_window_end=next_cheap.end.isoformat(),
             next_window_price=next_cheap.price,
+            best_solar_window_start=(
+                best_solar_window.start.isoformat() if best_solar_window is not None else None
+            ),
+            best_solar_window_end=(
+                best_solar_window.end.isoformat() if best_solar_window is not None else None
+            ),
+            best_solar_window_kwh=(
+                best_solar_window.forecast_kwh if best_solar_window is not None else None
+            ),
+            solcast_confidence=solcast_confidence,
             lookback_daily_average_kwh=lookback_average_kwh,
             rationale=rationale,
         )
@@ -284,6 +378,47 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows.append(PlannerWindow(start=start, end=end, price=price))
 
         return sorted(windows, key=lambda item: item.start)
+
+    def _extract_solar_windows(self, attributes: dict[str, Any]) -> list[SolarWindow]:
+        """Extract Solcast hourly forecast windows."""
+        raw_entries = attributes.get("detailedHourly", [])
+        windows: list[SolarWindow] = []
+
+        for entry in raw_entries:
+            start_raw = entry.get("period_start")
+            if start_raw is None:
+                continue
+
+            start = dt_util.parse_datetime(start_raw)
+            if start is None:
+                continue
+
+            forecast = _coerce_float(entry.get("pv_estimate"), default=0.0)
+            forecast_p10 = _coerce_float(entry.get("pv_estimate10"))
+            forecast_p90 = _coerce_float(entry.get("pv_estimate90"))
+            end = start + timedelta(hours=1)
+
+            if end <= dt_util.now():
+                continue
+
+            windows.append(
+                SolarWindow(
+                    start=start,
+                    end=end,
+                    forecast_kwh=forecast or 0.0,
+                    forecast_kwh_p10=forecast_p10,
+                    forecast_kwh_p90=forecast_p90,
+                )
+            )
+
+        return sorted(windows, key=lambda item: item.start)
+
+    def _select_best_solar_window(self, windows: list[SolarWindow]) -> SolarWindow | None:
+        """Return the best upcoming Solcast production window."""
+        productive_windows = [window for window in windows if window.forecast_kwh > 0]
+        if not productive_windows:
+            return None
+        return max(productive_windows, key=lambda item: item.forecast_kwh)
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:
