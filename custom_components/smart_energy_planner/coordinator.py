@@ -163,22 +163,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             source_errors = self._collect_source_errors(source_status)
 
-            if not price_state:
+            current_price = _coerce_float(price_state.state) if price_state else None
+            price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
+            windows = self._extract_price_windows(
+                price_state.attributes if price_state else {},
+                current_price,
+                price_resolution,
+            )
+
+            if not price_state and planner_kind == PLANNER_KIND_THERMOSTAT:
+                source_status["price_sensor"] = "waiting_for_price_sensor"
+                windows = self._build_neutral_price_windows(current_price)
+            elif not price_state:
                 return self._build_pending_result(
                     "waiting_for_price_sensor", planner_kind, source_status, source_errors
                 )
 
-            current_price = _coerce_float(price_state.state)
-            price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
-            windows = self._extract_price_windows(price_state.attributes, current_price, price_resolution)
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
-                return self._build_pending_result(
-                    "waiting_for_nordpool_prices",
-                    planner_kind,
-                    source_status,
-                    self._collect_source_errors(source_status),
-                )
+                if planner_kind == PLANNER_KIND_THERMOSTAT:
+                    windows = self._build_neutral_price_windows(current_price)
+                else:
+                    return self._build_pending_result(
+                        "waiting_for_nordpool_prices",
+                        planner_kind,
+                        source_status,
+                        self._collect_source_errors(source_status),
+                    )
 
             solar_forecast = _coerce_float(
                 solar_state.attributes.get("estimate") if solar_state else None,
@@ -652,6 +663,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cheapest = sorted_by_price[0]
         most_expensive = sorted_by_price[-1]
         price_spread = round(most_expensive.price - cheapest.price, 4)
+        price_signal_available = (
+            source_status.get("price_sensor") == "ok"
+            and len(windows) > 1
+            and price_spread > 0
+        )
         best_solar_window = self._select_best_solar_window(solar_windows)
         estimated_total_home_demand_kwh = round(non_heating_daily_average_kwh + heating_estimate_kwh, 2)
         estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
@@ -668,7 +684,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0, round(remaining_solar_until_sunset - remaining_home_demand_until_sunset, 3)
         )
 
-        cheap_threshold = cheapest.price + (price_spread * 0.25)
+        cheap_threshold = cheapest.price + (price_spread * 0.25 if price_signal_available else 0)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
         solar_covers_today = solar_forecast_kwh >= estimated_total_home_demand_kwh and estimated_total_home_demand_kwh > 0
         cheap_now = current_price is not None and current_price <= cheap_threshold
@@ -694,10 +710,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         future_solar_charge_window = best_solar_window is not None and best_solar_window.start > now
         eco_duration_hours = room_cooling_hours_to_eco or 0.0
-        eco_window = self._select_most_expensive_window_block(
-            windows=windows,
-            now=now,
-            duration_hours=eco_duration_hours,
+        eco_window = (
+            self._select_most_expensive_window_block(
+                windows=windows,
+                now=now,
+                duration_hours=eco_duration_hours,
+            )
+            if price_signal_available
+            else None
         )
         eco_active_now = eco_window is not None and eco_window["start"] <= now < eco_window["end"]
 
@@ -1135,6 +1155,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows = self._aggregate_price_windows_to_hourly(windows)
 
         return sorted(windows, key=lambda item: item.start)
+
+    def _build_neutral_price_windows(self, current_price: float | None) -> list[PlannerWindow]:
+        """Build a single neutral window so thermostat control can continue without price data."""
+        now = dt_util.now()
+        return [
+            PlannerWindow(
+                start=now,
+                end=now + timedelta(hours=1),
+                price=current_price if current_price is not None else 0.0,
+            )
+        ]
 
     def _aggregate_price_windows_to_hourly(self, windows: list[PlannerWindow]) -> list[PlannerWindow]:
         if not windows:
