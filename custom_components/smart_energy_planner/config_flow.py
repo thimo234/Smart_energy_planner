@@ -20,6 +20,8 @@ from .const import (
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_LOOKBACK_DAYS,
+    CONF_HEAT_PUMP_MAX_OFF_HOURS,
+    CONF_HEAT_PUMP_MIN_ON_HOURS,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
@@ -31,6 +33,8 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_HEATING_LOOKBACK_DAYS,
+    DEFAULT_HEAT_PUMP_MAX_OFF_HOURS,
+    DEFAULT_HEAT_PUMP_MIN_ON_HOURS,
     DEFAULT_NAME,
     DEFAULT_PRICE_RESOLUTION,
     DOMAIN,
@@ -135,6 +139,18 @@ def _build_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None)
                 default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_HEAT_PUMP_MAX_OFF_HOURS,
+                default=user_input.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_HEAT_PUMP_MIN_ON_HOURS,
+                default=user_input.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,

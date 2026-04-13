@@ -30,6 +30,8 @@ Add the integration from the Home Assistant UI and configure:
 - Heat pump energy sensor
 - Total home energy sensor
 - Number of historical heating days to inspect
+- Heat pump max off hours
+- Heat pump min on hours
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity

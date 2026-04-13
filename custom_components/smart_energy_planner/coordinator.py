@@ -23,6 +23,8 @@ from .const import (
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_LOOKBACK_DAYS,
+    CONF_HEAT_PUMP_MAX_OFF_HOURS,
+    CONF_HEAT_PUMP_MIN_ON_HOURS,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
@@ -30,6 +32,8 @@ from .const import (
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_HEAT_PUMP_MAX_OFF_HOURS,
+    DEFAULT_HEAT_PUMP_MIN_ON_HOURS,
     DOMAIN,
     PRICE_RESOLUTION_HOURLY,
 )
@@ -77,6 +81,8 @@ class PlannerResult:
     estimated_total_home_demand_kwh: float
     estimated_hourly_home_demand: list[dict[str, str | float]]
     battery_min_profit_per_kwh: float
+    heat_pump_max_off_hours: int
+    heat_pump_min_on_hours: int
     price_resolution: str
     source_status: dict[str, str]
     source_errors: list[str]
@@ -233,6 +239,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_profit_per_kwh=float(
                 self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
             ),
+            heat_pump_max_off_hours=int(
+                self._config.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS)
+            ),
+            heat_pump_min_on_hours=int(
+                self._config.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS)
+            ),
             price_resolution=str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY)),
             source_status=source_status,
             source_errors=source_errors,
@@ -375,6 +387,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             else None
         )
         future_solar_charge_window = best_solar_window is not None and best_solar_window.start > now
+        heat_pump_max_off_hours = int(
+            self._config.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS)
+        )
+        heat_pump_min_on_hours = int(
+            self._config.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS)
+        )
 
         battery_enabled = bool(self._config[CONF_BATTERY_ENABLED])
         battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
@@ -423,11 +441,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         ):
             heat_pump_strategy = "energy_saving_on"
             score += 5
-            rationale_parts.append("heat pump can wait for a cheaper or sunnier period")
+            rationale_parts.append(
+                f"heat pump can wait for a cheaper or sunnier period for up to {heat_pump_max_off_hours} hours, after which it should run for at least {heat_pump_min_on_hours} hours"
+            )
         elif current_price is not None and current_price >= most_expensive.price - (price_spread * 0.15):
             heat_pump_strategy = "energy_saving_on"
             score += 5
-            rationale_parts.append("current price is close to the daily peak")
+            rationale_parts.append(
+                f"current price is close to the daily peak, so power saving may stay on for up to {heat_pump_max_off_hours} hours"
+            )
 
         battery_strategy = "accu_uit"
         if battery_enabled:
@@ -492,6 +514,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
             battery_min_profit_per_kwh=battery_min_profit,
+            heat_pump_max_off_hours=heat_pump_max_off_hours,
+            heat_pump_min_on_hours=heat_pump_min_on_hours,
             price_resolution=price_resolution,
             source_status=source_status,
             source_errors=source_errors,
