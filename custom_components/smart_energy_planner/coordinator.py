@@ -25,6 +25,7 @@ from .const import (
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_HEAT_PUMP_MAX_OFF_HOURS,
     CONF_HEAT_PUMP_MIN_ON_HOURS,
+    CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
@@ -35,6 +36,9 @@ from .const import (
     DEFAULT_HEAT_PUMP_MAX_OFF_HOURS,
     DEFAULT_HEAT_PUMP_MIN_ON_HOURS,
     DOMAIN,
+    PLANNER_KIND_BATTERY,
+    PLANNER_KIND_COMBINED,
+    PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
 )
 
@@ -59,6 +63,7 @@ class SolarWindow:
 
 @dataclass(slots=True)
 class PlannerResult:
+    planner_kind: str
     status: str
     score: int
     recommendation: str
@@ -117,16 +122,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     async def _async_update_data(self) -> PlannerResult:
         """Fetch data and calculate planner output."""
         try:
+            planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED))
             price_sensor = self._config[CONF_PRICE_SENSOR]
-            solar_sensor = self._config[CONF_SOLCAST_TODAY_SENSOR]
-            temperature_sensor = self._config[CONF_TEMPERATURE_SENSOR]
-            heating_sensor = self._config[CONF_HEATING_ENERGY_SENSOR]
+            solar_sensor = self._config.get(CONF_SOLCAST_TODAY_SENSOR)
+            temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
+            heating_sensor = self._config.get(CONF_HEATING_ENERGY_SENSOR)
             total_energy_sensor = self._config.get(CONF_TOTAL_ENERGY_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
-            solar_state = self.hass.states.get(solar_sensor)
-            temperature_state = self.hass.states.get(temperature_sensor)
-            heating_state = self.hass.states.get(heating_sensor)
+            solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
+            temperature_state = self.hass.states.get(temperature_sensor) if temperature_sensor else None
+            heating_state = self.hass.states.get(heating_sensor) if heating_sensor else None
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
 
             source_status = self._build_source_status(
@@ -140,11 +146,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 heating_state=heating_state,
                 total_energy_sensor=total_energy_sensor,
                 total_energy_state=total_energy_state,
+                planner_kind=planner_kind,
             )
             source_errors = self._collect_source_errors(source_status)
 
             if not price_state:
-                return self._build_pending_result("waiting_for_price_sensor", source_status, source_errors)
+                return self._build_pending_result(
+                    "waiting_for_price_sensor", planner_kind, source_status, source_errors
+                )
 
             current_price = _coerce_float(price_state.state)
             price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
@@ -152,7 +161,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
                 return self._build_pending_result(
-                    "waiting_for_nordpool_prices", source_status, self._collect_source_errors(source_status)
+                    "waiting_for_nordpool_prices",
+                    planner_kind,
+                    source_status,
+                    self._collect_source_errors(source_status),
                 )
 
             solar_forecast = _coerce_float(
@@ -166,7 +178,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
-            if not solar_windows and solar_forecast and solar_forecast > 0:
+            if planner_kind in (PLANNER_KIND_BATTERY, PLANNER_KIND_COMBINED) and not solar_windows and solar_forecast and solar_forecast > 0:
                 solar_windows = self._build_fallback_solar_windows(solar_forecast)
             if solar_state and solar_forecast <= 0 and not solar_windows:
                 source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
@@ -174,7 +186,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["solcast_today_sensor"] = "invalid_solcast_value"
 
             heating_daily_average = (
-                await self._async_get_average_daily_usage(heating_sensor) if heating_state else 0.0
+                await self._async_get_average_daily_usage(heating_sensor)
+                if heating_state and heating_sensor
+                else 0.0
             )
             total_energy_daily_average = (
                 await self._async_get_average_daily_usage(total_energy_sensor)
@@ -189,10 +203,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
 
-            non_heating_daily_average = max(0.0, total_energy_daily_average - heating_daily_average)
-            heating_estimate = self._estimate_heating_need(outdoor_temperature, heating_daily_average)
+            if planner_kind == PLANNER_KIND_BATTERY:
+                heating_daily_average = 0.0
+                heating_estimate = 0.0
+                non_heating_daily_average = total_energy_daily_average
+            elif planner_kind == PLANNER_KIND_THERMOSTAT:
+                total_energy_daily_average = 0.0
+                non_heating_daily_average = 0.0
+                heating_estimate = self._estimate_heating_need(outdoor_temperature, heating_daily_average)
+            else:
+                non_heating_daily_average = max(0.0, total_energy_daily_average - heating_daily_average)
+                heating_estimate = self._estimate_heating_need(outdoor_temperature, heating_daily_average)
 
             return self._build_plan(
+                planner_kind=planner_kind,
                 windows=windows,
                 current_price=current_price,
                 solar_forecast_kwh=solar_forecast,
@@ -210,6 +234,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             _LOGGER.exception("Planner update failed")
             return self._build_pending_result(
                 "planner_runtime_error",
+                str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED)),
                 {
                     "price_sensor": "unknown",
                     "solcast_today_sensor": "unknown",
@@ -221,9 +246,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
 
     def _build_pending_result(
-        self, status: str, source_status: dict[str, str], source_errors: list[str]
+        self, status: str, planner_kind: str, source_status: dict[str, str], source_errors: list[str]
     ) -> PlannerResult:
         return PlannerResult(
+            planner_kind=planner_kind,
             status=status,
             score=0,
             recommendation="waiting_for_data",
@@ -280,17 +306,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         heating_state,
         total_energy_sensor: str | None,
         total_energy_state,
+        planner_kind: str,
     ) -> dict[str, str]:
+        solar_status = self._state_status(solar_sensor, solar_state)
+        temperature_status = self._state_status(temperature_sensor, temperature_state)
+        heating_status = self._state_status(heating_sensor, heating_state)
+        total_energy_status = self._state_status(total_energy_sensor, total_energy_state)
+
+        if planner_kind == PLANNER_KIND_BATTERY:
+            temperature_status = "not_configured"
+            heating_status = "not_configured"
+        elif planner_kind == PLANNER_KIND_THERMOSTAT:
+            total_energy_status = "not_configured"
+
         return {
             "price_sensor": self._state_status(price_sensor, price_state),
-            "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
-            "temperature_sensor": self._state_status(temperature_sensor, temperature_state),
-            "heating_energy_sensor": self._state_status(heating_sensor, heating_state),
-            "total_energy_sensor": self._state_status(total_energy_sensor, total_energy_state),
+            "solcast_today_sensor": solar_status,
+            "temperature_sensor": temperature_status,
+            "heating_energy_sensor": heating_status,
+            "total_energy_sensor": total_energy_status,
         }
 
     def _collect_source_errors(self, source_status: dict[str, str]) -> list[str]:
-        return [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
+        return [
+            f"{name}: {status}"
+            for name, status in source_status.items()
+            if status not in ("ok", "not_configured")
+        ]
 
     def _state_status(self, entity_id: str, state) -> str:
         if not entity_id:
@@ -353,6 +395,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _build_plan(
         self,
         *,
+        planner_kind: str,
         windows: list[PlannerWindow],
         current_price: float | None,
         solar_forecast_kwh: float,
@@ -475,17 +518,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score += 15
             rationale_parts.append("Solcast shows a useful daytime solar production window")
 
-        if heating_estimate_kwh >= lookback_average_kwh * 1.1 and lookback_average_kwh > 0:
+        if (
+            planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT)
+            and heating_estimate_kwh >= lookback_average_kwh * 1.1
+            and lookback_average_kwh > 0
+        ):
             score -= 10
             rationale_parts.append("heating demand is elevated because of lower outdoor temperature")
-        elif lookback_average_kwh <= 0:
+        elif planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT) and lookback_average_kwh <= 0:
             rationale_parts.append("recent heating history is not available yet, so heating demand is conservative")
 
-        if non_heating_daily_average_kwh > 0:
+        if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY) and non_heating_daily_average_kwh > 0:
             rationale_parts.append("non-heating household usage is derived from total energy history")
 
         heat_pump_strategy = "normal"
-        if cheap_now and (best_solar_is_now or solar_covers_today):
+        if planner_kind == PLANNER_KIND_BATTERY:
+            heat_pump_strategy = "not_applicable"
+        elif cheap_now and (best_solar_is_now or solar_covers_today):
             heat_pump_strategy = "normal"
             rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
         elif (
@@ -513,7 +562,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
 
         battery_strategy = "accu_uit"
-        if battery_enabled:
+        if planner_kind == PLANNER_KIND_THERMOSTAT:
+            battery_strategy = "not_applicable"
+        elif battery_enabled:
             if cheap_now and best_solar_is_now:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 12
@@ -594,6 +645,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planner_status = "ready_with_warnings" if source_errors else "ready"
 
         return PlannerResult(
+            planner_kind=planner_kind,
             status=planner_status,
             score=max(0, min(100, score)),
             recommendation=recommendation,

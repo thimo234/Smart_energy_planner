@@ -3,7 +3,14 @@
     "step": {
       "user": {
         "title": "Slimme Energieplanner",
-        "description": "Configureer de sensoren en optionele thuisaccu-instellingen voor de planner.",
+        "description": "Kies of je een gecombineerde planner, accuplanner of thermostaatplanner wilt instellen.",
+        "data": {
+          "planner_kind": "Planner type"
+        }
+      },
+      "configure": {
+        "title": "Slimme Energieplanner",
+        "description": "Configureer de sensoren en instellingen voor de gekozen planner.",
         "data": {
           "price_sensor": "Energieprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
@@ -27,7 +34,7 @@
     "step": {
       "init": {
         "title": "Slimme Energieplanner opties",
-        "description": "Werk de sensoren en optionele thuisaccu-instellingen van de planner bij.",
+        "description": "Werk de sensoren en instellingen van deze planner bij.",
         "data": {
           "price_sensor": "Energieprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",

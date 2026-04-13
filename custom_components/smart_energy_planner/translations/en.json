@@ -3,7 +3,14 @@
     "step": {
       "user": {
         "title": "Smart Energy Planner",
-        "description": "Configure the sensors and optional battery settings for the planner.",
+        "description": "Choose whether you want a combined planner, a battery planner, or a thermostat planner.",
+        "data": {
+          "planner_kind": "Planner type"
+        }
+      },
+      "configure": {
+        "title": "Smart Energy Planner",
+        "description": "Configure the sensors and optional settings for the selected planner.",
         "data": {
           "price_sensor": "Energy price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
@@ -27,7 +34,7 @@
     "step": {
       "init": {
         "title": "Smart Energy Planner options",
-        "description": "Update the sensors and optional battery settings for the planner.",
+        "description": "Update the sensors and settings for this planner.",
         "data": {
           "price_sensor": "Energy price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",

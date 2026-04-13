@@ -9,6 +9,7 @@ Smart Energy Planner is a Home Assistant custom integration that combines:
 - optional home battery capacity and charge/discharge limits
 
 The integration exposes planner sensors that can be used in automations to shift loads to cheaper and greener moments.
+You can now add the integration multiple times and choose a separate planner type for the battery and for thermostat control.
 
 ## Features
 
@@ -22,7 +23,14 @@ The integration exposes planner sensors that can be used in automations to shift
 
 ## Configuration
 
-Add the integration from the Home Assistant UI and configure:
+Add the integration from the Home Assistant UI and choose one of these planner types:
+
+- `Combined planner`
+- `Battery planner`
+- `Thermostat planner`
+
+You can add the integration twice if you want one standalone battery planner and one standalone thermostat planner.
+Depending on the selected planner type, configure:
 
 - Energy price sensor
 - Solcast forecast sensor for today
@@ -42,7 +50,8 @@ Add the integration from the Home Assistant UI and configure:
 After setup, you can open the integration settings again from Home Assistant and adjust the full configuration from the settings icon.
 The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
 
-The planner derives non-heating household usage from the history of your total home energy sensor and combines that with the heat-pump forecast.
+The battery planner derives household usage from the history of your total home energy sensor.
+The thermostat planner focuses on heat-pump behavior and heating demand, so you can use it per room in automations to keep the heat pump off during expensive hours.
 
 ## Exposed entities
 

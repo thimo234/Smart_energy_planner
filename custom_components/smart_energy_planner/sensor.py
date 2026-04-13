@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT
 from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
 
 
@@ -20,30 +20,43 @@ async def async_setup_entry(
 ) -> None:
     """Set up Smart Energy Planner sensors."""
     coordinator: SmartEnergyPlannerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        [
-            PlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
-            PlannerSensor(coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"),
-            PlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
-            PlannerSensor(coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"),
-            PlannerSensor(
-                coordinator,
-                entry,
-                "estimated_home_demand_today",
-                "Estimated Home Demand Today",
-                "estimated_total_home_demand_kwh",
-                native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-            ),
-            PlannerSensor(
-                coordinator,
-                entry,
-                "heating_estimate",
-                "Heating Estimate",
-                "heating_estimate_kwh",
-                native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-            ),
-        ]
-    )
+    planner_kind = coordinator.data.planner_kind
+    entities: list[PlannerSensor] = [
+        PlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
+        PlannerSensor(coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"),
+    ]
+
+    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY):
+        entities.extend(
+            [
+                PlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
+                PlannerSensor(
+                    coordinator,
+                    entry,
+                    "estimated_home_demand_today",
+                    "Estimated Home Demand Today",
+                    "estimated_total_home_demand_kwh",
+                    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                ),
+            ]
+        )
+
+    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+        entities.extend(
+            [
+                PlannerSensor(coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"),
+                PlannerSensor(
+                    coordinator,
+                    entry,
+                    "heating_estimate",
+                    "Heating Estimate",
+                    "heating_estimate_kwh",
+                    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                ),
+            ]
+        )
+
+    async_add_entities(entities)
 
 
 class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEntity):
@@ -76,6 +89,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
         data: PlannerResult = self.coordinator.data
         return {
+            "planner_kind": data.planner_kind,
             "status": data.status,
             "source_status": data.source_status,
             "source_errors": data.source_errors,

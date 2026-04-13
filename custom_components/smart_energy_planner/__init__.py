@@ -9,11 +9,15 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_HEATING_ENERGY_SENSOR,
+    CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_TOTAL_ENERGY_SENSOR,
     DOMAIN,
+    PLANNER_KIND_BATTERY,
+    PLANNER_KIND_COMBINED,
+    PLANNER_KIND_THERMOSTAT,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 
@@ -27,13 +31,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    merged = {**entry.data, **entry.options}
+    planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED)
+
     tracked_entities = [
-        entry.options.get(CONF_PRICE_SENSOR, entry.data.get(CONF_PRICE_SENSOR)),
-        entry.options.get(CONF_SOLCAST_TODAY_SENSOR, entry.data.get(CONF_SOLCAST_TODAY_SENSOR)),
-        entry.options.get(CONF_TEMPERATURE_SENSOR, entry.data.get(CONF_TEMPERATURE_SENSOR)),
-        entry.options.get(CONF_HEATING_ENERGY_SENSOR, entry.data.get(CONF_HEATING_ENERGY_SENSOR)),
-        entry.options.get(CONF_TOTAL_ENERGY_SENSOR, entry.data.get(CONF_TOTAL_ENERGY_SENSOR)),
+        merged.get(CONF_PRICE_SENSOR),
+        merged.get(CONF_SOLCAST_TODAY_SENSOR),
     ]
+    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+        tracked_entities.extend(
+            [
+                merged.get(CONF_TEMPERATURE_SENSOR),
+                merged.get(CONF_HEATING_ENERGY_SENSOR),
+            ]
+        )
+    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY):
+        tracked_entities.append(merged.get(CONF_TOTAL_ENERGY_SENSOR))
 
     @callback
     def _handle_source_state_change(event: Event[EventStateChangedData]) -> None:
