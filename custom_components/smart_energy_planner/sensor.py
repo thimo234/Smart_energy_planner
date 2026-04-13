@@ -139,6 +139,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "cooling_reference_outdoor_temp_c": getattr(data, "cooling_reference_outdoor_temp_c", None),
             "planned_eco_window_start": getattr(data, "planned_eco_window_start", None),
             "planned_eco_window_end": getattr(data, "planned_eco_window_end", None),
+            "planned_eco_windows": getattr(data, "planned_eco_windows", []),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,

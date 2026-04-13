@@ -107,6 +107,7 @@ class PlannerResult:
     cooling_reference_outdoor_temp_c: float | None
     planned_eco_window_start: str | None
     planned_eco_window_end: str | None
+    planned_eco_windows: list[dict[str, str | float]]
     battery_min_profit_per_kwh: float
     price_resolution: str
     source_status: dict[str, str]
@@ -330,6 +331,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cooling_reference_outdoor_temp_c=None,
             planned_eco_window_start=None,
             planned_eco_window_end=None,
+            planned_eco_windows=[],
             battery_min_profit_per_kwh=float(
                 self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
             ),
@@ -640,6 +642,77 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return best_block
 
+    def _select_expensive_peak_blocks(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        now: datetime,
+        duration_hours: float,
+        expensive_threshold: float,
+    ) -> list[dict[str, datetime | float]]:
+        """Select one eco block for each distinct expensive price peak."""
+        eligible_windows = [
+            window
+            for window in windows
+            if window.end > now and window.price >= expensive_threshold
+        ]
+        if not eligible_windows:
+            return []
+
+        grouped_windows: list[list[PlannerWindow]] = []
+        current_group: list[PlannerWindow] = []
+        for window in eligible_windows:
+            if not current_group:
+                current_group = [window]
+                continue
+            previous = current_group[-1]
+            if window.start <= previous.end:
+                current_group.append(window)
+            else:
+                grouped_windows.append(current_group)
+                current_group = [window]
+        if current_group:
+            grouped_windows.append(current_group)
+
+        peak_blocks: list[dict[str, datetime | float]] = []
+        for group in grouped_windows:
+            group_start = max(group[0].start, now)
+            group_end = group[-1].end
+            group_hours = max((group_end - group_start).total_seconds() / 3600, 0.0)
+            if group_hours <= 0:
+                continue
+
+            if duration_hours > 0 and group_hours > duration_hours:
+                selected = self._select_most_expensive_window_block(
+                    windows=group,
+                    now=now,
+                    duration_hours=duration_hours,
+                )
+                if selected is not None:
+                    peak_blocks.append(selected)
+                continue
+
+            weighted_price = 0.0
+            total_hours = 0.0
+            for window in group:
+                usable_start = max(window.start, now)
+                usable_hours = max((window.end - usable_start).total_seconds() / 3600, 0.0)
+                if usable_hours <= 0:
+                    continue
+                weighted_price += window.price * usable_hours
+                total_hours += usable_hours
+            if total_hours <= 0:
+                continue
+            peak_blocks.append(
+                {
+                    "start": group_start,
+                    "end": group_end,
+                    "average_price": weighted_price / total_hours,
+                }
+            )
+
+        return sorted(peak_blocks, key=lambda item: item["start"])
+
     def _build_plan(
         self,
         *,
@@ -689,6 +762,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
 
         cheap_threshold = cheapest.price + (price_spread * 0.25 if price_signal_available else 0)
+        expensive_threshold = most_expensive.price - (price_spread * 0.25 if price_signal_available else 0)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
         solar_covers_today = solar_forecast_kwh >= estimated_total_home_demand_kwh and estimated_total_home_demand_kwh > 0
         cheap_now = current_price is not None and current_price <= cheap_threshold
@@ -714,16 +788,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         future_solar_charge_window = best_solar_window is not None and best_solar_window.start > now
         eco_duration_hours = room_cooling_hours_to_eco or 0.0
-        eco_window = (
-            self._select_most_expensive_window_block(
+        eco_windows = (
+            self._select_expensive_peak_blocks(
                 windows=windows,
                 now=now,
                 duration_hours=eco_duration_hours,
+                expensive_threshold=expensive_threshold,
             )
             if price_signal_available
-            else None
+            else []
         )
-        eco_active_now = eco_window is not None and eco_window["start"] <= now < eco_window["end"]
+        eco_window = next(
+            (
+                window
+                for window in eco_windows
+                if window["start"] <= now < window["end"]
+            ),
+            next((window for window in eco_windows if window["start"] > now), None),
+        )
+        eco_active_now = any(window["start"] <= now < window["end"] for window in eco_windows)
 
         battery_enabled = bool(self._config.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED))
         battery_capacity = float(
@@ -797,12 +880,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score += 8
             recommendation = "set_thermostat_to_eco"
             rationale_parts.append(
-                "thermostat should be in eco mode during the selected expensive window"
+                "thermostat should be in eco mode during the current expensive price peak"
             )
             if thermostat_eco_setpoint_c is not None:
                 rationale_parts.append(
-                    f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the expensive block ends"
+                    f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the current expensive peak ends"
                 )
+        elif planner_kind == PLANNER_KIND_THERMOSTAT and eco_windows:
+            rationale_parts.append(
+                f"thermostat eco is planned for {len(eco_windows)} expensive price peak(s) today"
+            )
         elif cheap_now and (best_solar_is_now or solar_covers_today):
             heat_pump_strategy = "normal"
             rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
@@ -947,6 +1034,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cooling_reference_outdoor_temp_c=cooling_reference_outdoor_temp_c,
             planned_eco_window_start=eco_window["start"].isoformat() if eco_window else None,
             planned_eco_window_end=eco_window["end"].isoformat() if eco_window else None,
+            planned_eco_windows=[
+                {
+                    "start": str(window["start"].isoformat()),
+                    "end": str(window["end"].isoformat()),
+                    "average_price": round(float(window["average_price"]), 6),
+                }
+                for window in eco_windows
+            ],
             battery_min_profit_per_kwh=battery_min_profit,
             price_resolution=price_resolution,
             source_status=source_status,
