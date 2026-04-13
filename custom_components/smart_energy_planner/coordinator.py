@@ -166,6 +166,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
+            if not solar_windows and solar_forecast and solar_forecast > 0:
+                solar_windows = self._build_fallback_solar_windows(solar_forecast)
             if solar_state and solar_forecast <= 0 and not solar_windows:
                 source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
             elif solar_state and solar_forecast is None:
@@ -498,7 +500,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale_parts.append(
                 f"heat pump can wait for a cheaper or sunnier period for up to {heat_pump_max_off_hours} hours, after which it should run for at least {heat_pump_min_on_hours} hours"
             )
-        elif current_price is not None and current_price >= most_expensive.price - (price_spread * 0.15):
+        elif (
+            current_price is not None
+            and price_spread > 0
+            and not cheap_now
+            and current_price >= most_expensive.price - (price_spread * 0.15)
+        ):
             heat_pump_strategy = "energy_saving_on"
             score += 5
             rationale_parts.append(
@@ -507,7 +514,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         battery_strategy = "accu_uit"
         if battery_enabled:
-            if (
+            if cheap_now and best_solar_is_now:
+                battery_strategy = "laden_met_zonne_energie"
+                score += 12
+                rationale_parts.append(
+                    f"battery should use the active solar window and can charge up to {min(max_charge, battery_capacity):.1f} kW"
+                )
+            elif (
                 target_battery_full_by_sunset
                 and grid_charge_needed_until_sunset > 0
                 and in_planned_grid_charge_window
@@ -659,6 +672,42 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not productive_windows:
             return None
         return max(window.end for window in productive_windows)
+
+    def _build_fallback_solar_windows(self, daily_forecast_kwh: float) -> list[SolarWindow]:
+        """Approximate hourly solar windows when only the daily forecast total is available."""
+        if daily_forecast_kwh <= 0:
+            return []
+
+        now = dt_util.now()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        hourly_weights = [
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.02, 0.05, 0.09, 0.13, 0.16,
+            0.17, 0.15, 0.11, 0.07, 0.04, 0.01,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ]
+        weight_sum = sum(hourly_weights) or 1.0
+        windows: list[SolarWindow] = []
+
+        for hour, weight in enumerate(hourly_weights):
+            if weight <= 0:
+                continue
+            start = day_start + timedelta(hours=hour)
+            end = start + timedelta(hours=1)
+            if end <= now:
+                continue
+            forecast_kwh = round(daily_forecast_kwh * (weight / weight_sum), 3)
+            windows.append(
+                SolarWindow(
+                    start=start,
+                    end=end,
+                    forecast_kwh=forecast_kwh,
+                    forecast_kwh_p10=None,
+                    forecast_kwh_p90=None,
+                )
+            )
+
+        return windows
 
     def _sum_remaining_solar_until(
         self,
