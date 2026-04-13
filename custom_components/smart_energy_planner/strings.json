@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Smart Energy Planner",
+        "description": "Configure the sensors and optional battery settings for the planner.",
+        "data": {
+          "price_sensor": "Energy price sensor",
+          "solcast_today_sensor": "Solcast solar forecast for today",
+          "temperature_sensor": "Outdoor temperature sensor",
+          "heating_energy_sensor": "Heat pump energy sensor",
+          "heating_lookback_days": "Historical heating days",
+          "battery_enabled": "Enable home battery support",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_max_charge_kw": "Max charge power (kW)",
+          "battery_max_discharge_kw": "Max discharge power (kW)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Smart Energy Planner options",
+        "description": "Update the sensors and optional battery settings for the planner.",
+        "data": {
+          "price_sensor": "Energy price sensor",
+          "solcast_today_sensor": "Solcast solar forecast for today",
+          "temperature_sensor": "Outdoor temperature sensor",
+          "heating_energy_sensor": "Heat pump energy sensor",
+          "heating_lookback_days": "Historical heating days",
+          "battery_enabled": "Enable home battery support",
+          "battery_capacity_kwh": "Battery capacity (kWh)",
+          "battery_max_charge_kw": "Max charge power (kW)",
+          "battery_max_discharge_kw": "Max discharge power (kW)"
+        }
+      }
+    }
+  }
+}

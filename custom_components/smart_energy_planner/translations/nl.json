@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Slimme Energieplanner",
+        "description": "Configureer de sensoren en optionele thuisaccu-instellingen voor de planner.",
+        "data": {
+          "price_sensor": "Energieprijs sensor",
+          "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "temperature_sensor": "Buitentemperatuur sensor",
+          "heating_energy_sensor": "Warmtepomp energie sensor",
+          "heating_lookback_days": "Aantal historische verwarmingsdagen",
+          "battery_enabled": "Thuisaccu inschakelen",
+          "battery_capacity_kwh": "Accucapaciteit (kWh)",
+          "battery_max_charge_kw": "Max laadvermogen (kW)",
+          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Slimme Energieplanner opties",
+        "description": "Werk de sensoren en optionele thuisaccu-instellingen van de planner bij.",
+        "data": {
+          "price_sensor": "Energieprijs sensor",
+          "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "temperature_sensor": "Buitentemperatuur sensor",
+          "heating_energy_sensor": "Warmtepomp energie sensor",
+          "heating_lookback_days": "Aantal historische verwarmingsdagen",
+          "battery_enabled": "Thuisaccu inschakelen",
+          "battery_capacity_kwh": "Accucapaciteit (kWh)",
+          "battery_max_charge_kw": "Max laadvermogen (kW)",
+          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
+        }
+      }
+    }
+  }
+}

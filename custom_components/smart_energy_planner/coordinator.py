@@ -1,0 +1,296 @@
+"""Coordinator for Smart Energy Planner."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+import logging
+import statistics
+from typing import Any
+
+from homeassistant.components.recorder import history
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_ENABLED,
+    CONF_BATTERY_MAX_CHARGE_KW,
+    CONF_BATTERY_MAX_DISCHARGE_KW,
+    CONF_HEATING_ENERGY_SENSOR,
+    CONF_HEATING_LOOKBACK_DAYS,
+    CONF_PRICE_SENSOR,
+    CONF_SOLCAST_TODAY_SENSOR,
+    CONF_TEMPERATURE_SENSOR,
+    COORDINATOR_UPDATE_INTERVAL,
+    DOMAIN,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class PlannerWindow:
+    """A price window."""
+
+    start: datetime
+    end: datetime
+    price: float
+
+
+@dataclass(slots=True)
+class PlannerResult:
+    """Planner output payload."""
+
+    score: int
+    recommendation: str
+    battery_strategy: str
+    heating_estimate_kwh: float
+    solar_forecast_kwh: float
+    current_price: float | None
+    price_spread: float
+    next_window_start: str | None
+    next_window_end: str | None
+    next_window_price: float | None
+    lookback_daily_average_kwh: float
+    rationale: str
+
+
+class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
+    """Coordinate planner calculations."""
+
+    config_entry: ConfigEntry
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        """Initialize coordinator."""
+        self.config_entry = entry
+        super().__init__(
+            hass,
+            logger=_LOGGER,
+            name=DOMAIN,
+            update_interval=COORDINATOR_UPDATE_INTERVAL,
+        )
+
+    @property
+    def _config(self) -> dict[str, Any]:
+        """Return merged config and options."""
+        return {**self.config_entry.data, **self.config_entry.options}
+
+    async def _async_update_data(self) -> PlannerResult:
+        """Fetch data and calculate planner output."""
+        price_sensor = self._config[CONF_PRICE_SENSOR]
+        solar_sensor = self._config[CONF_SOLCAST_TODAY_SENSOR]
+        temperature_sensor = self._config[CONF_TEMPERATURE_SENSOR]
+        heating_sensor = self._config[CONF_HEATING_ENERGY_SENSOR]
+
+        price_state = self.hass.states.get(price_sensor)
+        solar_state = self.hass.states.get(solar_sensor)
+        temperature_state = self.hass.states.get(temperature_sensor)
+        heating_state = self.hass.states.get(heating_sensor)
+
+        if not price_state:
+            raise UpdateFailed(f"Price sensor not found: {price_sensor}")
+        if not solar_state:
+            raise UpdateFailed(f"Solar forecast sensor not found: {solar_sensor}")
+        if not temperature_state:
+            raise UpdateFailed(f"Temperature sensor not found: {temperature_sensor}")
+        if not heating_state:
+            raise UpdateFailed(f"Heating energy sensor not found: {heating_sensor}")
+
+        windows = self._extract_price_windows(price_state.attributes)
+        if not windows:
+            raise UpdateFailed("No hourly Nord Pool prices found on the selected price sensor")
+
+        current_price = _coerce_float(price_state.state)
+        solar_forecast = _coerce_float(solar_state.state, default=0.0)
+        outdoor_temperature = _coerce_float(temperature_state.state, default=12.0)
+        lookback_average = await self._async_get_average_heating_usage(heating_sensor)
+        fallback_heating = _coerce_float(heating_state.state, default=0.0)
+        base_heating = lookback_average if lookback_average > 0 else fallback_heating
+
+        heating_estimate = self._estimate_heating_need(
+            outdoor_temperature=outdoor_temperature,
+            average_daily_heating_kwh=base_heating,
+        )
+        result = self._build_plan(
+            windows=windows,
+            current_price=current_price,
+            solar_forecast_kwh=solar_forecast,
+            heating_estimate_kwh=heating_estimate,
+            lookback_average_kwh=lookback_average,
+        )
+        return result
+
+    async def _async_get_average_heating_usage(self, entity_id: str) -> float:
+        """Estimate average daily heating usage from recorder history."""
+        lookback_days = int(self._config[CONF_HEATING_LOOKBACK_DAYS])
+        end = dt_util.now()
+        start = end - timedelta(days=lookback_days)
+
+        try:
+            def _load_history():
+                return history.get_significant_states(
+                    self.hass,
+                    start,
+                    end,
+                    [entity_id],
+                    include_start_time_state=True,
+                    significant_changes_only=False,
+                    no_attributes=True,
+                )
+
+            history_result = await self.hass.async_add_executor_job(
+                _load_history,
+            )
+        except Exception:
+            return 0.0
+
+        states = history_result.get(entity_id, [])
+        if len(states) < 2:
+            return 0.0
+
+        deltas: list[float] = []
+        grouped: dict[datetime.date, list[float]] = {}
+        for state in states:
+            value = _coerce_float(state.state)
+            if value is None:
+                continue
+            grouped.setdefault(state.last_updated.date(), []).append(value)
+
+        for values in grouped.values():
+            if len(values) < 2:
+                continue
+            delta = values[-1] - values[0]
+            if delta >= 0:
+                deltas.append(delta)
+
+        if not deltas:
+            return 0.0
+        return round(statistics.fmean(deltas), 2)
+
+    def _estimate_heating_need(
+        self, outdoor_temperature: float, average_daily_heating_kwh: float
+    ) -> float:
+        """Estimate daily heating need from the recent average and outside temperature."""
+        heating_factor = max(0.2, min(1.6, (18 - outdoor_temperature) / 10))
+        return round(average_daily_heating_kwh * heating_factor, 2)
+
+    def _build_plan(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        current_price: float | None,
+        solar_forecast_kwh: float,
+        heating_estimate_kwh: float,
+        lookback_average_kwh: float,
+    ) -> PlannerResult:
+        """Translate inputs into a planner recommendation."""
+        sorted_by_price = sorted(windows, key=lambda item: item.price)
+        cheapest = sorted_by_price[0]
+        most_expensive = sorted_by_price[-1]
+        price_spread = round(most_expensive.price - cheapest.price, 4)
+
+        cheap_threshold = cheapest.price + (price_spread * 0.25)
+        next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
+
+        battery_enabled = bool(self._config[CONF_BATTERY_ENABLED])
+        battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
+        max_charge = float(self._config[CONF_BATTERY_MAX_CHARGE_KW])
+        max_discharge = float(self._config[CONF_BATTERY_MAX_DISCHARGE_KW])
+
+        score = 50
+        rationale_parts: list[str] = []
+        recommendation = "wait"
+
+        if current_price is not None and current_price <= cheap_threshold:
+            recommendation = "run_flexible_loads_now"
+            score += 25
+            rationale_parts.append("current price is in the cheap band")
+        else:
+            rationale_parts.append("current price is above the preferred cheap band")
+
+        if solar_forecast_kwh >= max(2.0, heating_estimate_kwh * 0.35):
+            recommendation = "shift_loads_to_solar_window"
+            score += 15
+            rationale_parts.append("forecast solar production can offset daytime loads")
+
+        if heating_estimate_kwh >= lookback_average_kwh * 1.1 and lookback_average_kwh > 0:
+            score -= 10
+            rationale_parts.append("heating demand is elevated because of lower outdoor temperature")
+
+        battery_strategy = "battery_disabled"
+        if battery_enabled:
+            if solar_forecast_kwh > heating_estimate_kwh:
+                battery_strategy = (
+                    f"reserve_capacity_for_solar_charge (up to {min(max_charge, battery_capacity):.1f} kW)"
+                )
+                score += 10
+            elif current_price is not None and current_price <= cheap_threshold:
+                battery_strategy = (
+                    f"charge_from_grid_during_cheap_window (up to {min(max_charge, battery_capacity):.1f} kW)"
+                )
+                score += 10
+            else:
+                battery_strategy = (
+                    f"discharge_during_peak_prices (up to {min(max_discharge, battery_capacity):.1f} kW)"
+                )
+                score += 5
+
+        score = max(0, min(100, score))
+        rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
+
+        return PlannerResult(
+            score=score,
+            recommendation=recommendation,
+            battery_strategy=battery_strategy,
+            heating_estimate_kwh=heating_estimate_kwh,
+            solar_forecast_kwh=solar_forecast_kwh,
+            current_price=current_price,
+            price_spread=price_spread,
+            next_window_start=next_cheap.start.isoformat(),
+            next_window_end=next_cheap.end.isoformat(),
+            next_window_price=next_cheap.price,
+            lookback_daily_average_kwh=lookback_average_kwh,
+            rationale=rationale,
+        )
+
+    def _extract_price_windows(self, attributes: dict[str, Any]) -> list[PlannerWindow]:
+        """Extract Nord Pool hourly windows from sensor attributes."""
+        raw_entries = list(attributes.get("raw_today", [])) + list(attributes.get("raw_tomorrow", []))
+        windows: list[PlannerWindow] = []
+
+        for entry in raw_entries:
+            start_raw = entry.get("start")
+            end_raw = entry.get("end")
+            price_raw = entry.get("value")
+            if start_raw is None or end_raw is None or price_raw is None:
+                continue
+
+            try:
+                start = dt_util.parse_datetime(start_raw)
+                end = dt_util.parse_datetime(end_raw)
+                price = float(price_raw)
+            except (TypeError, ValueError):
+                continue
+
+            if start is None or end is None:
+                continue
+            if end <= dt_util.now():
+                continue
+
+            windows.append(PlannerWindow(start=start, end=end, price=price))
+
+        return sorted(windows, key=lambda item: item.start)
+
+
+def _coerce_float(value: Any, default: float | None = None) -> float | None:
+    """Convert a state value to float."""
+    if value in (None, STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
