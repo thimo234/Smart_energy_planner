@@ -345,6 +345,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         cheap_threshold = cheapest.price + (price_spread * 0.25)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
+        solar_covers_today = solar_forecast_kwh >= estimated_total_home_demand_kwh and estimated_total_home_demand_kwh > 0
+        cheap_now = current_price is not None and current_price <= cheap_threshold
+        best_solar_is_now = (
+            best_solar_window is not None
+            and best_solar_window.start <= dt_util.now() < best_solar_window.end
+        )
 
         battery_enabled = bool(self._config[CONF_BATTERY_ENABLED])
         battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
@@ -355,7 +361,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         rationale_parts: list[str] = []
         recommendation = "wait"
 
-        if current_price is not None and current_price <= cheap_threshold:
+        if cheap_now:
             recommendation = "run_flexible_loads_now"
             score += 25
             rationale_parts.append("current price is in the cheap band")
@@ -381,7 +387,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale_parts.append("non-heating household usage is derived from total energy history")
 
         heat_pump_strategy = "normal"
-        if (
+        if cheap_now and (best_solar_is_now or solar_covers_today):
+            heat_pump_strategy = "normal"
+            rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
+        elif (
             current_price is not None
             and current_price > cheap_threshold
             and best_solar_window is not None
@@ -398,13 +407,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         battery_strategy = "accu_uit"
         if battery_enabled:
-            if solar_forecast_kwh > estimated_total_home_demand_kwh:
+            if solar_covers_today:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
                     f"battery should keep room for solar charging up to {min(max_charge, battery_capacity):.1f} kW"
                 )
-            elif current_price is not None and current_price <= cheap_threshold and solar_forecast_kwh < 4.0:
+                if cheap_now:
+                    rationale_parts.append("grid charging is not needed because forecast solar covers the expected demand")
+            elif cheap_now and solar_forecast_kwh < 4.0:
                 battery_strategy = "laden_van_net"
                 score += 10
                 rationale_parts.append(
