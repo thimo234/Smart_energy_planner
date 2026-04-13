@@ -110,29 +110,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if not price_state:
             return self._build_pending_result("waiting_for_price_sensor")
-        if not solar_state:
-            return self._build_pending_result("waiting_for_solcast_sensor")
-        if not temperature_state:
-            return self._build_pending_result("waiting_for_temperature_sensor")
-        if not heating_state:
-            return self._build_pending_result("waiting_for_heating_sensor")
 
-        windows = self._extract_price_windows(price_state.attributes)
+        current_price = _coerce_float(price_state.state)
+        windows = self._extract_price_windows(price_state.attributes, current_price)
         if not windows:
             return self._build_pending_result("waiting_for_nordpool_prices")
 
-        current_price = _coerce_float(price_state.state)
         solar_forecast = _coerce_float(
-            solar_state.attributes.get("estimate"),
-            default=_coerce_float(solar_state.state, default=0.0),
+            solar_state.attributes.get("estimate") if solar_state else None,
+            default=_coerce_float(solar_state.state, default=0.0) if solar_state else 0.0,
         )
-        outdoor_temperature = _coerce_float(temperature_state.state, default=12.0)
-        solar_windows = self._extract_solar_windows(solar_state.attributes)
+        outdoor_temperature = _coerce_float(
+            temperature_state.state if temperature_state else None, default=12.0
+        )
+        solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
         solcast_confidence = _coerce_float(
-            solar_state.attributes.get("analysis", {}).get("confidence")
+            solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
         )
-        lookback_average = await self._async_get_average_heating_usage(heating_sensor)
-        fallback_heating = _coerce_float(heating_state.state, default=0.0)
+        lookback_average = (
+            await self._async_get_average_heating_usage(heating_sensor) if heating_state else 0.0
+        )
+        fallback_heating = _coerce_float(heating_state.state, default=0.0) if heating_state else 0.0
         base_heating = lookback_average
         if base_heating <= 0:
             # A cumulative meter reading should not be used as a daily fallback estimate.
@@ -351,10 +349,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale=rationale,
         )
 
-    def _extract_price_windows(self, attributes: dict[str, Any]) -> list[PlannerWindow]:
+    def _extract_price_windows(
+        self, attributes: dict[str, Any], current_price: float | None
+    ) -> list[PlannerWindow]:
         """Extract Nord Pool hourly windows from sensor attributes."""
+        now = dt_util.now()
         raw_entries = list(attributes.get("raw_today", [])) + list(attributes.get("raw_tomorrow", []))
         windows: list[PlannerWindow] = []
+        active_window: PlannerWindow | None = None
 
         for entry in raw_entries:
             start_raw = entry.get("start")
@@ -372,10 +374,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             if start is None or end is None:
                 continue
-            if end <= dt_util.now():
+            if start <= now < end:
+                active_window = PlannerWindow(start=start, end=end, price=price)
+            if end <= now:
                 continue
 
             windows.append(PlannerWindow(start=start, end=end, price=price))
+
+        if active_window is not None and not any(
+            window.start == active_window.start and window.end == active_window.end for window in windows
+        ):
+            windows.insert(0, active_window)
+
+        if not windows and current_price is not None:
+            windows.append(
+                PlannerWindow(
+                    start=now,
+                    end=now + timedelta(hours=1),
+                    price=current_price,
+                )
+            )
 
         return sorted(windows, key=lambda item: item.start)
 
