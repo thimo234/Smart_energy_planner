@@ -58,6 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime_state[entry.entry_id] = {
         "manual_temperature": persisted_state.get("manual_temperature", _default_manual_temperature(merged)),
         "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
+        "manual_preset_mode": persisted_state.get("manual_preset_mode", "none"),
         "last_switch_change": None,
         "cooling_model": persisted_state.get("cooling_model", {}),
         "last_cooling_observation": persisted_state.get("last_cooling_observation"),
@@ -197,7 +198,9 @@ async def _async_apply_heating_switch_control(
             await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
             runtime_state["last_switch_change"] = dt_util.now()
         return
-    active_target = eco_target if coordinator.data.heat_pump_strategy == "energy_saving_on" else base_target
+    manual_preset_mode = runtime_state.get("manual_preset_mode", "none")
+    eco_active = manual_preset_mode == "eco" or coordinator.data.heat_pump_strategy == "energy_saving_on"
+    active_target = eco_target if eco_active else base_target
     if current_temperature is None or active_target is None:
         return
 
@@ -264,6 +267,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
     data[entry_id] = {
         "manual_temperature": runtime_state.get("manual_temperature"),
         "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
+        "manual_preset_mode": runtime_state.get("manual_preset_mode", "none"),
         "cooling_model": runtime_state.get("cooling_model", {}),
         "last_cooling_observation": runtime_state.get("last_cooling_observation"),
     }

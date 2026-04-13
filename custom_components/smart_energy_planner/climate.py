@@ -35,6 +35,7 @@ from .const import (
     RUNTIME_STATE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
+from .__init__ import _async_save_runtime_state
 
 
 async def async_setup_entry(
@@ -125,6 +126,9 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def preset_mode(self) -> str:
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
+        if runtime_state.get("manual_preset_mode") == PRESET_ECO:
+            return PRESET_ECO
         return PRESET_ECO if self.coordinator.data.heat_pump_strategy == "energy_saving_on" else PRESET_NONE
 
     @property
@@ -158,6 +162,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["hvac_mode"] = hvac_mode
+        await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         self.async_write_ha_state()
 
     @property
@@ -205,6 +210,10 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         """Allow Home Assistant to present normal eco/none controls."""
         if preset_mode not in (PRESET_NONE, PRESET_ECO):
             return
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
+        runtime_state["manual_preset_mode"] = preset_mode
+        await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
+        await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs) -> None:
@@ -218,4 +227,5 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             self._entry.entry_id, {}
         )
         runtime_state["manual_temperature"] = round(clamped_temperature, 2)
+        await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         await self.coordinator.async_request_refresh()
