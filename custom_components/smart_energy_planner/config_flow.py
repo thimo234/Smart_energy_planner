@@ -52,7 +52,6 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_BATTERY,
-    PLANNER_KIND_COMBINED,
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     PRICE_RESOLUTION_QUARTER_HOURLY,
@@ -141,7 +140,6 @@ def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
-                        selector.SelectOptionDict(value=PLANNER_KIND_COMBINED, label="Combined planner"),
                         selector.SelectOptionDict(value=PLANNER_KIND_BATTERY, label="Battery planner"),
                         selector.SelectOptionDict(value=PLANNER_KIND_THERMOSTAT, label="Thermostat planner"),
                     ],
@@ -324,142 +322,6 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
     )
 
 
-def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
-    """Build the legacy combined planner schema."""
-    user_input = _base_defaults(user_input)
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
-            ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
-            vol.Required(
-                CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
-            ): _entity_selector(
-                _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
-            ),
-            vol.Required(
-                CONF_TEMPERATURE_SENSOR, default=user_input.get(CONF_TEMPERATURE_SENSOR)
-            ): _entity_selector(
-                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
-            ),
-            vol.Required(
-                CONF_ROOM_TEMPERATURE_SENSOR, default=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            ): _entity_selector(
-                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            ),
-            vol.Required(
-                CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
-            ): _entity_selector(
-                _filter_heating_switch_entities(hass),
-                current_value=user_input.get(CONF_HEATING_SWITCH_ENTITY),
-                domain=None,
-            ),
-            vol.Required(
-                CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-            ): _entity_selector(
-                _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-            ),
-            vol.Required(
-                CONF_HEATING_LOOKBACK_DAYS,
-                default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_ECO_SETBACK,
-                default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_COLD_TOLERANCE,
-                default=user_input.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_HOT_TOLERANCE,
-                default=user_input.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MIN_TEMP,
-                default=user_input.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MAX_TEMP,
-                default=user_input.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
-                default=user_input.get(
-                    CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
-                default=user_input.get(
-                    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_PRICE_RESOLUTION,
-                default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(value=PRICE_RESOLUTION_HOURLY, label="Hourly contract"),
-                        selector.SelectOptionDict(
-                            value=PRICE_RESOLUTION_QUARTER_HOURLY, label="Quarter-hour contract"
-                        ),
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(
-                CONF_BATTERY_ENABLED, default=user_input.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED)
-            ): selector.BooleanSelector(),
-            vol.Required(
-                CONF_BATTERY_CAPACITY_KWH,
-                default=user_input.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=100, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_BATTERY_MIN_PROFIT_PER_KWH,
-                default=user_input.get(
-                    CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=1, step=0.01, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_BATTERY_MAX_CHARGE_KW,
-                default=user_input.get(CONF_BATTERY_MAX_CHARGE_KW, DEFAULT_BATTERY_MAX_CHARGE_KW),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=50, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_BATTERY_MAX_DISCHARGE_KW,
-                default=user_input.get(
-                    CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=50, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-        }
-    )
-
-
 def _schema_for_kind(
     hass: HomeAssistant,
     planner_kind: str,
@@ -467,9 +329,7 @@ def _schema_for_kind(
 ) -> vol.Schema:
     if planner_kind == PLANNER_KIND_BATTERY:
         return _build_battery_schema(hass, user_input)
-    if planner_kind == PLANNER_KIND_THERMOSTAT:
-        return _build_thermostat_schema(hass, user_input)
-    return _build_combined_schema(hass, user_input)
+    return _build_thermostat_schema(hass, user_input)
 
 
 def _title_for_kind(planner_kind: str) -> str:
@@ -477,7 +337,7 @@ def _title_for_kind(planner_kind: str) -> str:
         return f"{DEFAULT_NAME} Battery"
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         return f"{DEFAULT_NAME} Thermostat"
-    return DEFAULT_NAME
+    return f"{DEFAULT_NAME} Battery"
 
 
 class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):

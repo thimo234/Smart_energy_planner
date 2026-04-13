@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Slimme Energieplanner",
-        "description": "Kies of je een gecombineerde planner, accuplanner of thermostaatplanner wilt instellen.",
+        "description": "Kies of je een accuplanner of thermostaatplanner wilt instellen.",
         "data": {
           "planner_kind": "Planner type"
         }
@@ -18,7 +18,7 @@
           "room_temperature_sensor": "Kamertemperatuur sensor",
           "heating_switch_entity": "Verwarmingsschakelaar",
           "total_energy_sensor": "Totale energieverbruik sensor",
-          "heating_lookback_days": "Aantal historische verwarmingsdagen",
+          "heating_lookback_days": "Aantal historische dagen",
           "thermostat_eco_setback": "Eco verlaging onder thermostaat setpoint",
           "thermostat_cold_tolerance": "Koude tolerantie",
           "thermostat_hot_tolerance": "Warme tolerantie",
@@ -48,7 +48,7 @@
           "room_temperature_sensor": "Kamertemperatuur sensor",
           "heating_switch_entity": "Verwarmingsschakelaar",
           "total_energy_sensor": "Totale energieverbruik sensor",
-          "heating_lookback_days": "Aantal historische verwarmingsdagen",
+          "heating_lookback_days": "Aantal historische dagen",
           "thermostat_eco_setback": "Eco verlaging onder thermostaat setpoint",
           "thermostat_cold_tolerance": "Koude tolerantie",
           "thermostat_hot_tolerance": "Warme tolerantie",

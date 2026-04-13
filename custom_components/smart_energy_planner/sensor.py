@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT
+from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT
 from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
 
 
@@ -26,7 +26,7 @@ async def async_setup_entry(
         PlannerSensor(coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"),
     ]
 
-    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY):
+    if planner_kind == PLANNER_KIND_BATTERY:
         entities.extend(
             [
                 PlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
@@ -41,7 +41,7 @@ async def async_setup_entry(
             ]
         )
 
-    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+    if planner_kind == PLANNER_KIND_THERMOSTAT:
         entities.extend(
             [
                 PlannerSensor(
@@ -109,10 +109,9 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "best_solar_window_kwh": data.best_solar_window_kwh,
             "solcast_confidence": data.solcast_confidence,
             "solar_forecast_kwh": data.solar_forecast_kwh,
-            "heating_estimate_kwh": data.heating_estimate_kwh,
             "lookback_daily_average_kwh": data.lookback_daily_average_kwh,
             "total_energy_daily_average_kwh": data.total_energy_daily_average_kwh,
-            "non_heating_daily_average_kwh": data.non_heating_daily_average_kwh,
+            "self_used_energy_daily_average_kwh": data.non_heating_daily_average_kwh,
             "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
             "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
             "projected_remaining_solar_until_sunset_kwh": getattr(

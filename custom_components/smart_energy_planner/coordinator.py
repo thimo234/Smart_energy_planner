@@ -40,7 +40,6 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_BATTERY,
-    PLANNER_KIND_COMBINED,
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     RUNTIME_STATE,
@@ -132,7 +131,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     async def _async_update_data(self) -> PlannerResult:
         """Fetch data and calculate planner output."""
         try:
-            planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED))
+            planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             price_sensor = self._config[CONF_PRICE_SENSOR]
             solar_sensor = self._config.get(CONF_SOLCAST_TODAY_SENSOR)
             temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
@@ -200,7 +199,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
-            if planner_kind in (PLANNER_KIND_BATTERY, PLANNER_KIND_COMBINED) and not solar_windows and solar_forecast and solar_forecast > 0:
+            if planner_kind == PLANNER_KIND_BATTERY and not solar_windows and solar_forecast and solar_forecast > 0:
                 solar_windows = self._build_fallback_solar_windows(solar_forecast)
             if solar_state and solar_forecast <= 0 and not solar_windows:
                 source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
@@ -220,10 +219,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
 
-            if planner_kind == PLANNER_KIND_BATTERY:
-                heating_estimate = 0.0
-                non_heating_daily_average = total_energy_daily_average
-            elif planner_kind == PLANNER_KIND_THERMOSTAT:
+            if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
                 non_heating_daily_average = 0.0
                 heating_estimate = 0.0
@@ -249,7 +245,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_windows=solar_windows,
                 solcast_confidence=solcast_confidence,
                 heating_estimate_kwh=heating_estimate,
-                lookback_average_kwh=0.0,
+                lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
                 total_energy_daily_average_kwh=total_energy_daily_average,
                 non_heating_daily_average_kwh=non_heating_daily_average,
                 room_temperature_c=room_temperature,
@@ -266,7 +262,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             _LOGGER.exception("Planner update failed")
             return self._build_pending_result(
                 "planner_runtime_error",
-                str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED)),
+                str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)),
                 {
                     "price_sensor": "unknown",
                     "solcast_today_sensor": "unknown",
@@ -762,8 +758,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score += 15
             rationale_parts.append("Solcast shows a useful daytime solar production window")
 
-        if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY) and non_heating_daily_average_kwh > 0:
-            rationale_parts.append("non-heating household usage is derived from total energy history")
+        if planner_kind == PLANNER_KIND_BATTERY and non_heating_daily_average_kwh > 0:
+            rationale_parts.append("estimated home demand is derived from total self-used energy history")
 
         heat_pump_strategy = "normal"
         if planner_kind == PLANNER_KIND_BATTERY:

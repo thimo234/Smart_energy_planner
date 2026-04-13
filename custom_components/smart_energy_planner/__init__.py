@@ -34,7 +34,6 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_BATTERY,
-    PLANNER_KIND_COMBINED,
     PLANNER_KIND_THERMOSTAT,
     RUNTIME_STATE,
 )
@@ -57,12 +56,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED)
+    planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
 
     tracked_entities = [merged.get(CONF_PRICE_SENSOR)]
-    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY):
+    if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(merged.get(CONF_SOLCAST_TODAY_SENSOR))
-    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+    if planner_kind == PLANNER_KIND_THERMOSTAT:
         tracked_entities.extend(
             [
                 merged.get(CONF_TEMPERATURE_SENSOR),
@@ -70,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 merged.get(CONF_HEATING_SWITCH_ENTITY),
             ]
         )
-    if planner_kind in (PLANNER_KIND_COMBINED, PLANNER_KIND_BATTERY):
+    if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(merged.get(CONF_TOTAL_ENERGY_SENSOR))
 
     @callback
@@ -158,8 +157,8 @@ async def _async_apply_thermostat_control(
 ) -> None:
     """Apply the heating switch state for planner thermostats."""
     merged = {**entry.data, **entry.options}
-    planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_COMBINED)
-    if planner_kind not in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+    planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
+    if planner_kind != PLANNER_KIND_THERMOSTAT:
         return
 
     await _async_apply_heating_switch_control(hass, merged, coordinator, runtime_state)

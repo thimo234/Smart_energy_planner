@@ -25,7 +25,6 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
-    PLANNER_KIND_COMBINED,
     PLANNER_KIND_THERMOSTAT,
     RUNTIME_STATE,
 )
@@ -40,7 +39,7 @@ async def async_setup_entry(
     """Set up climate entities for Smart Energy Planner."""
     coordinator: SmartEnergyPlannerCoordinator = hass.data[DOMAIN][entry.entry_id]
     planner_kind = coordinator.data.planner_kind
-    if planner_kind not in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
+    if planner_kind != PLANNER_KIND_THERMOSTAT:
         return
 
     async_add_entities([PlannerThermostatEntity(coordinator, entry)])

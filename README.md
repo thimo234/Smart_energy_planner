@@ -1,6 +1,6 @@
 # Smart Energy Planner
 
-Smart Energy Planner is a Home Assistant custom integration that combines:
+Smart Energy Planner is a Home Assistant custom integration for:
 
 - dynamic energy prices from a Nord Pool sensor
 - Solcast solar forecast for today
@@ -16,7 +16,6 @@ You can now add the integration multiple times and choose a separate planner typ
 - Full UI configuration through a config flow
 - Reads hourly Nord Pool price blocks from an existing sensor
 - Supports Nord Pool quarter-hour price blocks from `raw_today` and `raw_tomorrow`
-- Estimates heating demand from outdoor temperature and recent heat pump consumption
 - Uses Solcast daily forecast and `detailedHourly` production windows
 - Adds optional battery-aware strategy recommendations
 
@@ -24,11 +23,10 @@ You can now add the integration multiple times and choose a separate planner typ
 
 Add the integration from the Home Assistant UI and choose one of these planner types:
 
-- `Combined planner`
 - `Battery planner`
 - `Thermostat planner`
 
-You can add the integration twice if you want one standalone battery planner and one standalone thermostat planner.
+You can add the integration multiple times if you want one standalone battery planner and one standalone thermostat planner.
 Depending on the selected planner type, configure:
 
 - Energy price sensor
@@ -37,7 +35,7 @@ Depending on the selected planner type, configure:
 - Room temperature sensor
 - Heating control switch
 - Total home energy sensor
-- Number of historical heating days to inspect
+- Number of historical days to inspect
 - Eco setback below thermostat setpoint
 - Cold tolerance
 - Hot tolerance
@@ -55,7 +53,7 @@ Depending on the selected planner type, configure:
 After setup, you can open the integration settings again from Home Assistant and adjust the full configuration from the settings icon.
 The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
 
-The battery planner derives household usage from the history of your total home energy sensor.
+The battery planner derives the estimated energy for today only from the history of your total home energy sensor. It does not split heating out separately and does not require a heating energy sensor.
 The thermostat planner focuses on room cooling behavior and expensive hours, and creates its own climate entity that becomes your room thermostat in Home Assistant. It automatically chooses eco mode during the most expensive block that the room can bridge by slowly cooling down, switches the heating switch with configurable hysteresis, and periodically checks whether the heating state still matches the thermostat target.
 
 ## Exposed entities
@@ -63,16 +61,14 @@ The thermostat planner focuses on room cooling behavior and expensive hours, and
 - `sensor.smart_energy_planner_score`
 - `sensor.smart_energy_planner_recommendation`
 - `sensor.smart_energy_planner_battery_strategy`
-- `sensor.smart_energy_planner_heat_pump_strategy`
 - `sensor.smart_energy_planner_estimated_home_demand_today`
-- `sensor.smart_energy_planner_heating_estimate`
-- `sensor.smart_energy_planner_thermostat_eco_setpoint`
 - `sensor.smart_energy_planner_room_cooling_hours_to_eco`
+- `sensor.smart_energy_planner_thermostat_eco_start_time`
 - `climate.smart_energy_planner_planner_thermostat`
 
 The sensors also expose extra attributes such as the next cheap window, the price spread for the current day, and the Solcast production forecast used by the planner.
 The estimated home demand sensor includes `estimated_hourly_home_demand` with a per-hour forecast for today.
-For thermostat planners, the entities also include `planned_eco_window_start`, `planned_eco_window_end`, `room_cooling_rate_c_per_hour`, and the current and eco thermostat setpoints.
+For thermostat planners, the entities also include `planned_eco_window_start`, `planned_eco_window_end`, `room_cooling_rate_c_per_hour`, and the current thermostat setpoint.
 
 For Solcast, the planner works best with the sensor that exposes today's forecast total plus `detailedHourly`.
 Battery strategy values:
@@ -81,11 +77,6 @@ Battery strategy values:
 - `ontladen`
 - `laden_met_zonne_energie`
 - `laden_van_net`
-
-Heat pump strategy values:
-
-- `normal`
-- `energy_saving_on`
 
 ## HACS
 
