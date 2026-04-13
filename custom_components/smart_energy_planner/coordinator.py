@@ -1153,6 +1153,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
             windows.append(PlannerWindow(start=start, end=end, price=price))
 
+        if not windows:
+            windows = self._extract_price_windows_from_series(attributes, now)
+
         if active_window and not any(w.start == active_window.start and w.end == active_window.end for w in windows):
             windows.insert(0, active_window)
 
@@ -1163,6 +1166,59 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows = self._aggregate_price_windows_to_hourly(windows)
 
         return sorted(windows, key=lambda item: item.start)
+
+    def _extract_price_windows_from_series(
+        self,
+        attributes: dict[str, Any],
+        now: datetime,
+    ) -> list[PlannerWindow]:
+        """Build price windows from today/tomorrow lists when raw entries are unavailable."""
+        today_values = attributes.get("today")
+        tomorrow_values = attributes.get("tomorrow")
+        if not isinstance(today_values, list):
+            return []
+
+        today_windows = self._series_to_price_windows(today_values, now.replace(hour=0, minute=0, second=0, microsecond=0))
+        tomorrow_windows: list[PlannerWindow] = []
+        if isinstance(tomorrow_values, list) and tomorrow_values:
+            tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            tomorrow_windows = self._series_to_price_windows(tomorrow_values, tomorrow_start)
+
+        return [window for window in [*today_windows, *tomorrow_windows] if window.end > now]
+
+    def _series_to_price_windows(
+        self,
+        values: list[Any],
+        start_time: datetime,
+    ) -> list[PlannerWindow]:
+        """Convert a list of prices into planner windows."""
+        if not values:
+            return []
+
+        interval_minutes = self._infer_series_interval_minutes(len(values))
+        if interval_minutes is None:
+            return []
+
+        windows: list[PlannerWindow] = []
+        interval = timedelta(minutes=interval_minutes)
+        for index, raw_value in enumerate(values):
+            price = _coerce_float(raw_value)
+            if price is None:
+                continue
+            start = start_time + (interval * index)
+            end = start + interval
+            windows.append(PlannerWindow(start=start, end=end, price=price))
+        return windows
+
+    def _infer_series_interval_minutes(self, item_count: int) -> int | None:
+        """Infer interval size from the number of prices in a daily list."""
+        if item_count == 24:
+            return 60
+        if item_count == 48:
+            return 30
+        if item_count == 96:
+            return 15
+        return None
 
     def _build_neutral_price_windows(self, current_price: float | None) -> list[PlannerWindow]:
         """Build a single neutral window so thermostat control can continue without price data."""
