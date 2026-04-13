@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.climate.const import HVACMode
 from homeassistant.const import Platform
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
@@ -52,6 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime_state = hass.data.setdefault(RUNTIME_STATE, {})
     runtime_state[entry.entry_id] = {
         "manual_temperature": _default_manual_temperature(merged),
+        "hvac_mode": HVACMode.HEAT,
         "last_switch_change": None,
     }
 
@@ -182,6 +184,12 @@ async def _async_apply_heating_switch_control(
     current_temperature = coordinator.data.room_temperature_c
     base_target = coordinator.data.thermostat_setpoint_c
     eco_target = coordinator.data.thermostat_eco_setpoint_c
+    hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
+    if hvac_mode == HVACMode.OFF:
+        if str(switch_state.state).lower() in {"on", "heat", "heating"}:
+            await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
+            runtime_state["last_switch_change"] = dt_util.now()
+        return
     active_target = eco_target if coordinator.data.heat_pump_strategy == "energy_saving_on" else base_target
     if current_temperature is None or active_target is None:
         return
