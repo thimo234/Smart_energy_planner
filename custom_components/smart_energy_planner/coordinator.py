@@ -34,6 +34,10 @@ from .const import (
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
+    DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_BATTERY_ENABLED,
+    DEFAULT_BATTERY_MAX_CHARGE_KW,
+    DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_THERMOSTAT_ECO_SETBACK,
     DEFAULT_THERMOSTAT_MAX_TEMP,
@@ -721,10 +725,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         eco_active_now = eco_window is not None and eco_window["start"] <= now < eco_window["end"]
 
-        battery_enabled = bool(self._config[CONF_BATTERY_ENABLED])
-        battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
-        max_charge = float(self._config[CONF_BATTERY_MAX_CHARGE_KW])
-        max_discharge = float(self._config[CONF_BATTERY_MAX_DISCHARGE_KW])
+        battery_enabled = bool(self._config.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED))
+        battery_capacity = float(
+            self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
+        )
+        max_charge = float(self._config.get(CONF_BATTERY_MAX_CHARGE_KW, DEFAULT_BATTERY_MAX_CHARGE_KW))
+        max_discharge = float(
+            self._config.get(CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW)
+        )
         target_battery_full_by_sunset = battery_enabled and sunset_time is not None and sunset_time > now
         grid_charge_needed_until_sunset = (
             max(0.0, round(battery_capacity - projected_solar_surplus_until_sunset, 3))
