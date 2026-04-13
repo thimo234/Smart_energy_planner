@@ -60,7 +60,8 @@ def _filter_temperature_sensors(hass: HomeAssistant) -> list[str]:
     return [
         state.entity_id
         for state in _sensor_options(hass)
-        if state.attributes.get("device_class") == SensorDeviceClass.TEMPERATURE
+        if state.attributes.get("device_class")
+        in (SensorDeviceClass.TEMPERATURE, SensorDeviceClass.TEMPERATURE.value)
         or state.attributes.get("unit_of_measurement")
         in (UnitOfTemperature.CELSIUS, UnitOfTemperature.FAHRENHEIT)
     ]
@@ -71,7 +72,8 @@ def _filter_energy_sensors(hass: HomeAssistant) -> list[str]:
     return [
         state.entity_id
         for state in _sensor_options(hass)
-        if state.attributes.get("device_class") == SensorDeviceClass.ENERGY
+        if state.attributes.get("device_class")
+        in (SensorDeviceClass.ENERGY, SensorDeviceClass.ENERGY.value)
         or state.attributes.get("unit_of_measurement") == UnitOfEnergy.KILO_WATT_HOUR
     ]
 
@@ -82,13 +84,20 @@ def _entity_selector(
     current_value: str | None,
 ) -> selector.EntitySelector:
     """Build an entity selector and keep the current entity selectable."""
+    include_entities = list(dict.fromkeys(include_entities))
+
     if current_value and current_value not in include_entities:
         include_entities = [*include_entities, current_value]
 
+    config: dict[str, Any] = {
+        "domain": "sensor",
+    }
+    if include_entities:
+        config["include_entities"] = include_entities
+
     return selector.EntitySelector(
         selector.EntitySelectorConfig(
-            domain="sensor",
-            include_entities=include_entities,
+            **config,
         )
     )
 
