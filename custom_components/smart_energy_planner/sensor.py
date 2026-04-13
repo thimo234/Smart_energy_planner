@@ -23,15 +23,9 @@ async def async_setup_entry(
     async_add_entities(
         [
             PlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
-            PlannerSensor(
-                coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"
-            ),
-            PlannerSensor(
-                coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"
-            ),
-            PlannerSensor(
-                coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"
-            ),
+            PlannerSensor(coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"),
+            PlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
+            PlannerSensor(coordinator, entry, "heat_pump_strategy", "Heat Pump Strategy", "heat_pump_strategy"),
             PlannerSensor(
                 coordinator,
                 entry,
@@ -59,9 +53,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         *,
         native_unit_of_measurement: str | None = None,
     ) -> None:
-        """Initialize the sensor."""
         super().__init__(coordinator)
-        self._entry = entry
         self._value_key = value_key
         self._attr_name = name
         self._attr_unique_id = f"{entry.entry_id}_{key}"
@@ -70,12 +62,10 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
 
     @property
     def native_value(self):
-        """Return the sensor value."""
         return getattr(self.coordinator.data, self._value_key)
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
-        """Return shared planner attributes."""
         data: PlannerResult = self.coordinator.data
         return {
             "status": data.status,
@@ -93,8 +83,8 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "solar_forecast_kwh": data.solar_forecast_kwh,
             "heating_estimate_kwh": data.heating_estimate_kwh,
             "lookback_daily_average_kwh": data.lookback_daily_average_kwh,
-            "base_load_kw": data.base_load_kw,
-            "base_load_daily_kwh": data.base_load_daily_kwh,
+            "total_energy_daily_average_kwh": data.total_energy_daily_average_kwh,
+            "non_heating_daily_average_kwh": data.non_heating_daily_average_kwh,
             "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,

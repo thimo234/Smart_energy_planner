@@ -28,8 +28,8 @@ Add the integration from the Home Assistant UI and configure:
 - Solcast forecast sensor for today
 - Outdoor temperature sensor
 - Heat pump energy sensor
+- Total home energy sensor
 - Number of historical heating days to inspect
-- Base home load in kW
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
@@ -38,6 +38,8 @@ Add the integration from the Home Assistant UI and configure:
 
 After setup, you can open the integration settings again from Home Assistant and adjust the full configuration from the settings icon.
 The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
+
+The planner derives non-heating household usage from the history of your total home energy sensor and combines that with the heat-pump forecast.
 
 ## Exposed entities
 

@@ -13,7 +13,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_BASE_LOAD_KW,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
@@ -24,7 +23,7 @@ from .const import (
     CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
-    DEFAULT_BASE_LOAD_KW,
+    CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
@@ -74,7 +73,7 @@ def _filter_temperature_sensors(hass: HomeAssistant) -> list[str]:
 
 
 def _filter_energy_sensors(hass: HomeAssistant) -> list[str]:
-    """Return likely cumulative energy sensors for the heat pump."""
+    """Return likely cumulative energy sensors."""
     return [
         state.entity_id
         for state in _sensor_options(hass)
@@ -91,55 +90,43 @@ def _entity_selector(
 ) -> selector.EntitySelector:
     """Build an entity selector and keep the current entity selectable."""
     include_entities = list(dict.fromkeys(include_entities))
-
     if current_value and current_value not in include_entities:
         include_entities = [*include_entities, current_value]
 
-    config: dict[str, Any] = {
-        "domain": "sensor",
-    }
+    config: dict[str, Any] = {"domain": "sensor"}
     if include_entities:
         config["include_entities"] = include_entities
 
-    return selector.EntitySelector(
-        selector.EntitySelectorConfig(
-            **config,
-        )
-    )
+    return selector.EntitySelector(selector.EntitySelectorConfig(**config))
 
 
 def _build_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
     """Build the main config schema."""
     user_input = user_input or {}
-
     return vol.Schema(
         {
             vol.Required(
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
+            ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
+            vol.Required(
+                CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
             ): _entity_selector(
-                _filter_price_sensors(hass),
-                current_value=user_input.get(CONF_PRICE_SENSOR),
+                _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
             ),
             vol.Required(
-                CONF_SOLCAST_TODAY_SENSOR,
-                default=user_input.get(CONF_SOLCAST_TODAY_SENSOR),
+                CONF_TEMPERATURE_SENSOR, default=user_input.get(CONF_TEMPERATURE_SENSOR)
             ): _entity_selector(
-                _filter_solcast_sensors(hass),
-                current_value=user_input.get(CONF_SOLCAST_TODAY_SENSOR),
+                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
             ),
             vol.Required(
-                CONF_TEMPERATURE_SENSOR,
-                default=user_input.get(CONF_TEMPERATURE_SENSOR),
+                CONF_HEATING_ENERGY_SENSOR, default=user_input.get(CONF_HEATING_ENERGY_SENSOR)
             ): _entity_selector(
-                _filter_temperature_sensors(hass),
-                current_value=user_input.get(CONF_TEMPERATURE_SENSOR),
+                _filter_energy_sensors(hass), current_value=user_input.get(CONF_HEATING_ENERGY_SENSOR)
             ),
             vol.Required(
-                CONF_HEATING_ENERGY_SENSOR,
-                default=user_input.get(CONF_HEATING_ENERGY_SENSOR),
+                CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ): _entity_selector(
-                _filter_energy_sensors(hass),
-                current_value=user_input.get(CONF_HEATING_ENERGY_SENSOR),
+                _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ),
             vol.Required(
                 CONF_HEATING_LOOKBACK_DAYS,
@@ -148,32 +135,21 @@ def _build_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None)
                 selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
-                CONF_BASE_LOAD_KW,
-                default=user_input.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=20, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
                 CONF_PRICE_RESOLUTION,
                 default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
+                        selector.SelectOptionDict(value=PRICE_RESOLUTION_HOURLY, label="Hourly contract"),
                         selector.SelectOptionDict(
-                            value=PRICE_RESOLUTION_HOURLY,
-                            label="Hourly contract",
-                        ),
-                        selector.SelectOptionDict(
-                            value=PRICE_RESOLUTION_QUARTER_HOURLY,
-                            label="Quarter-hour contract",
+                            value=PRICE_RESOLUTION_QUARTER_HOURLY, label="Quarter-hour contract"
                         ),
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             ),
             vol.Required(
-                CONF_BATTERY_ENABLED,
-                default=user_input.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED),
+                CONF_BATTERY_ENABLED, default=user_input.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED)
             ): selector.BooleanSelector(),
             vol.Required(
                 CONF_BATTERY_CAPACITY_KWH,

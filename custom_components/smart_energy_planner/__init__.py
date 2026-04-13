@@ -12,6 +12,7 @@ from .const import (
     CONF_PRICE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    CONF_TOTAL_ENERGY_SENSOR,
     DOMAIN,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
@@ -31,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.options.get(CONF_SOLCAST_TODAY_SENSOR, entry.data.get(CONF_SOLCAST_TODAY_SENSOR)),
         entry.options.get(CONF_TEMPERATURE_SENSOR, entry.data.get(CONF_TEMPERATURE_SENSOR)),
         entry.options.get(CONF_HEATING_ENERGY_SENSOR, entry.data.get(CONF_HEATING_ENERGY_SENSOR)),
+        entry.options.get(CONF_TOTAL_ENERGY_SENSOR, entry.data.get(CONF_TOTAL_ENERGY_SENSOR)),
     ]
 
     @callback
