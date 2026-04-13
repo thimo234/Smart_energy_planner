@@ -73,6 +73,8 @@ class PlannerResult:
     best_solar_window_kwh: float | None
     solcast_confidence: float | None
     lookback_daily_average_kwh: float
+    source_status: dict[str, str]
+    source_errors: list[str]
     rationale: str
 
 
@@ -107,14 +109,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solar_state = self.hass.states.get(solar_sensor)
         temperature_state = self.hass.states.get(temperature_sensor)
         heating_state = self.hass.states.get(heating_sensor)
+        source_status = self._build_source_status(
+            price_sensor=price_sensor,
+            price_state=price_state,
+            solar_sensor=solar_sensor,
+            solar_state=solar_state,
+            temperature_sensor=temperature_sensor,
+            temperature_state=temperature_state,
+            heating_sensor=heating_sensor,
+            heating_state=heating_state,
+        )
+        source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
 
         if not price_state:
-            return self._build_pending_result("waiting_for_price_sensor")
+            return self._build_pending_result("waiting_for_price_sensor", source_status, source_errors)
 
         current_price = _coerce_float(price_state.state)
         windows = self._extract_price_windows(price_state.attributes, current_price)
         if not windows:
-            return self._build_pending_result("waiting_for_nordpool_prices")
+            source_status["price_sensor"] = "no_price_windows"
+            source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
+            return self._build_pending_result("waiting_for_nordpool_prices", source_status, source_errors)
 
         solar_forecast = _coerce_float(
             solar_state.attributes.get("estimate") if solar_state else None,
@@ -127,14 +142,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solcast_confidence = _coerce_float(
             solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
         )
+        if solar_state and solar_forecast <= 0 and not solar_windows:
+            source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
+        elif solar_state and solar_forecast is None:
+            source_status["solcast_today_sensor"] = "invalid_solcast_value"
+
         lookback_average = (
             await self._async_get_average_heating_usage(heating_sensor) if heating_state else 0.0
         )
         fallback_heating = _coerce_float(heating_state.state, default=0.0) if heating_state else 0.0
+        if temperature_state and outdoor_temperature is None:
+            source_status["temperature_sensor"] = "invalid_temperature_value"
+        if heating_state and lookback_average <= 0 and fallback_heating is None:
+            source_status["heating_energy_sensor"] = "invalid_heating_value"
+
         base_heating = lookback_average
         if base_heating <= 0:
             # A cumulative meter reading should not be used as a daily fallback estimate.
             base_heating = 0.0
+            if heating_state:
+                source_status["heating_energy_sensor"] = "no_heating_history_yet"
+
+        source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
 
         heating_estimate = self._estimate_heating_need(
             outdoor_temperature=outdoor_temperature,
@@ -148,10 +177,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solcast_confidence=solcast_confidence,
             heating_estimate_kwh=heating_estimate,
             lookback_average_kwh=lookback_average,
+            source_status=source_status,
+            source_errors=source_errors,
         )
         return result
 
-    def _build_pending_result(self, status: str) -> PlannerResult:
+    def _build_pending_result(
+        self, status: str, source_status: dict[str, str], source_errors: list[str]
+    ) -> PlannerResult:
         """Return a placeholder result while dependent sensors are still starting."""
         return PlannerResult(
             status=status,
@@ -171,8 +204,40 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             best_solar_window_kwh=None,
             solcast_confidence=None,
             lookback_daily_average_kwh=0.0,
+            source_status=source_status,
+            source_errors=source_errors,
             rationale=status.replace("_", " "),
         )
+
+    def _build_source_status(
+        self,
+        *,
+        price_sensor: str,
+        price_state,
+        solar_sensor: str,
+        solar_state,
+        temperature_sensor: str,
+        temperature_state,
+        heating_sensor: str,
+        heating_state,
+    ) -> dict[str, str]:
+        """Build a per-source status overview."""
+        return {
+            "price_sensor": self._state_status(price_sensor, price_state),
+            "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
+            "temperature_sensor": self._state_status(temperature_sensor, temperature_state),
+            "heating_energy_sensor": self._state_status(heating_sensor, heating_state),
+        }
+
+    def _state_status(self, entity_id: str, state) -> str:
+        """Return a status label for a source entity."""
+        if not entity_id:
+            return "not_configured"
+        if state is None:
+            return "entity_not_found"
+        if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+            return "entity_unavailable"
+        return "ok"
 
     async def _async_get_average_heating_usage(self, entity_id: str) -> float:
         """Estimate average daily heating usage from recorder history."""
@@ -238,6 +303,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solcast_confidence: float | None,
         heating_estimate_kwh: float,
         lookback_average_kwh: float,
+        source_status: dict[str, str],
+        source_errors: list[str],
     ) -> PlannerResult:
         """Translate inputs into a planner recommendation."""
         sorted_by_price = sorted(windows, key=lambda item: item.price)
@@ -322,8 +389,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         score = max(0, min(100, score))
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
 
+        planner_status = "ready_with_warnings" if source_errors else "ready"
+
         return PlannerResult(
-            status="ready",
+            status=planner_status,
             score=score,
             recommendation=recommendation,
             battery_strategy=battery_strategy,
@@ -346,6 +415,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             solcast_confidence=solcast_confidence,
             lookback_daily_average_kwh=lookback_average_kwh,
+            source_status=source_status,
+            source_errors=source_errors,
             rationale=rationale,
         )
 

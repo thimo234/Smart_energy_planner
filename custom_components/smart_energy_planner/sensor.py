@@ -79,6 +79,8 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         data: PlannerResult = self.coordinator.data
         return {
             "status": data.status,
+            "source_status": data.source_status,
+            "source_errors": data.source_errors,
             "current_price": data.current_price,
             "price_spread": data.price_spread,
             "next_cheap_window_start": data.next_window_start,
