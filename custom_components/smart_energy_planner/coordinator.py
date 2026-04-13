@@ -33,6 +33,7 @@ from .const import (
     CONF_THERMOSTAT_ECO_TEMPERATURE,
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_TEMP,
+    CONF_THERMOSTAT_PREHEAT_MINUTES,
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_CAPACITY_KWH,
@@ -44,6 +45,7 @@ from .const import (
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_TEMP,
+    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_THERMOSTAT,
@@ -120,6 +122,9 @@ class PlannerResult:
     planned_eco_window_start: str | None
     planned_eco_window_end: str | None
     planned_eco_windows: list[dict[str, str | float]]
+    planned_preheat_window_start: str | None
+    planned_preheat_window_end: str | None
+    planned_preheat_windows: list[dict[str, str | float]]
     battery_min_profit_per_kwh: float
     price_resolution: str
     source_status: dict[str, str]
@@ -353,6 +358,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_eco_window_start=None,
             planned_eco_window_end=None,
             planned_eco_windows=[],
+            planned_preheat_window_start=None,
+            planned_preheat_window_end=None,
+            planned_preheat_windows=[],
             battery_min_profit_per_kwh=float(
                 self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
             ),
@@ -533,14 +541,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> float:
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
         cooling_model = runtime_state.get("cooling_model", {})
-        if cooling_model:
-            target_bucket = round(outdoor_temperature_c)
-            available_buckets = sorted(int(bucket) for bucket in cooling_model.keys())
-            if available_buckets:
-                closest_bucket = min(available_buckets, key=lambda bucket: abs(bucket - target_bucket))
-                learned_rate = _coerce_float(cooling_model.get(str(closest_bucket)))
-                if learned_rate is not None:
-                    return max(0.05, learned_rate)
+        learned_factor = _coerce_float(cooling_model.get("rolling_cooling_factor"))
+        if learned_factor is not None:
+            delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
+            return max(0.05, learned_factor * delta_temp)
 
         temp_delta_now = max(room_temperature_c - outdoor_temperature_c, 1.0)
         return max(0.1, temp_delta_now * 0.03)
@@ -751,6 +755,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in eco_windows if window["start"] > now), None),
         )
         eco_active_now = any(window["start"] <= now < window["end"] for window in eco_windows)
+        preheat_minutes = int(
+            self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
+        )
+        preheat_windows = [
+            {
+                "start": max(window["start"] - timedelta(minutes=preheat_minutes), now.replace(hour=0, minute=0, second=0, microsecond=0)),
+                "end": window["start"],
+                "average_price": window["average_price"],
+            }
+            for window in eco_windows
+            if preheat_minutes > 0
+        ]
+        preheat_window = next(
+            (
+                window
+                for window in preheat_windows
+                if window["start"] <= now < window["end"]
+            ),
+            next((window for window in preheat_windows if window["start"] > now), None),
+        )
+        preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
 
         battery_enabled = bool(self._config.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED))
         battery_capacity = float(
@@ -902,10 +927,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 rationale_parts.append(
                     f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the current expensive peak ends"
                 )
+        elif planner_kind == PLANNER_KIND_THERMOSTAT and preheat_active_now:
+            heat_pump_strategy = "preheating"
+            score += 6
+            rationale_parts.append(
+                "preheating is active so the floor can store heat before the upcoming eco window"
+            )
         elif planner_kind == PLANNER_KIND_THERMOSTAT and eco_windows:
             rationale_parts.append(
                 f"thermostat eco is planned for {len(eco_windows)} expensive price peak(s) today"
             )
+            if preheat_minutes > 0:
+                rationale_parts.append(
+                    f"preheating starts about {preheat_minutes} minute(s) before each eco window"
+                )
         elif cheap_now and (best_solar_is_now or solar_covers_today):
             heat_pump_strategy = "normal"
             rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
@@ -1102,6 +1137,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     "average_price": round(float(window["average_price"]), 6),
                 }
                 for window in eco_windows
+            ],
+            planned_preheat_window_start=preheat_window["start"].isoformat() if preheat_window else None,
+            planned_preheat_window_end=preheat_window["end"].isoformat() if preheat_window else None,
+            planned_preheat_windows=[
+                {
+                    "start": str(window["start"].isoformat()),
+                    "end": str(window["end"].isoformat()),
+                    "average_price": round(float(window["average_price"]), 6),
+                }
+                for window in preheat_windows
             ],
             battery_min_profit_per_kwh=battery_min_profit,
             price_resolution=price_resolution,

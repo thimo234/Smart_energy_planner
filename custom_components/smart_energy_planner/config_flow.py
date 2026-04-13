@@ -34,6 +34,7 @@ from .const import (
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
     CONF_THERMOSTAT_MIN_TEMP,
+    CONF_THERMOSTAT_PREHEAT_MINUTES,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
+    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_THERMOSTAT,
@@ -316,6 +318,14 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 ),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_PREHEAT_MINUTES,
+                default=user_input.get(
+                    CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=180, step=5, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,

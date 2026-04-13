@@ -24,12 +24,14 @@ from .const import (
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
     CONF_THERMOSTAT_MIN_TEMP,
+    CONF_THERMOSTAT_PREHEAT_MINUTES,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
     DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
     DEFAULT_THERMOSTAT_HOT_TOLERANCE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
+    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_THERMOSTAT,
     RUNTIME_STATE,
@@ -186,6 +188,11 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             "control_check_minutes": self._merged_config.get(
                 CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
             ),
+            "preheat_minutes": self._merged_config.get(
+                CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES
+            ),
+            "planned_preheat_window_start": getattr(data, "planned_preheat_window_start", None),
+            "planned_preheat_window_end": getattr(data, "planned_preheat_window_end", None),
             "planned_eco_window_start": data.planned_eco_window_start,
             "planned_eco_window_end": data.planned_eco_window_end,
             "room_cooling_hours_to_eco": data.room_cooling_hours_to_eco,

@@ -28,6 +28,7 @@ from .const import (
     CONF_THERMOSTAT_MAX_TEMP,
     CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
     CONF_THERMOSTAT_MIN_TEMP,
+    CONF_THERMOSTAT_PREHEAT_MINUTES,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
     DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
@@ -35,6 +36,7 @@ from .const import (
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
+    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_THERMOSTAT,
@@ -206,6 +208,7 @@ async def _async_apply_heating_switch_control(
         return
     manual_preset_mode = runtime_state.get("manual_preset_mode", "none")
     eco_active = manual_preset_mode == "eco" or coordinator.data.heat_pump_strategy == "energy_saving_on"
+    preheat_active = coordinator.data.heat_pump_strategy == "preheating"
     active_target = eco_target if eco_active else base_target
     if current_temperature is None or active_target is None:
         return
@@ -225,8 +228,8 @@ async def _async_apply_heating_switch_control(
     hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
     min_cycle_minutes = int(merged.get(CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES))
 
-    should_turn_on = current_temperature <= active_target - cold_tolerance
-    should_turn_off = current_temperature >= active_target + hot_tolerance
+    should_turn_on = preheat_active or current_temperature <= active_target - cold_tolerance
+    should_turn_off = (not preheat_active) and current_temperature >= active_target + hot_tolerance
     current_is_on = str(switch_state.state).lower() in {"on", "heat", "heating"}
 
     last_switch_change = runtime_state.get("last_switch_change")
@@ -234,7 +237,7 @@ async def _async_apply_heating_switch_control(
     if last_switch_change is not None:
         cycle_blocked = dt_util.now() - last_switch_change < timedelta(minutes=min_cycle_minutes)
 
-    if should_turn_on and not current_is_on and not cycle_blocked:
+    if should_turn_on and not current_is_on and (preheat_active or not cycle_blocked):
         await _async_call_turn_service(hass, heating_switch_entity, "turn_on")
         runtime_state["last_switch_change"] = dt_util.now()
     elif should_turn_off and current_is_on and not cycle_blocked:
@@ -297,7 +300,7 @@ async def _async_update_cooling_model(
     outdoor_temperature,
     heating_is_on: bool,
 ) -> None:
-    """Learn room cooling speed while heating is off and persist it."""
+    """Learn normalized room cooling speed while heating is off and persist it."""
     if current_temperature is None:
         return
     try:
@@ -342,10 +345,22 @@ async def _async_update_cooling_model(
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
+    average_room_temp = (previous_room_temp + current_temperature) / 2
+    average_outdoor_temp = (previous_outdoor_temp + outdoor_temp) / 2
+    average_delta_temp = max(average_room_temp - average_outdoor_temp, 0.5)
     cooling_rate = cooling_drop / elapsed_hours
-    bucket = str(round((previous_outdoor_temp + outdoor_temp) / 2))
+    normalized_cooling_rate = cooling_rate / average_delta_temp
+
     cooling_model = runtime_state.setdefault("cooling_model", {})
-    existing_rate = cooling_model.get(bucket)
-    learned_rate = cooling_rate if existing_rate is None else ((float(existing_rate) * 0.7) + (cooling_rate * 0.3))
-    cooling_model[bucket] = round(max(0.01, learned_rate), 4)
+    previous_factor = cooling_model.get("rolling_cooling_factor")
+    previous_samples = int(cooling_model.get("sample_count", 0) or 0)
+    learned_factor = (
+        normalized_cooling_rate
+        if previous_factor is None
+        else ((float(previous_factor) * 0.8) + (normalized_cooling_rate * 0.2))
+    )
+    cooling_model["rolling_cooling_factor"] = round(max(0.001, learned_factor), 5)
+    cooling_model["sample_count"] = previous_samples + 1
+    cooling_model["last_delta_temp_c"] = round(average_delta_temp, 3)
+    cooling_model["last_observed_drop_c_per_hour"] = round(cooling_rate, 4)
     await _async_save_runtime_state(hass, entry_id, runtime_state)
