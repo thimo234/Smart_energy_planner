@@ -12,7 +12,7 @@ from homeassistant.components.recorder import history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -100,87 +100,111 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     async def _async_update_data(self) -> PlannerResult:
         """Fetch data and calculate planner output."""
-        price_sensor = self._config[CONF_PRICE_SENSOR]
-        solar_sensor = self._config[CONF_SOLCAST_TODAY_SENSOR]
-        temperature_sensor = self._config[CONF_TEMPERATURE_SENSOR]
-        heating_sensor = self._config[CONF_HEATING_ENERGY_SENSOR]
+        try:
+            price_sensor = self._config[CONF_PRICE_SENSOR]
+            solar_sensor = self._config[CONF_SOLCAST_TODAY_SENSOR]
+            temperature_sensor = self._config[CONF_TEMPERATURE_SENSOR]
+            heating_sensor = self._config[CONF_HEATING_ENERGY_SENSOR]
 
-        price_state = self.hass.states.get(price_sensor)
-        solar_state = self.hass.states.get(solar_sensor)
-        temperature_state = self.hass.states.get(temperature_sensor)
-        heating_state = self.hass.states.get(heating_sensor)
-        source_status = self._build_source_status(
-            price_sensor=price_sensor,
-            price_state=price_state,
-            solar_sensor=solar_sensor,
-            solar_state=solar_state,
-            temperature_sensor=temperature_sensor,
-            temperature_state=temperature_state,
-            heating_sensor=heating_sensor,
-            heating_state=heating_state,
-        )
-        source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
+            price_state = self.hass.states.get(price_sensor)
+            solar_state = self.hass.states.get(solar_sensor)
+            temperature_state = self.hass.states.get(temperature_sensor)
+            heating_state = self.hass.states.get(heating_sensor)
+            source_status = self._build_source_status(
+                price_sensor=price_sensor,
+                price_state=price_state,
+                solar_sensor=solar_sensor,
+                solar_state=solar_state,
+                temperature_sensor=temperature_sensor,
+                temperature_state=temperature_state,
+                heating_sensor=heating_sensor,
+                heating_state=heating_state,
+            )
+            source_errors = [
+                f"{name}: {status}" for name, status in source_status.items() if status != "ok"
+            ]
 
-        if not price_state:
-            return self._build_pending_result("waiting_for_price_sensor", source_status, source_errors)
+            if not price_state:
+                return self._build_pending_result(
+                    "waiting_for_price_sensor", source_status, source_errors
+                )
 
-        current_price = _coerce_float(price_state.state)
-        windows = self._extract_price_windows(price_state.attributes, current_price)
-        if not windows:
-            source_status["price_sensor"] = "no_price_windows"
-            source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
-            return self._build_pending_result("waiting_for_nordpool_prices", source_status, source_errors)
+            current_price = _coerce_float(price_state.state)
+            windows = self._extract_price_windows(price_state.attributes, current_price)
+            if not windows:
+                source_status["price_sensor"] = "no_price_windows"
+                source_errors = [
+                    f"{name}: {status}" for name, status in source_status.items() if status != "ok"
+                ]
+                return self._build_pending_result(
+                    "waiting_for_nordpool_prices", source_status, source_errors
+                )
 
-        solar_forecast = _coerce_float(
-            solar_state.attributes.get("estimate") if solar_state else None,
-            default=_coerce_float(solar_state.state, default=0.0) if solar_state else 0.0,
-        )
-        outdoor_temperature = _coerce_float(
-            temperature_state.state if temperature_state else None, default=12.0
-        )
-        solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
-        solcast_confidence = _coerce_float(
-            solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
-        )
-        if solar_state and solar_forecast <= 0 and not solar_windows:
-            source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
-        elif solar_state and solar_forecast is None:
-            source_status["solcast_today_sensor"] = "invalid_solcast_value"
+            solar_forecast = _coerce_float(
+                solar_state.attributes.get("estimate") if solar_state else None,
+                default=_coerce_float(solar_state.state, default=0.0) if solar_state else 0.0,
+            )
+            outdoor_temperature = _coerce_float(
+                temperature_state.state if temperature_state else None, default=12.0
+            )
+            solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
+            solcast_confidence = _coerce_float(
+                solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
+            )
+            if solar_state and solar_forecast <= 0 and not solar_windows:
+                source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
+            elif solar_state and solar_forecast is None:
+                source_status["solcast_today_sensor"] = "invalid_solcast_value"
 
-        lookback_average = (
-            await self._async_get_average_heating_usage(heating_sensor) if heating_state else 0.0
-        )
-        fallback_heating = _coerce_float(heating_state.state, default=0.0) if heating_state else 0.0
-        if temperature_state and outdoor_temperature is None:
-            source_status["temperature_sensor"] = "invalid_temperature_value"
-        if heating_state and lookback_average <= 0 and fallback_heating is None:
-            source_status["heating_energy_sensor"] = "invalid_heating_value"
+            lookback_average = (
+                await self._async_get_average_heating_usage(heating_sensor) if heating_state else 0.0
+            )
+            fallback_heating = (
+                _coerce_float(heating_state.state, default=0.0) if heating_state else 0.0
+            )
+            if temperature_state and outdoor_temperature is None:
+                source_status["temperature_sensor"] = "invalid_temperature_value"
+            if heating_state and lookback_average <= 0 and fallback_heating is None:
+                source_status["heating_energy_sensor"] = "invalid_heating_value"
 
-        base_heating = lookback_average
-        if base_heating <= 0:
-            # A cumulative meter reading should not be used as a daily fallback estimate.
-            base_heating = 0.0
-            if heating_state:
-                source_status["heating_energy_sensor"] = "no_heating_history_yet"
+            base_heating = lookback_average
+            if base_heating <= 0:
+                # A cumulative meter reading should not be used as a daily fallback estimate.
+                base_heating = 0.0
+                if heating_state:
+                    source_status["heating_energy_sensor"] = "no_heating_history_yet"
 
-        source_errors = [f"{name}: {status}" for name, status in source_status.items() if status != "ok"]
+            source_errors = [
+                f"{name}: {status}" for name, status in source_status.items() if status != "ok"
+            ]
 
-        heating_estimate = self._estimate_heating_need(
-            outdoor_temperature=outdoor_temperature,
-            average_daily_heating_kwh=base_heating,
-        )
-        result = self._build_plan(
-            windows=windows,
-            current_price=current_price,
-            solar_forecast_kwh=solar_forecast,
-            solar_windows=solar_windows,
-            solcast_confidence=solcast_confidence,
-            heating_estimate_kwh=heating_estimate,
-            lookback_average_kwh=lookback_average,
-            source_status=source_status,
-            source_errors=source_errors,
-        )
-        return result
+            heating_estimate = self._estimate_heating_need(
+                outdoor_temperature=outdoor_temperature,
+                average_daily_heating_kwh=base_heating,
+            )
+            return self._build_plan(
+                windows=windows,
+                current_price=current_price,
+                solar_forecast_kwh=solar_forecast,
+                solar_windows=solar_windows,
+                solcast_confidence=solcast_confidence,
+                heating_estimate_kwh=heating_estimate,
+                lookback_average_kwh=lookback_average,
+                source_status=source_status,
+                source_errors=source_errors,
+            )
+        except Exception as err:
+            _LOGGER.exception("Planner update failed")
+            return self._build_pending_result(
+                "planner_runtime_error",
+                {
+                    "price_sensor": "unknown",
+                    "solcast_today_sensor": "unknown",
+                    "temperature_sensor": "unknown",
+                    "heating_energy_sensor": "unknown",
+                },
+                [f"planner_runtime_error: {err!s}"],
+            )
 
     def _build_pending_result(
         self, status: str, source_status: dict[str, str], source_errors: list[str]
