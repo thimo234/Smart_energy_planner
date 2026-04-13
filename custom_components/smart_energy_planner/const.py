@@ -6,6 +6,8 @@ from datetime import timedelta
 
 DOMAIN = "smart_energy_planner"
 RUNTIME_STATE = f"{DOMAIN}_runtime"
+STORAGE_VERSION = 1
+STORAGE_KEY = f"{DOMAIN}_runtime_store"
 
 CONF_PLANNER_KIND = "planner_kind"
 CONF_PRICE_SENSOR = "price_sensor"

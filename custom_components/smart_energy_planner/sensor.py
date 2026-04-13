@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT
+from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
 from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
 
 
@@ -21,16 +21,14 @@ async def async_setup_entry(
     """Set up Smart Energy Planner sensors."""
     coordinator: SmartEnergyPlannerCoordinator = hass.data[DOMAIN][entry.entry_id]
     planner_kind = coordinator.data.planner_kind
-    entities: list[PlannerSensor] = [
-        PlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
-        PlannerSensor(coordinator, entry, "recommendation", "Planner Recommendation", "recommendation"),
-    ]
+    entities: list[PlannerSensor] = []
 
     if planner_kind == PLANNER_KIND_BATTERY:
         entities.extend(
             [
-                PlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
-                PlannerSensor(
+                BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
+                BatteryPlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
+                BatteryPlannerSensor(
                     coordinator,
                     entry,
                     "estimated_home_demand_today",
@@ -44,7 +42,14 @@ async def async_setup_entry(
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         entities.extend(
             [
-                PlannerSensor(
+                ThermostatPlannerSensor(
+                    coordinator,
+                    entry,
+                    "score",
+                    "Planner Score",
+                    "score",
+                ),
+                ThermostatPlannerSensor(
                     coordinator,
                     entry,
                     "room_cooling_hours_to_eco",
@@ -52,7 +57,7 @@ async def async_setup_entry(
                     "room_cooling_hours_to_eco",
                     native_unit_of_measurement="h",
                 ),
-                PlannerSensor(
+                ThermostatPlannerSensor(
                     coordinator,
                     entry,
                     "thermostat_eco_start_time",
@@ -82,6 +87,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
     ) -> None:
         super().__init__(coordinator)
         self._value_key = value_key
+        self._entry_id = entry.entry_id
         self._attr_name = name
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_native_unit_of_measurement = native_unit_of_measurement
@@ -93,12 +99,22 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
-        data: PlannerResult = self.coordinator.data
         return {
-            "planner_kind": data.planner_kind,
-            "status": data.status,
-            "source_status": data.source_status,
-            "source_errors": data.source_errors,
+            "planner_kind": self.coordinator.data.planner_kind,
+            "status": self.coordinator.data.status,
+            "source_status": self.coordinator.data.source_status,
+            "source_errors": self.coordinator.data.source_errors,
+        }
+
+
+class BatteryPlannerSensor(PlannerSensor):
+    """Battery planner sensor with battery-only attributes."""
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | float | int | None]:
+        data: PlannerResult = self.coordinator.data
+        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
+        return super().extra_state_attributes | {
             "current_price": data.current_price,
             "price_spread": data.price_spread,
             "next_cheap_window_start": data.next_window_start,
@@ -131,6 +147,24 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             ),
             "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
             "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
+            "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
+            "price_resolution": data.price_resolution,
+            "rationale": data.rationale,
+        }
+
+
+class ThermostatPlannerSensor(PlannerSensor):
+    """Thermostat planner sensor with thermostat-only attributes."""
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | float | int | None]:
+        data: PlannerResult = self.coordinator.data
+        return super().extra_state_attributes | {
+            "current_price": data.current_price,
+            "price_spread": data.price_spread,
+            "next_cheap_window_start": data.next_window_start,
+            "next_cheap_window_end": data.next_window_end,
+            "next_cheap_window_price": data.next_window_price,
             "room_temperature_c": getattr(data, "room_temperature_c", None),
             "thermostat_setpoint_c": getattr(data, "thermostat_setpoint_c", None),
             "thermostat_eco_setpoint_c": getattr(data, "thermostat_eco_setpoint_c", None),
@@ -140,7 +174,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "planned_eco_window_start": getattr(data, "planned_eco_window_start", None),
             "planned_eco_window_end": getattr(data, "planned_eco_window_end", None),
             "planned_eco_windows": getattr(data, "planned_eco_windows", []),
-            "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
+            "cooling_model": runtime_state.get("cooling_model", {}),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

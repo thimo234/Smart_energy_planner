@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.climate.const import HVACMode
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -37,6 +38,8 @@ from .const import (
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_THERMOSTAT,
     RUNTIME_STATE,
+    STORAGE_KEY,
+    STORAGE_VERSION,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 
@@ -51,10 +54,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     merged = {**entry.data, **entry.options}
     runtime_state = hass.data.setdefault(RUNTIME_STATE, {})
+    persisted_state = await _async_load_runtime_state(hass, entry.entry_id)
     runtime_state[entry.entry_id] = {
-        "manual_temperature": _default_manual_temperature(merged),
-        "hvac_mode": HVACMode.HEAT,
+        "manual_temperature": persisted_state.get("manual_temperature", _default_manual_temperature(merged)),
+        "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
         "last_switch_change": None,
+        "cooling_model": persisted_state.get("cooling_model", {}),
+        "last_cooling_observation": persisted_state.get("last_cooling_observation"),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -184,6 +190,7 @@ async def _async_apply_heating_switch_control(
     current_temperature = coordinator.data.room_temperature_c
     base_target = coordinator.data.thermostat_setpoint_c
     eco_target = coordinator.data.thermostat_eco_setpoint_c
+    outdoor_temperature = coordinator.data.cooling_reference_outdoor_temp_c or coordinator.data.room_temperature_c
     hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
     if hvac_mode == HVACMode.OFF:
         if str(switch_state.state).lower() in {"on", "heat", "heating"}:
@@ -193,6 +200,17 @@ async def _async_apply_heating_switch_control(
     active_target = eco_target if coordinator.data.heat_pump_strategy == "energy_saving_on" else base_target
     if current_temperature is None or active_target is None:
         return
+
+    await _async_update_cooling_model(
+        hass,
+        coordinator.config_entry.entry_id,
+        runtime_state,
+        current_temperature=current_temperature,
+        outdoor_temperature=coordinator.hass.states.get(merged.get(CONF_TEMPERATURE_SENSOR)).state
+        if merged.get(CONF_TEMPERATURE_SENSOR) and coordinator.hass.states.get(merged.get(CONF_TEMPERATURE_SENSOR))
+        else None,
+        heating_is_on=str(switch_state.state).lower() in {"on", "heat", "heating"},
+    )
 
     cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
     hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
@@ -230,3 +248,86 @@ def _default_manual_temperature(merged: dict[str, Any]) -> float:
     min_temp = float(merged.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
     max_temp = float(merged.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
     return round(min(max(20.0, min_temp), max_temp), 2)
+
+
+async def _async_load_runtime_state(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+    """Load persisted runtime state for a planner entry."""
+    store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+    data = await store.async_load() or {}
+    return data.get(entry_id, {})
+
+
+async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_state: dict[str, Any]) -> None:
+    """Persist selected runtime fields for a planner entry."""
+    store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+    data = await store.async_load() or {}
+    data[entry_id] = {
+        "manual_temperature": runtime_state.get("manual_temperature"),
+        "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
+        "cooling_model": runtime_state.get("cooling_model", {}),
+        "last_cooling_observation": runtime_state.get("last_cooling_observation"),
+    }
+    await store.async_save(data)
+
+
+async def _async_update_cooling_model(
+    hass: HomeAssistant,
+    entry_id: str,
+    runtime_state: dict[str, Any],
+    *,
+    current_temperature: float | None,
+    outdoor_temperature,
+    heating_is_on: bool,
+) -> None:
+    """Learn room cooling speed while heating is off and persist it."""
+    if current_temperature is None:
+        return
+    try:
+        outdoor_temp = float(outdoor_temperature) if outdoor_temperature is not None else None
+    except (TypeError, ValueError):
+        outdoor_temp = None
+    if outdoor_temp is None:
+        return
+
+    now = dt_util.now()
+    observation = runtime_state.get("last_cooling_observation")
+    runtime_state["last_cooling_observation"] = {
+        "timestamp": now.isoformat(),
+        "room_temperature_c": round(current_temperature, 3),
+        "outdoor_temperature_c": round(outdoor_temp, 3),
+        "heating_is_on": heating_is_on,
+    }
+
+    if (
+        observation is None
+        or observation.get("heating_is_on")
+        or heating_is_on
+    ):
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    try:
+        previous_time = dt_util.parse_datetime(observation["timestamp"])
+        previous_room_temp = float(observation["room_temperature_c"])
+        previous_outdoor_temp = float(observation["outdoor_temperature_c"])
+    except (KeyError, TypeError, ValueError):
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    if previous_time is None:
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    elapsed_hours = (now - previous_time).total_seconds() / 3600
+    cooling_drop = previous_room_temp - current_temperature
+    if elapsed_hours <= 0 or cooling_drop <= 0:
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    cooling_rate = cooling_drop / elapsed_hours
+    bucket = str(round((previous_outdoor_temp + outdoor_temp) / 2))
+    cooling_model = runtime_state.setdefault("cooling_model", {})
+    existing_rate = cooling_model.get(bucket)
+    learned_rate = cooling_rate if existing_rate is None else ((float(existing_rate) * 0.7) + (cooling_rate * 0.3))
+    cooling_model[bucket] = round(max(0.01, learned_rate), 4)
+    await _async_save_runtime_state(hass, entry_id, runtime_state)

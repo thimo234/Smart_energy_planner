@@ -399,7 +399,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
         """Estimate average daily usage from recorder history of a cumulative kWh sensor."""
-        lookback_days = int(self._config[CONF_HEATING_LOOKBACK_DAYS])
+        lookback_days = int(self._config.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS))
         end = dt_util.now()
         start = end - timedelta(days=lookback_days)
 
@@ -442,10 +442,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return 0.0
         return round(statistics.fmean(deltas), 2)
 
-    def _estimate_heating_need(self, outdoor_temperature: float, average_daily_heating_kwh: float) -> float:
-        heating_factor = max(0.2, min(1.6, (18 - outdoor_temperature) / 10))
-        return round(average_daily_heating_kwh * heating_factor, 2)
-
     def _get_manual_thermostat_setpoint(self) -> float:
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
         manual_temperature = _coerce_float(runtime_state.get("manual_temperature"))
@@ -459,113 +455,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _thermostat_max_temp(self) -> float:
         return float(self._config.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
 
-    async def _async_load_entity_history(
-        self,
-        entity_ids: list[str],
-        lookback_days: int,
-    ) -> dict[str, list[Any]]:
-        end = dt_util.now()
-        start = end - timedelta(days=lookback_days)
-
-        def _load_history():
-            return history.get_significant_states(
-                self.hass,
-                start,
-                end,
-                entity_ids,
-                include_start_time_state=True,
-                significant_changes_only=False,
-                no_attributes=True,
-            )
-
-        try:
-            return await self.hass.async_add_executor_job(_load_history)
-        except Exception:
-            return {}
-
     async def _async_estimate_room_cooling_profile(
         self,
         *,
-        room_temperature_sensor: str | None,
-        heating_switch_entity: str | None,
-        outdoor_temperature_sensor: str | None,
         room_temperature_c: float | None,
         outdoor_temperature_c: float,
         thermostat_setpoint_c: float | None,
         thermostat_eco_setpoint_c: float | None,
+        **_: Any,
     ) -> dict[str, float | None]:
-        if (
-            room_temperature_sensor is None
-            or heating_switch_entity is None
-            or thermostat_setpoint_c is None
-            or thermostat_eco_setpoint_c is None
-            or room_temperature_c is None
-        ):
+        if thermostat_setpoint_c is None or thermostat_eco_setpoint_c is None or room_temperature_c is None:
             return {
                 "hours_to_eco": None,
                 "cooling_rate_c_per_hour": None,
                 "reference_outdoor_temp_c": outdoor_temperature_c,
             }
 
-        lookback_days = int(self._config.get(CONF_HEATING_LOOKBACK_DAYS, 5))
-        entity_ids = [room_temperature_sensor, heating_switch_entity]
-        if outdoor_temperature_sensor:
-            entity_ids.append(outdoor_temperature_sensor)
-        history_result = await self._async_load_entity_history(entity_ids, lookback_days)
-
-        room_states = history_result.get(room_temperature_sensor, [])
-        switch_states = history_result.get(heating_switch_entity, [])
-        outdoor_states = history_result.get(outdoor_temperature_sensor, []) if outdoor_temperature_sensor else []
-
-        coefficients: list[float] = []
-        measured_rates: list[float] = []
-        reference_outdoor_temps: list[float] = []
-
-        for index, switch_state in enumerate(switch_states):
-            if not self._is_switch_off(switch_state.state):
-                continue
-
-            off_start = switch_state.last_updated
-            off_end = dt_util.now()
-            for next_state in switch_states[index + 1 :]:
-                if not self._is_switch_off(next_state.state):
-                    off_end = next_state.last_updated
-                    break
-
-            duration_hours = (off_end - off_start).total_seconds() / 3600
-            if duration_hours < 0.75:
-                continue
-
-            start_temp = self._get_state_value_at(room_states, off_start)
-            end_temp = self._get_state_value_at(room_states, off_end)
-            outdoor_avg = self._average_state_value_between(outdoor_states, off_start, off_end, outdoor_temperature_c)
-            if start_temp is None or end_temp is None or outdoor_avg is None:
-                continue
-
-            temp_drop = start_temp - end_temp
-            if temp_drop <= 0:
-                continue
-
-            measured_rate = temp_drop / duration_hours
-            temp_delta = max(start_temp - outdoor_avg, 1.0)
-            coefficients.append(measured_rate / temp_delta)
-            measured_rates.append(measured_rate)
-            reference_outdoor_temps.append(outdoor_avg)
-
         cooldown_delta = max(thermostat_setpoint_c - thermostat_eco_setpoint_c, 0.1)
-        temp_delta_now = max(room_temperature_c - outdoor_temperature_c, 1.0)
-
-        if coefficients:
-            average_coefficient = statistics.fmean(coefficients)
-            estimated_rate = max(0.05, average_coefficient * temp_delta_now)
-            reference_outdoor = round(statistics.fmean(reference_outdoor_temps), 2)
-        elif measured_rates:
-            estimated_rate = max(0.05, statistics.fmean(measured_rates))
-            reference_outdoor = outdoor_temperature_c
-        else:
-            fallback_rate = max(0.1, temp_delta_now * 0.03)
-            estimated_rate = fallback_rate
-            reference_outdoor = outdoor_temperature_c
+        estimated_rate = self._estimate_cooling_rate_from_model(outdoor_temperature_c, room_temperature_c)
+        reference_outdoor = outdoor_temperature_c
 
         hours_to_eco = round(min(12.0, max(1.0, cooldown_delta / estimated_rate)), 2)
         return {
@@ -574,33 +482,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "reference_outdoor_temp_c": reference_outdoor,
         }
 
-    def _get_state_value_at(self, states: list[Any], moment: datetime) -> float | None:
-        latest_value: float | None = None
-        for state in states:
-            if state.last_updated > moment:
-                break
-            latest_value = _coerce_float(state.state)
-        return latest_value
-
-    def _average_state_value_between(
+    def _estimate_cooling_rate_from_model(
         self,
-        states: list[Any],
-        start: datetime,
-        end: datetime,
-        default: float | None,
-    ) -> float | None:
-        values = [
-            value
-            for state in states
-            if start <= state.last_updated <= end
-            if (value := _coerce_float(state.state)) is not None
-        ]
-        if values:
-            return statistics.fmean(values)
-        return default
+        outdoor_temperature_c: float,
+        room_temperature_c: float,
+    ) -> float:
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        cooling_model = runtime_state.get("cooling_model", {})
+        if cooling_model:
+            target_bucket = round(outdoor_temperature_c)
+            available_buckets = sorted(int(bucket) for bucket in cooling_model.keys())
+            if available_buckets:
+                closest_bucket = min(available_buckets, key=lambda bucket: abs(bucket - target_bucket))
+                learned_rate = _coerce_float(cooling_model.get(str(closest_bucket)))
+                if learned_rate is not None:
+                    return max(0.05, learned_rate)
 
-    def _is_switch_off(self, state: str | None) -> bool:
-        return str(state).lower() in {STATE_OFF, "off", "idle", "closed"}
+        temp_delta_now = max(room_temperature_c - outdoor_temperature_c, 1.0)
+        return max(0.1, temp_delta_now * 0.03)
 
     def _select_most_expensive_window_block(
         self,
