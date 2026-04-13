@@ -14,6 +14,7 @@
         "data": {
           "price_sensor": "Energieprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "heating_lookback_days": "Aantal historische dagen",
           "temperature_sensor": "Buitentemperatuur sensor",
           "room_temperature_sensor": "Kamertemperatuur sensor",
           "heating_switch_entity": "Verwarmingsschakelaar",
@@ -43,6 +44,7 @@
         "data": {
           "price_sensor": "Energieprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "heating_lookback_days": "Aantal historische dagen",
           "temperature_sensor": "Buitentemperatuur sensor",
           "room_temperature_sensor": "Kamertemperatuur sensor",
           "heating_switch_entity": "Verwarmingsschakelaar",

@@ -19,6 +19,7 @@ from .const import (
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_HEATING_SWITCH_ENTITY,
+    CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
@@ -169,6 +171,12 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ): _entity_selector(
                 _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
+            ),
+            vol.Required(
+                CONF_HEATING_LOOKBACK_DAYS,
+                default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=2, max=30, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,

@@ -159,6 +159,7 @@ class ThermostatPlannerSensor(PlannerSensor):
     @property
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
         data: PlannerResult = self.coordinator.data
+        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
         return super().extra_state_attributes | {
             "current_price": data.current_price,
             "price_spread": data.price_spread,

@@ -14,6 +14,7 @@
         "data": {
           "price_sensor": "Energy price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
+          "heating_lookback_days": "Historical days",
           "temperature_sensor": "Outdoor temperature sensor",
           "room_temperature_sensor": "Room temperature sensor",
           "heating_switch_entity": "Heating control switch",
@@ -43,6 +44,7 @@
         "data": {
           "price_sensor": "Energy price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
+          "heating_lookback_days": "Historical days",
           "temperature_sensor": "Outdoor temperature sensor",
           "room_temperature_sensor": "Room temperature sensor",
           "heating_switch_entity": "Heating control switch",
