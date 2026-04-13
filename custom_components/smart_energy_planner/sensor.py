@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import UnitOfEnergy, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -52,6 +52,22 @@ async def async_setup_entry(
                     "Heating Estimate",
                     "heating_estimate_kwh",
                     native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                ),
+                PlannerSensor(
+                    coordinator,
+                    entry,
+                    "thermostat_eco_setpoint",
+                    "Thermostat Eco Setpoint",
+                    "thermostat_eco_setpoint_c",
+                    native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+                ),
+                PlannerSensor(
+                    coordinator,
+                    entry,
+                    "room_cooling_hours_to_eco",
+                    "Room Cooling Hours To Eco",
+                    "room_cooling_hours_to_eco",
+                    native_unit_of_measurement="h",
                 ),
             ]
         )
@@ -126,6 +142,14 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             ),
             "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
             "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
+            "room_temperature_c": getattr(data, "room_temperature_c", None),
+            "thermostat_setpoint_c": getattr(data, "thermostat_setpoint_c", None),
+            "thermostat_eco_setpoint_c": getattr(data, "thermostat_eco_setpoint_c", None),
+            "room_cooling_hours_to_eco": getattr(data, "room_cooling_hours_to_eco", None),
+            "room_cooling_rate_c_per_hour": getattr(data, "room_cooling_rate_c_per_hour", None),
+            "cooling_reference_outdoor_temp_c": getattr(data, "cooling_reference_outdoor_temp_c", None),
+            "planned_eco_window_start": getattr(data, "planned_eco_window_start", None),
+            "planned_eco_window_end": getattr(data, "planned_eco_window_end", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "heat_pump_max_off_hours": data.heat_pump_max_off_hours,
             "heat_pump_min_on_hours": data.heat_pump_min_on_hours,

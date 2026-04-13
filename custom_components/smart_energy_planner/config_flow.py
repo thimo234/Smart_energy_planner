@@ -6,6 +6,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import UnitOfEnergy, UnitOfTemperature
@@ -19,14 +20,18 @@ from .const import (
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_HEATING_ENERGY_SENSOR,
+    CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_HEAT_PUMP_MAX_OFF_HOURS,
     CONF_HEAT_PUMP_MIN_ON_HOURS,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
+    CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    CONF_THERMOSTAT_ECO_SETBACK,
+    CONF_THERMOSTAT_ENTITY,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
@@ -39,6 +44,7 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
+    DEFAULT_THERMOSTAT_ECO_SETBACK,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_COMBINED,
@@ -98,17 +104,36 @@ def _entity_selector(
     include_entities: list[str],
     *,
     current_value: str | None,
+    domain: str | None = "sensor",
 ) -> selector.EntitySelector:
     """Build an entity selector and keep the current entity selectable."""
     include_entities = list(dict.fromkeys(include_entities))
     if current_value and current_value not in include_entities:
         include_entities = [*include_entities, current_value]
 
-    config: dict[str, Any] = {"domain": "sensor"}
+    config: dict[str, Any] = {}
+    if domain:
+        config["domain"] = domain
     if include_entities:
         config["include_entities"] = include_entities
 
     return selector.EntitySelector(selector.EntitySelectorConfig(**config))
+
+
+def _filter_thermostat_entities(hass: HomeAssistant) -> list[str]:
+    """Return likely climate thermostat entities."""
+    return [
+        state.entity_id
+        for state in hass.states.async_all(CLIMATE_DOMAIN)
+        if state.attributes.get("temperature") is not None
+    ]
+
+
+def _filter_heating_switch_entities(hass: HomeAssistant) -> list[str]:
+    """Return likely heating control switches."""
+    switch_entities = [state.entity_id for state in hass.states.async_all("switch")]
+    boolean_entities = [state.entity_id for state in hass.states.async_all("input_boolean")]
+    return [*switch_entities, *boolean_entities]
 
 
 def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
@@ -218,14 +243,28 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
             ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
             vol.Required(
-                CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
-            ): _entity_selector(
-                _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
-            ),
-            vol.Required(
                 CONF_TEMPERATURE_SENSOR, default=user_input.get(CONF_TEMPERATURE_SENSOR)
             ): _entity_selector(
                 _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
+            ),
+            vol.Required(
+                CONF_ROOM_TEMPERATURE_SENSOR, default=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
+            ): _entity_selector(
+                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_ENTITY, default=user_input.get(CONF_THERMOSTAT_ENTITY)
+            ): _entity_selector(
+                _filter_thermostat_entities(hass),
+                current_value=user_input.get(CONF_THERMOSTAT_ENTITY),
+                domain=CLIMATE_DOMAIN,
+            ),
+            vol.Required(
+                CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
+            ): _entity_selector(
+                _filter_heating_switch_entities(hass),
+                current_value=user_input.get(CONF_HEATING_SWITCH_ENTITY),
+                domain=None,
             ),
             vol.Required(
                 CONF_HEATING_ENERGY_SENSOR, default=user_input.get(CONF_HEATING_ENERGY_SENSOR)
@@ -239,6 +278,12 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
+                CONF_THERMOSTAT_ECO_SETBACK,
+                default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
                 CONF_HEAT_PUMP_MAX_OFF_HOURS,
                 default=user_input.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS),
             ): selector.NumberSelector(
@@ -249,6 +294,20 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 default=user_input.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_RESOLUTION,
+                default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value=PRICE_RESOLUTION_HOURLY, label="Hourly contract"),
+                        selector.SelectOptionDict(
+                            value=PRICE_RESOLUTION_QUARTER_HOURLY, label="Quarter-hour contract"
+                        ),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
             ),
         }
     )
@@ -273,6 +332,25 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
             ),
             vol.Required(
+                CONF_ROOM_TEMPERATURE_SENSOR, default=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
+            ): _entity_selector(
+                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_ENTITY, default=user_input.get(CONF_THERMOSTAT_ENTITY)
+            ): _entity_selector(
+                _filter_thermostat_entities(hass),
+                current_value=user_input.get(CONF_THERMOSTAT_ENTITY),
+                domain=CLIMATE_DOMAIN,
+            ),
+            vol.Required(
+                CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
+            ): _entity_selector(
+                _filter_heating_switch_entities(hass),
+                current_value=user_input.get(CONF_HEATING_SWITCH_ENTITY),
+                domain=None,
+            ),
+            vol.Required(
                 CONF_HEATING_ENERGY_SENSOR, default=user_input.get(CONF_HEATING_ENERGY_SENSOR)
             ): _entity_selector(
                 _filter_energy_sensors(hass), current_value=user_input.get(CONF_HEATING_ENERGY_SENSOR)
@@ -287,6 +365,12 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_ECO_SETBACK,
+                default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_HEAT_PUMP_MAX_OFF_HOURS,
