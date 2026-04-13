@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 DOMAIN = "smart_energy_planner"
+RUNTIME_STATE = f"{DOMAIN}_runtime"
 
 CONF_PLANNER_KIND = "planner_kind"
 CONF_PRICE_SENSOR = "price_sensor"
 CONF_SOLCAST_TODAY_SENSOR = "solcast_today_sensor"
 CONF_TEMPERATURE_SENSOR = "temperature_sensor"
 CONF_ROOM_TEMPERATURE_SENSOR = "room_temperature_sensor"
-CONF_THERMOSTAT_ENTITY = "thermostat_entity"
 CONF_HEATING_SWITCH_ENTITY = "heating_switch_entity"
 CONF_TOTAL_ENERGY_SENSOR = "total_energy_sensor"
 CONF_HEATING_LOOKBACK_DAYS = "heating_lookback_days"
@@ -20,6 +20,8 @@ CONF_THERMOSTAT_COLD_TOLERANCE = "thermostat_cold_tolerance"
 CONF_THERMOSTAT_HOT_TOLERANCE = "thermostat_hot_tolerance"
 CONF_THERMOSTAT_MIN_TEMP = "thermostat_min_temp"
 CONF_THERMOSTAT_MAX_TEMP = "thermostat_max_temp"
+CONF_THERMOSTAT_MIN_CYCLE_MINUTES = "thermostat_min_cycle_minutes"
+CONF_THERMOSTAT_CONTROL_CHECK_MINUTES = "thermostat_control_check_minutes"
 CONF_PRICE_RESOLUTION = "price_resolution"
 CONF_BATTERY_ENABLED = "battery_enabled"
 CONF_BATTERY_CAPACITY_KWH = "battery_capacity_kwh"
@@ -42,6 +44,8 @@ DEFAULT_THERMOSTAT_COLD_TOLERANCE = 0.3
 DEFAULT_THERMOSTAT_HOT_TOLERANCE = 0.3
 DEFAULT_THERMOSTAT_MIN_TEMP = 15.0
 DEFAULT_THERMOSTAT_MAX_TEMP = 24.0
+DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES = 10
+DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES = 5
 DEFAULT_PRICE_RESOLUTION = PRICE_RESOLUTION_HOURLY
 DEFAULT_BATTERY_ENABLED = False
 DEFAULT_BATTERY_CAPACITY_KWH = 10.0

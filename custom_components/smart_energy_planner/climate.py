@@ -13,17 +13,21 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CONF_PLANNER_KIND,
     CONF_THERMOSTAT_COLD_TOLERANCE,
-    CONF_THERMOSTAT_ENTITY,
+    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
     CONF_THERMOSTAT_HOT_TOLERANCE,
     CONF_THERMOSTAT_MAX_TEMP,
+    CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
     CONF_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
+    DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
     DEFAULT_THERMOSTAT_HOT_TOLERANCE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
+    DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_COMBINED,
     PLANNER_KIND_THERMOSTAT,
+    RUNTIME_STATE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 
@@ -95,7 +99,6 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return {
             "status": data.status,
             "planner_kind": data.planner_kind,
-            "underlying_thermostat_entity": self._merged_config.get(CONF_THERMOSTAT_ENTITY),
             "thermostat_setpoint_c": data.thermostat_setpoint_c,
             "thermostat_eco_setpoint_c": data.thermostat_eco_setpoint_c,
             "effective_target_temperature": data.thermostat_eco_setpoint_c
@@ -106,6 +109,12 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             ),
             "hot_tolerance": self._merged_config.get(
                 CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE
+            ),
+            "min_cycle_minutes": self._merged_config.get(
+                CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES
+            ),
+            "control_check_minutes": self._merged_config.get(
+                CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
             ),
             "planned_eco_window_start": data.planned_eco_window_start,
             "planned_eco_window_end": data.planned_eco_window_end,
@@ -118,18 +127,14 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return {**self._entry.data, **self._entry.options}
 
     async def async_set_temperature(self, **kwargs) -> None:
-        """Forward manual temperature changes to the underlying thermostat."""
+        """Store manual temperature changes on the planner thermostat."""
         temperature = kwargs.get("temperature")
-        thermostat_entity = self._merged_config.get(CONF_THERMOSTAT_ENTITY)
-        if temperature is None or thermostat_entity is None:
+        if temperature is None:
             return
 
         clamped_temperature = min(self.max_temp, max(self.min_temp, float(temperature)))
-
-        await self.hass.services.async_call(
-            "climate",
-            "set_temperature",
-            {"entity_id": thermostat_entity, "temperature": clamped_temperature},
-            blocking=True,
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+            self._entry.entry_id, {}
         )
+        runtime_state["manual_temperature"] = round(clamped_temperature, 2)
         await self.coordinator.async_request_refresh()

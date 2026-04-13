@@ -6,7 +6,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.climate import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import UnitOfEnergy, UnitOfTemperature
@@ -27,11 +26,12 @@ from .const import (
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
     CONF_THERMOSTAT_COLD_TOLERANCE,
     CONF_THERMOSTAT_ECO_SETBACK,
-    CONF_THERMOSTAT_ENTITY,
     CONF_THERMOSTAT_HOT_TOLERANCE,
     CONF_THERMOSTAT_MAX_TEMP,
+    CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
     CONF_THERMOSTAT_MIN_TEMP,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
@@ -43,10 +43,12 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
+    DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
     DEFAULT_THERMOSTAT_ECO_SETBACK,
     DEFAULT_THERMOSTAT_HOT_TOLERANCE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
+    DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_BATTERY,
@@ -121,16 +123,6 @@ def _entity_selector(
         config["include_entities"] = include_entities
 
     return selector.EntitySelector(selector.EntitySelectorConfig(**config))
-
-
-def _filter_thermostat_entities(hass: HomeAssistant) -> list[str]:
-    """Return likely climate thermostat entities."""
-    return [
-        state.entity_id
-        for state in hass.states.async_all(CLIMATE_DOMAIN)
-        if state.attributes.get("temperature") is not None
-    ]
-
 
 def _filter_heating_switch_entities(hass: HomeAssistant) -> list[str]:
     """Return likely heating control switches."""
@@ -256,13 +248,6 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
             ),
             vol.Required(
-                CONF_THERMOSTAT_ENTITY, default=user_input.get(CONF_THERMOSTAT_ENTITY)
-            ): _entity_selector(
-                _filter_thermostat_entities(hass),
-                current_value=user_input.get(CONF_THERMOSTAT_ENTITY),
-                domain=CLIMATE_DOMAIN,
-            ),
-            vol.Required(
                 CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
             ): _entity_selector(
                 _filter_heating_switch_entities(hass),
@@ -306,6 +291,22 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
+                CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
+                default=user_input.get(
+                    CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
+                default=user_input.get(
+                    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
                 CONF_PRICE_RESOLUTION,
                 default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
             ): selector.SelectSelector(
@@ -345,13 +346,6 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 CONF_ROOM_TEMPERATURE_SENSOR, default=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
             ): _entity_selector(
                 _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_ENTITY, default=user_input.get(CONF_THERMOSTAT_ENTITY)
-            ): _entity_selector(
-                _filter_thermostat_entities(hass),
-                current_value=user_input.get(CONF_THERMOSTAT_ENTITY),
-                domain=CLIMATE_DOMAIN,
             ),
             vol.Required(
                 CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
@@ -400,6 +394,22 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 default=user_input.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
+                default=user_input.get(
+                    CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
+                default=user_input.get(
+                    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,
@@ -496,7 +506,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
             unique_anchor = (
                 user_input.get(CONF_PRICE_SENSOR)
                 or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-                or user_input.get(CONF_THERMOSTAT_ENTITY)
+                or user_input.get(CONF_HEATING_SWITCH_ENTITY)
                 or planner_kind
             )
             await self.async_set_unique_id(f"{DOMAIN}-{planner_kind}-{unique_anchor}")
