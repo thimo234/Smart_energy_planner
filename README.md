@@ -5,7 +5,6 @@ Smart Energy Planner is a Home Assistant custom integration that combines:
 - dynamic energy prices from a Nord Pool sensor
 - Solcast solar forecast for today
 - outdoor temperature
-- recent heating energy usage
 - optional home battery capacity and charge/discharge limits
 
 The integration exposes planner sensors that can be used in automations to shift loads to cheaper and greener moments.
@@ -38,12 +37,9 @@ Depending on the selected planner type, configure:
 - Room temperature sensor
 - Room thermostat entity
 - Heating control switch
-- Heat pump energy sensor
 - Total home energy sensor
 - Number of historical heating days to inspect
 - Eco setback below thermostat setpoint
-- Heat pump max off hours
-- Heat pump min on hours
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
@@ -55,7 +51,7 @@ After setup, you can open the integration settings again from Home Assistant and
 The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
 
 The battery planner derives household usage from the history of your total home energy sensor.
-The thermostat planner focuses on room cooling behavior and expensive hours, so you can use it per room in automations to keep heating in eco mode during the most expensive block that the room can bridge by slowly cooling down.
+The thermostat planner focuses on room cooling behavior and expensive hours, and now creates its own climate entity that automatically drives the linked room thermostat into eco mode during the most expensive block that the room can bridge by slowly cooling down.
 
 ## Exposed entities
 
@@ -67,14 +63,13 @@ The thermostat planner focuses on room cooling behavior and expensive hours, so 
 - `sensor.smart_energy_planner_heating_estimate`
 - `sensor.smart_energy_planner_thermostat_eco_setpoint`
 - `sensor.smart_energy_planner_room_cooling_hours_to_eco`
+- `climate.smart_energy_planner_planner_thermostat`
 
 The sensors also expose extra attributes such as the next cheap window, the price spread for the current day, and the Solcast production forecast used by the planner.
 The estimated home demand sensor includes `estimated_hourly_home_demand` with a per-hour forecast for today.
 For thermostat planners, the entities also include `planned_eco_window_start`, `planned_eco_window_end`, `room_cooling_rate_c_per_hour`, and the current and eco thermostat setpoints.
 
 For Solcast, the planner works best with the sensor that exposes today's forecast total plus `detailedHourly`.
-For heating, the integration expects a cumulative energy sensor from the heat pump and derives daily usage from recorder history.
-
 Battery strategy values:
 
 - `accu_uit`

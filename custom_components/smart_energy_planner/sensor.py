@@ -151,8 +151,6 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "planned_eco_window_start": getattr(data, "planned_eco_window_start", None),
             "planned_eco_window_end": getattr(data, "planned_eco_window_end", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
-            "heat_pump_max_off_hours": data.heat_pump_max_off_hours,
-            "heat_pump_min_on_hours": data.heat_pump_min_on_hours,
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

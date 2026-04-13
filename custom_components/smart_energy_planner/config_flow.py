@@ -19,11 +19,8 @@ from .const import (
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
-    CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
-    CONF_HEAT_PUMP_MAX_OFF_HOURS,
-    CONF_HEAT_PUMP_MIN_ON_HOURS,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
@@ -39,8 +36,6 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_HEATING_LOOKBACK_DAYS,
-    DEFAULT_HEAT_PUMP_MAX_OFF_HOURS,
-    DEFAULT_HEAT_PUMP_MIN_ON_HOURS,
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
@@ -267,11 +262,6 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 domain=None,
             ),
             vol.Required(
-                CONF_HEATING_ENERGY_SENSOR, default=user_input.get(CONF_HEATING_ENERGY_SENSOR)
-            ): _entity_selector(
-                _filter_energy_sensors(hass), current_value=user_input.get(CONF_HEATING_ENERGY_SENSOR)
-            ),
-            vol.Required(
                 CONF_HEATING_LOOKBACK_DAYS,
                 default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
             ): selector.NumberSelector(
@@ -282,18 +272,6 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_HEAT_PUMP_MAX_OFF_HOURS,
-                default=user_input.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_HEAT_PUMP_MIN_ON_HOURS,
-                default=user_input.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,
@@ -351,11 +329,6 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 domain=None,
             ),
             vol.Required(
-                CONF_HEATING_ENERGY_SENSOR, default=user_input.get(CONF_HEATING_ENERGY_SENSOR)
-            ): _entity_selector(
-                _filter_energy_sensors(hass), current_value=user_input.get(CONF_HEATING_ENERGY_SENSOR)
-            ),
-            vol.Required(
                 CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ): _entity_selector(
                 _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
@@ -371,18 +344,6 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_HEAT_PUMP_MAX_OFF_HOURS,
-                default=user_input.get(CONF_HEAT_PUMP_MAX_OFF_HOURS, DEFAULT_HEAT_PUMP_MAX_OFF_HOURS),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_HEAT_PUMP_MIN_ON_HOURS,
-                default=user_input.get(CONF_HEAT_PUMP_MIN_ON_HOURS, DEFAULT_HEAT_PUMP_MIN_ON_HOURS),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,
@@ -479,7 +440,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
             unique_anchor = (
                 user_input.get(CONF_PRICE_SENSOR)
                 or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-                or user_input.get(CONF_HEATING_ENERGY_SENSOR)
+                or user_input.get(CONF_THERMOSTAT_ENTITY)
                 or planner_kind
             )
             await self.async_set_unique_id(f"{DOMAIN}-{planner_kind}-{unique_anchor}")
