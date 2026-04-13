@@ -40,6 +40,10 @@ Depending on the selected planner type, configure:
 - Total home energy sensor
 - Number of historical heating days to inspect
 - Eco setback below thermostat setpoint
+- Cold tolerance
+- Hot tolerance
+- Minimum thermostat temperature
+- Maximum thermostat temperature
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
@@ -51,7 +55,7 @@ After setup, you can open the integration settings again from Home Assistant and
 The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
 
 The battery planner derives household usage from the history of your total home energy sensor.
-The thermostat planner focuses on room cooling behavior and expensive hours, and now creates its own climate entity that automatically drives the linked room thermostat into eco mode during the most expensive block that the room can bridge by slowly cooling down.
+The thermostat planner focuses on room cooling behavior and expensive hours, and now creates its own climate entity that automatically drives the linked room thermostat into eco mode during the most expensive block that the room can bridge by slowly cooling down. It also switches the heating switch on and off around the active target temperature using configurable cold and hot tolerances.
 
 ## Exposed entities
 

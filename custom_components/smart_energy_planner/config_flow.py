@@ -27,8 +27,12 @@ from .const import (
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    CONF_THERMOSTAT_COLD_TOLERANCE,
     CONF_THERMOSTAT_ECO_SETBACK,
     CONF_THERMOSTAT_ENTITY,
+    CONF_THERMOSTAT_HOT_TOLERANCE,
+    CONF_THERMOSTAT_MAX_TEMP,
+    CONF_THERMOSTAT_MIN_TEMP,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
@@ -39,7 +43,11 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
+    DEFAULT_THERMOSTAT_COLD_TOLERANCE,
     DEFAULT_THERMOSTAT_ECO_SETBACK,
+    DEFAULT_THERMOSTAT_HOT_TOLERANCE,
+    DEFAULT_THERMOSTAT_MAX_TEMP,
+    DEFAULT_THERMOSTAT_MIN_TEMP,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_COMBINED,
@@ -274,6 +282,30 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
                 selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
+                CONF_THERMOSTAT_COLD_TOLERANCE,
+                default=user_input.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_HOT_TOLERANCE,
+                default=user_input.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_MIN_TEMP,
+                default=user_input.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_MAX_TEMP,
+                default=user_input.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
                 CONF_PRICE_RESOLUTION,
                 default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
             ): selector.SelectSelector(
@@ -344,6 +376,30 @@ def _build_combined_schema(hass: HomeAssistant, user_input: dict[str, Any] | Non
                 default=user_input.get(CONF_THERMOSTAT_ECO_SETBACK, DEFAULT_THERMOSTAT_ECO_SETBACK),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0.5, max=8, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_COLD_TOLERANCE,
+                default=user_input.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_HOT_TOLERANCE,
+                default=user_input.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_MIN_TEMP,
+                default=user_input.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_THERMOSTAT_MAX_TEMP,
+                default=user_input.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_RESOLUTION,

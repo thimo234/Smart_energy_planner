@@ -17,8 +17,12 @@ from .const import (
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    CONF_THERMOSTAT_COLD_TOLERANCE,
     CONF_THERMOSTAT_ENTITY,
+    CONF_THERMOSTAT_HOT_TOLERANCE,
     CONF_TOTAL_ENERGY_SENSOR,
+    DEFAULT_THERMOSTAT_COLD_TOLERANCE,
+    DEFAULT_THERMOSTAT_HOT_TOLERANCE,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_COMBINED,
@@ -126,6 +130,8 @@ async def _async_apply_thermostat_control(
     if planner_kind not in (PLANNER_KIND_COMBINED, PLANNER_KIND_THERMOSTAT):
         return
 
+    await _async_apply_heating_switch_control(hass, merged, coordinator)
+
     thermostat_entity = merged.get(CONF_THERMOSTAT_ENTITY)
     if not thermostat_entity or coordinator.data is None:
         return
@@ -179,3 +185,48 @@ def _extract_thermostat_target(thermostat_state) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+async def _async_apply_heating_switch_control(
+    hass: HomeAssistant,
+    merged: dict[str, Any],
+    coordinator: SmartEnergyPlannerCoordinator,
+) -> None:
+    """Turn the heating switch on/off using hysteresis around the active target."""
+    heating_switch_entity = merged.get(CONF_HEATING_SWITCH_ENTITY)
+    if not heating_switch_entity or coordinator.data is None:
+        return
+
+    switch_state = hass.states.get(heating_switch_entity)
+    if switch_state is None:
+        return
+
+    current_temperature = coordinator.data.room_temperature_c
+    base_target = coordinator.data.thermostat_setpoint_c
+    eco_target = coordinator.data.thermostat_eco_setpoint_c
+    active_target = eco_target if coordinator.data.heat_pump_strategy == "energy_saving_on" else base_target
+    if current_temperature is None or active_target is None:
+        return
+
+    cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
+    hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
+
+    should_turn_on = current_temperature <= active_target - cold_tolerance
+    should_turn_off = current_temperature >= active_target + hot_tolerance
+    current_is_on = str(switch_state.state).lower() in {"on", "heat", "heating"}
+
+    if should_turn_on and not current_is_on:
+        await _async_call_turn_service(hass, heating_switch_entity, "turn_on")
+    elif should_turn_off and current_is_on:
+        await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
+
+
+async def _async_call_turn_service(hass: HomeAssistant, entity_id: str, service: str) -> None:
+    """Call turn_on/turn_off on the entity domain."""
+    domain = entity_id.split(".", maxsplit=1)[0]
+    await hass.services.async_call(
+        domain,
+        service,
+        {"entity_id": entity_id},
+        blocking=True,
+    )
