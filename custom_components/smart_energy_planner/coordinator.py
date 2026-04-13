@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BASE_LOAD_KW,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
@@ -23,10 +24,13 @@ from .const import (
     CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
+    DEFAULT_BASE_LOAD_KW,
     DOMAIN,
+    PRICE_RESOLUTION_HOURLY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,6 +77,10 @@ class PlannerResult:
     best_solar_window_kwh: float | None
     solcast_confidence: float | None
     lookback_daily_average_kwh: float
+    base_load_kw: float
+    base_load_daily_kwh: float
+    estimated_total_home_demand_kwh: float
+    price_resolution: str
     source_status: dict[str, str]
     source_errors: list[str]
     rationale: str
@@ -130,7 +138,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
 
             current_price = _coerce_float(price_state.state)
-            windows = self._extract_price_windows(price_state.attributes, current_price)
+            price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
+            windows = self._extract_price_windows(
+                price_state.attributes,
+                current_price,
+                price_resolution,
+            )
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
                 source_errors = [
@@ -167,6 +180,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if heating_state and lookback_average <= 0 and fallback_heating is None:
                 source_status["heating_energy_sensor"] = "invalid_heating_value"
 
+            base_load_kw = float(self._config.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW))
+            base_load_daily_kwh = round(base_load_kw * 24, 2)
             base_heating = lookback_average
             if base_heating <= 0:
                 # A cumulative meter reading should not be used as a daily fallback estimate.
@@ -190,6 +205,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solcast_confidence=solcast_confidence,
                 heating_estimate_kwh=heating_estimate,
                 lookback_average_kwh=lookback_average,
+                base_load_kw=base_load_kw,
+                base_load_daily_kwh=base_load_daily_kwh,
+                price_resolution=price_resolution,
                 source_status=source_status,
                 source_errors=source_errors,
             )
@@ -228,6 +246,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             best_solar_window_kwh=None,
             solcast_confidence=None,
             lookback_daily_average_kwh=0.0,
+            base_load_kw=float(self._config.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW)),
+            base_load_daily_kwh=round(float(self._config.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW)) * 24, 2),
+            estimated_total_home_demand_kwh=round(float(self._config.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW)) * 24, 2),
+            price_resolution=str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY)),
             source_status=source_status,
             source_errors=source_errors,
             rationale=status.replace("_", " "),
@@ -327,6 +349,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solcast_confidence: float | None,
         heating_estimate_kwh: float,
         lookback_average_kwh: float,
+        base_load_kw: float,
+        base_load_daily_kwh: float,
+        price_resolution: str,
         source_status: dict[str, str],
         source_errors: list[str],
     ) -> PlannerResult:
@@ -336,6 +361,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         most_expensive = sorted_by_price[-1]
         price_spread = round(most_expensive.price - cheapest.price, 4)
         best_solar_window = self._select_best_solar_window(solar_windows)
+        estimated_total_home_demand_kwh = round(heating_estimate_kwh + base_load_daily_kwh, 2)
 
         cheap_threshold = cheapest.price + (price_spread * 0.25)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
@@ -359,7 +385,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if (
             best_solar_window is not None
             and best_solar_window.forecast_kwh >= 1.0
-            and solar_forecast_kwh >= max(2.0, heating_estimate_kwh * 0.35)
+            and solar_forecast_kwh >= max(2.0, estimated_total_home_demand_kwh * 0.25)
         ):
             recommendation = "shift_loads_to_solar_window"
             score += 15
@@ -370,6 +396,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale_parts.append("heating demand is elevated because of lower outdoor temperature")
         elif lookback_average_kwh <= 0:
             rationale_parts.append("recent heating history is not available yet, so heating demand is conservative")
+
+        if base_load_kw > 0.0:
+            rationale_parts.append(
+                f"base home load of {base_load_kw:.1f} kW is included in the total demand estimate"
+            )
 
         heat_pump_strategy = "normal"
         if (
@@ -389,7 +420,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         battery_strategy = "accu_uit"
         if battery_enabled:
-            if solar_forecast_kwh > heating_estimate_kwh:
+            if solar_forecast_kwh > estimated_total_home_demand_kwh:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
@@ -439,13 +470,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             solcast_confidence=solcast_confidence,
             lookback_daily_average_kwh=lookback_average_kwh,
+            base_load_kw=base_load_kw,
+            base_load_daily_kwh=base_load_daily_kwh,
+            estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
+            price_resolution=price_resolution,
             source_status=source_status,
             source_errors=source_errors,
             rationale=rationale,
         )
 
     def _extract_price_windows(
-        self, attributes: dict[str, Any], current_price: float | None
+        self, attributes: dict[str, Any], current_price: float | None, price_resolution: str
     ) -> list[PlannerWindow]:
         """Extract Nord Pool hourly windows from sensor attributes."""
         now = dt_util.now()
@@ -490,7 +525,35 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             )
 
+        if price_resolution == PRICE_RESOLUTION_HOURLY:
+            windows = self._aggregate_price_windows_to_hourly(windows)
+
         return sorted(windows, key=lambda item: item.start)
+
+    def _aggregate_price_windows_to_hourly(self, windows: list[PlannerWindow]) -> list[PlannerWindow]:
+        """Aggregate quarter-hour Nord Pool windows into hourly contract windows."""
+        if not windows:
+            return windows
+
+        grouped: dict[datetime, list[PlannerWindow]] = {}
+        for window in windows:
+            hour_start = window.start.replace(minute=0, second=0, microsecond=0)
+            grouped.setdefault(hour_start, []).append(window)
+
+        aggregated: list[PlannerWindow] = []
+        for hour_start, grouped_windows in grouped.items():
+            grouped_windows = sorted(grouped_windows, key=lambda item: item.start)
+            hour_end = max(window.end for window in grouped_windows)
+            average_price = sum(window.price for window in grouped_windows) / len(grouped_windows)
+            aggregated.append(
+                PlannerWindow(
+                    start=hour_start,
+                    end=hour_end,
+                    price=round(average_price, 6),
+                )
+            )
+
+        return sorted(aggregated, key=lambda item: item.start)
 
     def _extract_solar_windows(self, attributes: dict[str, Any]) -> list[SolarWindow]:
         """Extract Solcast hourly forecast windows."""

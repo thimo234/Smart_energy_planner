@@ -29,6 +29,8 @@ Add the integration from the Home Assistant UI and configure:
 - Outdoor temperature sensor
 - Heat pump energy sensor
 - Number of historical heating days to inspect
+- Base home load in kW
+- Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
 - Maximum battery charge power

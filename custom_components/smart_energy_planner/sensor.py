@@ -93,5 +93,9 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "solar_forecast_kwh": data.solar_forecast_kwh,
             "heating_estimate_kwh": data.heating_estimate_kwh,
             "lookback_daily_average_kwh": data.lookback_daily_average_kwh,
+            "base_load_kw": data.base_load_kw,
+            "base_load_daily_kwh": data.base_load_daily_kwh,
+            "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
+            "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_BASE_LOAD_KW,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
@@ -20,15 +21,20 @@ from .const import (
     CONF_HEATING_ENERGY_SENSOR,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PRICE_SENSOR,
+    CONF_PRICE_RESOLUTION,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_TEMPERATURE_SENSOR,
+    DEFAULT_BASE_LOAD_KW,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_NAME,
+    DEFAULT_PRICE_RESOLUTION,
     DOMAIN,
+    PRICE_RESOLUTION_HOURLY,
+    PRICE_RESOLUTION_QUARTER_HOURLY,
 )
 
 
@@ -140,6 +146,30 @@ def _build_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None)
                 default=user_input.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=2, max=14, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_BASE_LOAD_KW,
+                default=user_input.get(CONF_BASE_LOAD_KW, DEFAULT_BASE_LOAD_KW),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=20, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_RESOLUTION,
+                default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(
+                            value=PRICE_RESOLUTION_HOURLY,
+                            label="Hourly contract",
+                        ),
+                        selector.SelectOptionDict(
+                            value=PRICE_RESOLUTION_QUARTER_HOURLY,
+                            label="Quarter-hour contract",
+                        ),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
             ),
             vol.Required(
                 CONF_BATTERY_ENABLED,
