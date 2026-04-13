@@ -24,7 +24,6 @@ The integration exposes planner sensors that can be used in automations to shift
 Add the integration from the Home Assistant UI and configure:
 
 - Energy price sensor
-- Solar forecast sensor
 - Solcast forecast sensor for today
 - Outdoor temperature sensor
 - Heat pump energy sensor
