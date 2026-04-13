@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
+    CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
@@ -40,6 +41,7 @@ from .const import (
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
+    DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
@@ -104,6 +106,7 @@ class PlannerResult:
     target_battery_full_by_sunset: bool
     planned_grid_charge_windows: list[dict[str, str | float]]
     battery_soc_percent: float | None
+    battery_min_soc_percent: float
     battery_energy_available_kwh: float
     battery_remaining_capacity_kwh: float
     next_charge_opportunity_start: str | None
@@ -340,6 +343,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             target_battery_full_by_sunset=False,
             planned_grid_charge_windows=[],
             battery_soc_percent=None,
+            battery_min_soc_percent=float(
+                self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
+            ),
             battery_energy_available_kwh=0.0,
             battery_remaining_capacity_kwh=0.0,
             next_charge_opportunity_start=None,
@@ -781,23 +787,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         battery_capacity = float(
             self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
         )
+        battery_min_soc_percent = float(
+            self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
+        )
         max_charge = float(self._config.get(CONF_BATTERY_MAX_CHARGE_KW, DEFAULT_BATTERY_MAX_CHARGE_KW))
         max_discharge = float(
             self._config.get(CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW)
         )
-        battery_energy_available_kwh = (
+        minimum_battery_reserve_kwh = round(battery_capacity * max(0.0, min(100.0, battery_min_soc_percent)) / 100, 3)
+        battery_total_energy_kwh = (
             round(battery_capacity * (battery_soc_percent / 100), 3)
             if battery_soc_percent is not None
             else 0.0
         )
-        battery_remaining_capacity_kwh = max(0.0, round(battery_capacity - battery_energy_available_kwh, 3))
+        battery_energy_available_kwh = (
+            max(0.0, round(battery_total_energy_kwh - minimum_battery_reserve_kwh, 3))
+        )
+        battery_remaining_capacity_kwh = max(0.0, round(battery_capacity - battery_total_energy_kwh, 3))
         target_battery_full_by_sunset = battery_enabled and sunset_time is not None and sunset_time > now
         grid_charge_needed_until_sunset = (
             max(
                 0.0,
                 round(
                     battery_capacity
-                    - battery_energy_available_kwh
+                    - battery_total_energy_kwh
                     - projected_solar_surplus_until_sunset,
                     3,
                 ),
@@ -861,7 +874,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         battery_room_needed_for_solar_kwh = max(
             0.0,
-            round(battery_energy_available_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
+            round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
         )
         next_high_price_window = max(
             (
@@ -1078,6 +1091,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 rationale_parts.append(
                     "battery keeps its remaining charge for household demand until the next charging opportunity"
                 )
+            elif battery_total_energy_kwh <= minimum_battery_reserve_kwh and battery_soc_percent is not None:
+                rationale_parts.append(
+                    f"battery stays above the configured minimum reserve of {battery_min_soc_percent:.0f}%"
+                )
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
         planner_status = "ready_with_warnings" if source_errors else "ready"
@@ -1113,6 +1130,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             target_battery_full_by_sunset=target_battery_full_by_sunset,
             planned_grid_charge_windows=planned_grid_charge_windows,
             battery_soc_percent=battery_soc_percent,
+            battery_min_soc_percent=battery_min_soc_percent,
             battery_energy_available_kwh=battery_energy_available_kwh,
             battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
             next_charge_opportunity_start=next_charge_opportunity.isoformat() if next_charge_opportunity else None,

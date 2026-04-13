@@ -46,6 +46,8 @@ from .const import (
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 
+PRESET_NORMAL = "normal"
+
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
 
@@ -65,7 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _default_manual_eco_temperature(merged),
         ),
         "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
-        "manual_preset_mode": persisted_state.get("manual_preset_mode", "none"),
+        "manual_preset_mode": persisted_state.get("manual_preset_mode", PRESET_NORMAL),
         "last_switch_change": None,
         "cooling_model": persisted_state.get("cooling_model", {}),
         "last_cooling_observation": persisted_state.get("last_cooling_observation"),
@@ -284,7 +286,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
         "manual_temperature": runtime_state.get("manual_temperature"),
         "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
         "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
-        "manual_preset_mode": runtime_state.get("manual_preset_mode", "none"),
+        "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
         "cooling_model": runtime_state.get("cooling_model", {}),
         "last_cooling_observation": runtime_state.get("last_cooling_observation"),
     }

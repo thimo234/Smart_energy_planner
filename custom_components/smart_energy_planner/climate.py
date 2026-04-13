@@ -8,7 +8,6 @@ from homeassistant.components.climate.const import (
     HVACAction,
     HVACMode,
     PRESET_ECO,
-    PRESET_NONE,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
@@ -38,6 +37,8 @@ from .const import (
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 from .__init__ import _async_save_runtime_state
+
+PRESET_NORMAL = "normal"
 
 
 async def async_setup_entry(
@@ -70,7 +71,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     _attr_name = "Planner Thermostat"
     _attr_target_temperature_step = 0.5
     _attr_precision = 0.1
-    _attr_preset_modes = [PRESET_NONE, PRESET_ECO]
+    _attr_preset_modes = [PRESET_NORMAL, PRESET_ECO]
 
     def __init__(self, coordinator: SmartEnergyPlannerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -106,6 +107,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def target_temperature(self) -> float | None:
+        if self.hvac_mode == HVACMode.OFF:
+            return None
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         is_eco = self.preset_mode == PRESET_ECO
         key = "manual_eco_temperature" if is_eco else "manual_temperature"
@@ -128,10 +131,12 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def preset_mode(self) -> str:
+        if self.hvac_mode == HVACMode.OFF:
+            return PRESET_NORMAL
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         if runtime_state.get("manual_preset_mode") == PRESET_ECO:
             return PRESET_ECO
-        return PRESET_ECO if self.coordinator.data.heat_pump_strategy == "energy_saving_on" else PRESET_NONE
+        return PRESET_ECO if self.coordinator.data.heat_pump_strategy == "energy_saving_on" else PRESET_NORMAL
 
     @property
     def hvac_action(self) -> HVACAction:
@@ -164,6 +169,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["hvac_mode"] = hvac_mode
+        if hvac_mode == HVACMode.OFF:
+            runtime_state["manual_preset_mode"] = PRESET_NORMAL
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         self.async_write_ha_state()
 
@@ -212,11 +219,12 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Allow Home Assistant to present normal eco/none controls."""
-        if preset_mode not in (PRESET_NONE, PRESET_ECO):
+        """Allow Home Assistant to present normal and eco controls."""
+        if preset_mode not in (PRESET_NORMAL, PRESET_ECO):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["manual_preset_mode"] = preset_mode
+        runtime_state["hvac_mode"] = HVACMode.HEAT
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()

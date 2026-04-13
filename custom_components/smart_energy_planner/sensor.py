@@ -147,6 +147,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
             "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
             "battery_soc_percent": getattr(data, "battery_soc_percent", None),
+            "battery_min_soc_percent": getattr(data, "battery_min_soc_percent", None),
             "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),
             "battery_remaining_capacity_kwh": getattr(data, "battery_remaining_capacity_kwh", 0.0),
             "next_charge_opportunity_start": getattr(data, "next_charge_opportunity_start", None),

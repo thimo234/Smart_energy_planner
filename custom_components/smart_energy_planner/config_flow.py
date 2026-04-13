@@ -17,6 +17,7 @@ from .const import (
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
+    CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
@@ -40,6 +41,7 @@ from .const import (
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
+    DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_NAME,
@@ -219,6 +221,12 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 default=user_input.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=100, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_BATTERY_MIN_SOC_PERCENT,
+                default=user_input.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_BATTERY_MIN_PROFIT_PER_KWH,
