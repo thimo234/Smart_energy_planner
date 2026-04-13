@@ -95,6 +95,23 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "non_heating_daily_average_kwh": data.non_heating_daily_average_kwh,
             "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
             "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
+            "projected_remaining_solar_until_sunset_kwh": getattr(
+                data, "projected_remaining_solar_until_sunset_kwh", 0.0
+            ),
+            "projected_remaining_home_demand_until_sunset_kwh": getattr(
+                data, "projected_remaining_home_demand_until_sunset_kwh", 0.0
+            ),
+            "projected_solar_surplus_until_sunset_kwh": getattr(
+                data, "projected_solar_surplus_until_sunset_kwh", 0.0
+            ),
+            "grid_charge_needed_until_sunset_kwh": getattr(
+                data, "grid_charge_needed_until_sunset_kwh", 0.0
+            ),
+            "battery_charge_hours_needed_until_sunset": getattr(
+                data, "battery_charge_hours_needed_until_sunset", 0.0
+            ),
+            "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
+            "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "heat_pump_max_off_hours": data.heat_pump_max_off_hours,
             "heat_pump_min_on_hours": data.heat_pump_min_on_hours,

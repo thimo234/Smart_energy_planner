@@ -80,6 +80,13 @@ class PlannerResult:
     non_heating_daily_average_kwh: float
     estimated_total_home_demand_kwh: float
     estimated_hourly_home_demand: list[dict[str, str | float]]
+    projected_remaining_solar_until_sunset_kwh: float
+    projected_remaining_home_demand_until_sunset_kwh: float
+    projected_solar_surplus_until_sunset_kwh: float
+    grid_charge_needed_until_sunset_kwh: float
+    battery_charge_hours_needed_until_sunset: float
+    target_battery_full_by_sunset: bool
+    planned_grid_charge_windows: list[dict[str, str | float]]
     battery_min_profit_per_kwh: float
     heat_pump_max_off_hours: int
     heat_pump_min_on_hours: int
@@ -236,6 +243,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=0.0,
             estimated_total_home_demand_kwh=0.0,
             estimated_hourly_home_demand=[],
+            projected_remaining_solar_until_sunset_kwh=0.0,
+            projected_remaining_home_demand_until_sunset_kwh=0.0,
+            projected_solar_surplus_until_sunset_kwh=0.0,
+            grid_charge_needed_until_sunset_kwh=0.0,
+            battery_charge_hours_needed_until_sunset=0.0,
+            target_battery_full_by_sunset=False,
+            planned_grid_charge_windows=[],
             battery_min_profit_per_kwh=float(
                 self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
             ),
@@ -360,6 +374,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
         )
+        now = dt_util.now()
+        sunset_time = self._get_solar_day_end(solar_windows)
+        remaining_solar_until_sunset = self._sum_remaining_solar_until(solar_windows, now, sunset_time)
+        remaining_home_demand_until_sunset = self._sum_remaining_home_demand_until(
+            estimated_hourly_home_demand, now, sunset_time
+        )
+        projected_solar_surplus_until_sunset = max(
+            0.0, round(remaining_solar_until_sunset - remaining_home_demand_until_sunset, 3)
+        )
 
         cheap_threshold = cheapest.price + (price_spread * 0.25)
         next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
@@ -367,9 +390,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cheap_now = current_price is not None and current_price <= cheap_threshold
         best_solar_is_now = (
             best_solar_window is not None
-            and best_solar_window.start <= dt_util.now() < best_solar_window.end
+            and best_solar_window.start <= now < best_solar_window.end
         )
-        now = dt_util.now()
         future_windows = [window for window in windows if window.start > now]
         future_min_price = min((window.price for window in future_windows), default=None)
         future_max_price = max((window.price for window in future_windows), default=None)
@@ -398,6 +420,38 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         battery_capacity = float(self._config[CONF_BATTERY_CAPACITY_KWH])
         max_charge = float(self._config[CONF_BATTERY_MAX_CHARGE_KW])
         max_discharge = float(self._config[CONF_BATTERY_MAX_DISCHARGE_KW])
+        target_battery_full_by_sunset = battery_enabled and sunset_time is not None and sunset_time > now
+        grid_charge_needed_until_sunset = (
+            max(0.0, round(battery_capacity - projected_solar_surplus_until_sunset, 3))
+            if target_battery_full_by_sunset
+            else 0.0
+        )
+        battery_charge_hours_needed_until_sunset = (
+            round(grid_charge_needed_until_sunset / max_charge, 3)
+            if target_battery_full_by_sunset and max_charge > 0
+            else 0.0
+        )
+        planned_grid_charge_windows = self._select_cheapest_charge_windows(
+            windows=windows,
+            now=now,
+            until=sunset_time,
+            needed_kwh=grid_charge_needed_until_sunset,
+            max_charge_kw=max_charge,
+        )
+        planned_grid_charge_price_floor = min(
+            (window["price"] for window in planned_grid_charge_windows),
+            default=None,
+        )
+        planned_grid_charge_price_ceiling = max(
+            (window["price"] for window in planned_grid_charge_windows),
+            default=None,
+        )
+        in_planned_grid_charge_window = any(
+            (window_start := dt_util.parse_datetime(str(window["start"]))) is not None
+            and (window_end := dt_util.parse_datetime(str(window["end"]))) is not None
+            and window_start <= now < window_end
+            for window in planned_grid_charge_windows
+        )
 
         score = 50
         rationale_parts: list[str] = []
@@ -453,7 +507,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         battery_strategy = "accu_uit"
         if battery_enabled:
-            if solar_covers_today and best_solar_is_now:
+            if (
+                target_battery_full_by_sunset
+                and grid_charge_needed_until_sunset > 0
+                and in_planned_grid_charge_window
+            ):
+                battery_strategy = "laden_van_net"
+                score += 12
+                rationale_parts.append(
+                    f"battery targets a full state by sunset and still needs about {grid_charge_needed_until_sunset:.1f} kWh"
+                )
+                rationale_parts.append(
+                    f"the planner reserved roughly {battery_charge_hours_needed_until_sunset:.1f} charging hours in the cheapest pre-sunset windows"
+                )
+            elif solar_covers_today and best_solar_is_now:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
@@ -474,6 +541,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if future_solar_charge_window:
                     rationale_parts.append("battery may discharge to the grid now to create room for cheap solar charging later")
             elif (
+                current_price is not None
+                and planned_grid_charge_price_floor is not None
+                and current_price - planned_grid_charge_price_floor >= battery_min_profit
+                and not in_planned_grid_charge_window
+                and target_battery_full_by_sunset
+                and grid_charge_needed_until_sunset > 0
+            ):
+                battery_strategy = "ontladen"
+                score += 8
+                rationale_parts.append(
+                    "battery can discharge now because later pre-sunset charging windows are cheaper and can refill it before sunset"
+                )
+            elif (
                 cheap_now
                 and future_more_expensive_by is not None
                 and future_more_expensive_by >= battery_min_profit
@@ -487,6 +567,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             elif solar_covers_today and future_solar_charge_window:
                 battery_strategy = "accu_uit"
                 rationale_parts.append("battery can stay idle until the later solar charging window starts")
+            elif target_battery_full_by_sunset and grid_charge_needed_until_sunset <= 0:
+                battery_strategy = "laden_met_zonne_energie" if best_solar_is_now else "accu_uit"
+                rationale_parts.append(
+                    "forecast solar after household demand is enough to fill the battery by sunset without grid charging"
+                )
+            elif target_battery_full_by_sunset and planned_grid_charge_price_ceiling is not None:
+                rationale_parts.append(
+                    f"grid charging only makes sense in pre-sunset windows up to about {planned_grid_charge_price_ceiling:.3f} EUR/kWh"
+                )
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
         planner_status = "ready_with_warnings" if source_errors else "ready"
@@ -513,6 +602,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=round(non_heating_daily_average_kwh, 2),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
+            projected_remaining_solar_until_sunset_kwh=round(remaining_solar_until_sunset, 3),
+            projected_remaining_home_demand_until_sunset_kwh=round(remaining_home_demand_until_sunset, 3),
+            projected_solar_surplus_until_sunset_kwh=projected_solar_surplus_until_sunset,
+            grid_charge_needed_until_sunset_kwh=grid_charge_needed_until_sunset,
+            battery_charge_hours_needed_until_sunset=battery_charge_hours_needed_until_sunset,
+            target_battery_full_by_sunset=target_battery_full_by_sunset,
+            planned_grid_charge_windows=planned_grid_charge_windows,
             battery_min_profit_per_kwh=battery_min_profit,
             heat_pump_max_off_hours=heat_pump_max_off_hours,
             heat_pump_min_on_hours=heat_pump_min_on_hours,
@@ -557,6 +653,105 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
 
         return forecast
+
+    def _get_solar_day_end(self, solar_windows: list[SolarWindow]) -> datetime | None:
+        productive_windows = [window for window in solar_windows if window.forecast_kwh > 0]
+        if not productive_windows:
+            return None
+        return max(window.end for window in productive_windows)
+
+    def _sum_remaining_solar_until(
+        self,
+        solar_windows: list[SolarWindow],
+        now: datetime,
+        until: datetime | None,
+    ) -> float:
+        if until is None:
+            return 0.0
+        total = 0.0
+        for window in solar_windows:
+            overlap_hours = self._overlap_hours(window.start, window.end, now, until)
+            if overlap_hours <= 0:
+                continue
+            window_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
+            total += window.forecast_kwh * (overlap_hours / window_hours)
+        return total
+
+    def _sum_remaining_home_demand_until(
+        self,
+        hourly_demand: list[dict[str, str | float]],
+        now: datetime,
+        until: datetime | None,
+    ) -> float:
+        if until is None:
+            return 0.0
+        total = 0.0
+        for slot in hourly_demand:
+            start = dt_util.parse_datetime(str(slot.get("start")))
+            end = dt_util.parse_datetime(str(slot.get("end")))
+            estimated_kwh = _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
+            if start is None or end is None:
+                continue
+            overlap_hours = self._overlap_hours(start, end, now, until)
+            if overlap_hours <= 0:
+                continue
+            slot_hours = max((end - start).total_seconds() / 3600, 0.0001)
+            total += estimated_kwh * (overlap_hours / slot_hours)
+        return total
+
+    def _select_cheapest_charge_windows(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        now: datetime,
+        until: datetime | None,
+        needed_kwh: float,
+        max_charge_kw: float,
+    ) -> list[dict[str, str | float]]:
+        if until is None or needed_kwh <= 0 or max_charge_kw <= 0:
+            return []
+
+        remaining_hours = needed_kwh / max_charge_kw
+        eligible_windows = [
+            window
+            for window in windows
+            if self._overlap_hours(window.start, window.end, now, until) > 0
+        ]
+        ordered_windows = sorted(eligible_windows, key=lambda item: (item.price, item.start))
+
+        planned_windows: list[dict[str, str | float]] = []
+        for window in ordered_windows:
+            if remaining_hours <= 0:
+                break
+            usable_hours = self._overlap_hours(window.start, window.end, now, until)
+            if usable_hours <= 0:
+                continue
+            planned_windows.append(
+                {
+                    "start": window.start.isoformat(),
+                    "end": window.end.isoformat(),
+                    "price": round(window.price, 6),
+                    "usable_hours": round(min(usable_hours, remaining_hours), 3),
+                }
+            )
+            remaining_hours -= usable_hours
+
+        return sorted(planned_windows, key=lambda item: str(item["start"]))
+
+    def _overlap_hours(
+        self,
+        start_a: datetime,
+        end_a: datetime,
+        start_b: datetime,
+        end_b: datetime | None,
+    ) -> float:
+        if end_b is None:
+            return 0.0
+        overlap_start = max(start_a, start_b)
+        overlap_end = min(end_a, end_b)
+        if overlap_end <= overlap_start:
+            return 0.0
+        return (overlap_end - overlap_start).total_seconds() / 3600
 
     def _extract_price_windows(
         self, attributes: dict[str, Any], current_price: float | None, price_resolution: str
