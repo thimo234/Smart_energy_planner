@@ -42,7 +42,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         old_state = event.data.get("old_state")
         if new_state is None or new_state == old_state:
             return
-        coordinator.async_request_refresh()
+        hass.async_create_task(coordinator.async_request_refresh())
 
     entry.async_on_unload(
         async_track_state_change_event(

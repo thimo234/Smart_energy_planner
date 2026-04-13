@@ -104,13 +104,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solar_sensor = self._config[CONF_SOLCAST_TODAY_SENSOR]
             temperature_sensor = self._config[CONF_TEMPERATURE_SENSOR]
             heating_sensor = self._config[CONF_HEATING_ENERGY_SENSOR]
-            total_energy_sensor = self._config[CONF_TOTAL_ENERGY_SENSOR]
+            total_energy_sensor = self._config.get(CONF_TOTAL_ENERGY_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
             solar_state = self.hass.states.get(solar_sensor)
             temperature_state = self.hass.states.get(temperature_sensor)
             heating_state = self.hass.states.get(heating_sensor)
-            total_energy_state = self.hass.states.get(total_energy_sensor)
+            total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
 
             source_status = self._build_source_status(
                 price_sensor=price_sensor,
@@ -158,7 +158,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 await self._async_get_average_daily_usage(heating_sensor) if heating_state else 0.0
             )
             total_energy_daily_average = (
-                await self._async_get_average_daily_usage(total_energy_sensor) if total_energy_state else 0.0
+                await self._async_get_average_daily_usage(total_energy_sensor)
+                if total_energy_state and total_energy_sensor
+                else 0.0
             )
 
             if temperature_state and outdoor_temperature is None:
@@ -240,7 +242,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         temperature_state,
         heating_sensor: str,
         heating_state,
-        total_energy_sensor: str,
+        total_energy_sensor: str | None,
         total_energy_state,
     ) -> dict[str, str]:
         return {
@@ -505,7 +507,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         windows: list[SolarWindow] = []
         for entry in raw_entries:
             start_raw = entry.get("period_start")
-            if start_raw is None:
+            if not isinstance(start_raw, str):
                 continue
             start = dt_util.parse_datetime(start_raw)
             if start is None:
