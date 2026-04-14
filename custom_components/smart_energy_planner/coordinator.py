@@ -1042,6 +1042,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         if charge_opportunity_before_peak:
             keep_energy_for_future_peak = False
+        should_make_room_for_solar_now = (
+            battery_room_needed_for_solar_kwh > 0
+            and battery_energy_available_for_discharge_kwh > 0
+            and current_price is not None
+            and current_price >= average_price
+            and (
+                best_solar_is_now
+                or projected_solar_surplus_until_sunset_kwh
+                >= max(battery_remaining_capacity_kwh, max_charge)
+            )
+        )
         future_price_justifies_grid_charge = (
             current_price is not None
             and future_max_price is not None
@@ -1126,15 +1137,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"battery should use the active solar window and can charge up to {min(max_charge, battery_remaining_capacity_kwh, max_charge):.1f} kW"
                 )
             elif (
-                battery_room_needed_for_solar_kwh > 0
-                and battery_energy_available_for_discharge_kwh > 0
-                and current_price is not None
-                and current_price >= expensive_threshold
+                should_make_room_for_solar_now
             ):
                 battery_strategy = "ontladen"
                 score += 12
                 rationale_parts.append(
                     f"battery can discharge about {min(battery_energy_available_for_discharge_kwh, max_discharge):.1f} kWh-equivalent now to create room for the coming solar surplus"
+                )
+                rationale_parts.append(
+                    "forecast solar is likely to fill the remaining battery capacity, so exporting now creates useful room"
                 )
             elif (
                 target_battery_full_by_sunset
