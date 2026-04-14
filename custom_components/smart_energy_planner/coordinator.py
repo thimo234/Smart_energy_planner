@@ -861,6 +861,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         projected_solar_surplus_until_sunset = max(
             0.0, round(remaining_solar_until_sunset - remaining_home_demand_until_sunset, 3)
         )
+        net_solar_balance_until_sunset = round(
+            remaining_solar_until_sunset - remaining_home_demand_until_sunset,
+            3,
+        )
 
         cheap_threshold = cheapest.price + (price_spread * 0.25 if price_signal_available else 0)
         mid_price_threshold = cheapest.price + (price_spread * 0.5 if price_signal_available else 0)
@@ -1055,6 +1059,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and next_charge_opportunity > now
             and next_charge_opportunity - now <= timedelta(minutes=90)
         )
+        solar_covers_remaining_demand = (
+            sunset_time is not None
+            and sunset_time > now
+            and net_solar_balance_until_sunset >= 0
+        )
+        discharge_allowed_now = not solar_covers_remaining_demand
         future_solar_charge_window = next_planned_solar_charge_start is not None
         charge_window_active_now = in_planned_solar_charge_window or in_planned_grid_charge_window
         charge_session_consumed_today = (
@@ -1206,6 +1216,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             elif (
                 should_make_room_for_solar_now
+                and discharge_allowed_now
             ):
                 battery_strategy = "ontladen_naar_net"
                 score += 12
@@ -1258,6 +1269,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 charge_opportunity_before_peak
                 and discharge_profitable_now
                 and battery_energy_available_for_discharge_kwh > 0
+                and discharge_allowed_now
             ):
                 battery_strategy = "ontladen"
                 score += 9
@@ -1268,6 +1280,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 discharge_profitable_now
                 and battery_energy_available_for_discharge_kwh > 0
                 and (future_solar_charge_window or future_min_price is not None or battery_room_needed_for_solar_kwh > 0)
+                and discharge_allowed_now
             ):
                 battery_strategy = (
                     "ontladen_naar_net"
@@ -1288,6 +1301,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and target_battery_full_by_sunset
                 and grid_charge_needed_until_sunset > 0
                 and battery_energy_available_for_discharge_kwh > 0
+                and discharge_allowed_now
             ):
                 battery_strategy = "ontladen"
                 score += 8
@@ -1634,25 +1648,82 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        remaining_hours = needed_kwh / max_charge_kw
-        planned_windows: list[dict[str, str | float]] = []
-        for window in sorted(candidates, key=lambda item: (float(item["price"]), str(item["start"]))):
-            if remaining_hours <= 0:
-                break
-            usable_hours = float(window["usable_hours"])
-            if usable_hours <= 0:
-                continue
-            planned_windows.append(
-                {
-                    "start": str(window["start"]),
-                    "end": str(window["end"]),
-                    "price": float(window["price"]),
-                    "usable_hours": round(min(usable_hours, remaining_hours), 3),
-                }
-            )
-            remaining_hours -= usable_hours
+        if not candidates:
+            return []
 
-        return sorted(planned_windows, key=lambda item: str(item["start"]))
+        remaining_hours = needed_kwh / max_charge_kw
+        ordered = sorted(
+            candidates,
+            key=lambda item: dt_util.parse_datetime(str(item["start"])) or dt_util.now(),
+        )
+
+        best_block: list[dict[str, str | float]] = []
+        best_block_meets_target = False
+        best_block_avg_price = float("inf")
+        best_block_hours = 0.0
+
+        for start_index in range(len(ordered)):
+            block: list[dict[str, str | float]] = []
+            total_hours = 0.0
+            weighted_price = 0.0
+            previous_end = None
+
+            for window in ordered[start_index:]:
+                window_start = dt_util.parse_datetime(str(window["start"]))
+                window_end = dt_util.parse_datetime(str(window["end"]))
+                if window_start is None or window_end is None:
+                    continue
+                if previous_end is not None and window_start != previous_end:
+                    break
+
+                usable_hours = float(window["usable_hours"])
+                if usable_hours <= 0:
+                    continue
+
+                take_hours = min(usable_hours, remaining_hours - total_hours) if remaining_hours > total_hours else 0.0
+                if take_hours <= 0:
+                    break
+
+                block.append(
+                    {
+                        "start": str(window["start"]),
+                        "end": str(window["end"]),
+                        "price": float(window["price"]),
+                        "usable_hours": round(take_hours, 3),
+                    }
+                )
+                total_hours += take_hours
+                weighted_price += float(window["price"]) * take_hours
+                previous_end = window_end
+
+                if total_hours >= remaining_hours:
+                    break
+
+            if not block or total_hours <= 0:
+                continue
+
+            meets_target = total_hours >= remaining_hours
+            average_price = weighted_price / total_hours
+            if (
+                best_block == []
+                or (meets_target and not best_block_meets_target)
+                or (
+                    meets_target == best_block_meets_target
+                    and (
+                        average_price < best_block_avg_price
+                        or (
+                            abs(average_price - best_block_avg_price) < 1e-9
+                            and total_hours > best_block_hours
+                        )
+                    )
+                )
+            ):
+                best_block = block
+                best_block_meets_target = meets_target
+                best_block_avg_price = average_price
+                best_block_hours = total_hours
+
+        return best_block
 
     def _merge_planned_windows(
         self,
