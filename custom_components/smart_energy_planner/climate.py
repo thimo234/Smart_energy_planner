@@ -180,7 +180,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         self.async_write_ha_state()
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | float | None]:
+    def extra_state_attributes(self) -> dict[str, str | float | list | None]:
         data = self.coordinator.data
         return {
             "status": data.status,
@@ -205,8 +205,10 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             ),
             "planned_preheat_window_start": getattr(data, "planned_preheat_window_start", None),
             "planned_preheat_window_end": getattr(data, "planned_preheat_window_end", None),
+            "planned_preheat_windows": getattr(data, "planned_preheat_windows", []),
             "planned_eco_window_start": data.planned_eco_window_start,
             "planned_eco_window_end": data.planned_eco_window_end,
+            "planned_eco_windows": getattr(data, "planned_eco_windows", []),
             "room_cooling_hours_to_eco": data.room_cooling_hours_to_eco,
             "rationale": data.rationale,
         }

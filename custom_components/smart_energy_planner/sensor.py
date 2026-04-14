@@ -123,38 +123,6 @@ class BatteryPlannerSensor(PlannerSensor):
             "price_spread": data.price_spread,
             "next_cheap_window_start": data.next_window_start,
             "next_cheap_window_end": data.next_window_end,
-            "next_cheap_window_price": data.next_window_price,
-            "best_solar_window_start": data.best_solar_window_start,
-            "best_solar_window_end": data.best_solar_window_end,
-            "best_solar_window_kwh": data.best_solar_window_kwh,
-            "solcast_confidence": data.solcast_confidence,
-            "solar_forecast_kwh": data.solar_forecast_kwh,
-            "lookback_daily_average_kwh": data.lookback_daily_average_kwh,
-            "total_energy_daily_average_kwh": data.total_energy_daily_average_kwh,
-            "self_used_energy_daily_average_kwh": data.non_heating_daily_average_kwh,
-            "estimated_total_home_demand_kwh": data.estimated_total_home_demand_kwh,
-            "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
-            "projected_remaining_solar_until_sunset_kwh": getattr(
-                data, "projected_remaining_solar_until_sunset_kwh", 0.0
-            ),
-            "projected_remaining_home_demand_until_sunset_kwh": getattr(
-                data, "projected_remaining_home_demand_until_sunset_kwh", 0.0
-            ),
-            "projected_solar_surplus_until_sunset_kwh": getattr(
-                data, "projected_solar_surplus_until_sunset_kwh", 0.0
-            ),
-            "grid_charge_needed_until_sunset_kwh": getattr(
-                data, "grid_charge_needed_until_sunset_kwh", 0.0
-            ),
-            "battery_charge_hours_needed_until_sunset": getattr(
-                data, "battery_charge_hours_needed_until_sunset", 0.0
-            ),
-            "target_battery_full_by_sunset": getattr(data, "target_battery_full_by_sunset", False),
-            "planned_grid_charge_windows": getattr(data, "planned_grid_charge_windows", []),
-            "battery_soc_percent": getattr(data, "battery_soc_percent", None),
-            "battery_min_soc_percent": getattr(data, "battery_min_soc_percent", None),
-            "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),
-            "battery_remaining_capacity_kwh": getattr(data, "battery_remaining_capacity_kwh", 0.0),
             "next_charge_opportunity_start": getattr(data, "next_charge_opportunity_start", None),
             "home_demand_until_next_charge_kwh": getattr(data, "home_demand_until_next_charge_kwh", 0.0),
             "battery_reserved_energy_kwh": getattr(data, "battery_reserved_energy_kwh", 0.0),
@@ -165,6 +133,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "next_high_price_window_start": getattr(data, "next_high_price_window_start", None),
             "next_high_price_window_price": getattr(data, "next_high_price_window_price", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
+            "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

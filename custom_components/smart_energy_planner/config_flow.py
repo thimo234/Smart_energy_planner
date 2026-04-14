@@ -271,7 +271,7 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
             vol.Required(
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
             ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
-            vol.Required(
+            vol.Optional(
                 CONF_TEMPERATURE_SENSOR, default=user_input.get(CONF_TEMPERATURE_SENSOR)
             ): _entity_selector(
                 _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
