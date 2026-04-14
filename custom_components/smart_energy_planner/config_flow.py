@@ -28,6 +28,7 @@ from .const import (
     CONF_PRICE_RESOLUTION,
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
+    CONF_SOLCAST_TOMORROW_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
     CONF_THERMOSTAT_COLD_TOLERANCE,
@@ -187,6 +188,11 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
             ): _entity_selector(
                 _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
+            ),
+            vol.Optional(
+                CONF_SOLCAST_TOMORROW_SENSOR, default=user_input.get(CONF_SOLCAST_TOMORROW_SENSOR)
+            ): _entity_selector(
+                _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TOMORROW_SENSOR)
             ),
             vol.Required(
                 CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)

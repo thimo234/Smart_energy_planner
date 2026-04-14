@@ -30,6 +30,7 @@ from .const import (
     CONF_PRICE_RESOLUTION,
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
+    CONF_SOLCAST_TOMORROW_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_THERMOSTAT_ECO_TEMPERATURE,
     CONF_THERMOSTAT_MAX_TEMP,
@@ -161,6 +162,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             price_sensor = self._config[CONF_PRICE_SENSOR]
             solar_sensor = self._config.get(CONF_SOLCAST_TODAY_SENSOR)
+            solar_tomorrow_sensor = self._config.get(CONF_SOLCAST_TOMORROW_SENSOR)
             temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
             room_temperature_sensor = self._config.get(CONF_ROOM_TEMPERATURE_SENSOR)
             heating_switch_entity = self._config.get(CONF_HEATING_SWITCH_ENTITY)
@@ -169,6 +171,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             price_state = self.hass.states.get(price_sensor)
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
+            solar_tomorrow_state = self.hass.states.get(solar_tomorrow_sensor) if solar_tomorrow_sensor else None
             temperature_state = self.hass.states.get(temperature_sensor) if temperature_sensor else None
             room_temperature_state = self.hass.states.get(room_temperature_sensor) if room_temperature_sensor else None
             heating_switch_state = self.hass.states.get(heating_switch_entity) if heating_switch_entity else None
@@ -180,6 +183,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_state=price_state,
                 solar_sensor=solar_sensor,
                 solar_state=solar_state,
+                solar_tomorrow_sensor=solar_tomorrow_sensor,
+                solar_tomorrow_state=solar_tomorrow_state,
                 temperature_sensor=temperature_sensor,
                 temperature_state=temperature_state,
                 room_temperature_sensor=room_temperature_sensor,
@@ -236,6 +241,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_state.attributes.get("estimate") if solar_state else None,
                 default=_coerce_float(solar_state.state, default=0.0) if solar_state else 0.0,
             )
+            solar_tomorrow_forecast = _coerce_float(
+                solar_tomorrow_state.attributes.get("estimate") if solar_tomorrow_state else None,
+                default=_coerce_float(solar_tomorrow_state.state, default=0.0) if solar_tomorrow_state else 0.0,
+            )
             battery_soc_percent = _coerce_float(battery_soc_state.state if battery_soc_state else None)
             if battery_soc_percent is not None:
                 battery_soc_percent = max(0.0, min(100.0, battery_soc_percent))
@@ -246,19 +255,51 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             thermostat_setpoint = self._get_manual_thermostat_setpoint()
             thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
+            solar_windows.extend(
+                self._extract_solar_windows(solar_tomorrow_state.attributes if solar_tomorrow_state else {})
+            )
             all_solar_windows = self._extract_solar_windows(
                 solar_state.attributes if solar_state else {},
                 include_past=True,
+            )
+            all_solar_windows.extend(
+                self._extract_solar_windows(
+                    solar_tomorrow_state.attributes if solar_tomorrow_state else {},
+                    include_past=True,
+                )
             )
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
             if planner_kind == PLANNER_KIND_BATTERY and not solar_windows and solar_forecast and solar_forecast > 0:
-                solar_windows = self._build_fallback_solar_windows(solar_forecast)
+                fallback_today_windows = self._build_fallback_solar_windows(solar_forecast)
+                solar_windows = [*solar_windows, *fallback_today_windows]
+                all_solar_windows = [*all_solar_windows, *fallback_today_windows]
+            if (
+                planner_kind == PLANNER_KIND_BATTERY
+                and solar_tomorrow_state
+                and not any(window.start.date() > dt_util.now().date() for window in solar_windows)
+                and solar_tomorrow_forecast
+                and solar_tomorrow_forecast > 0
+            ):
+                fallback_tomorrow_windows = self._build_fallback_solar_windows_for_day(
+                    solar_tomorrow_forecast,
+                    day_offset=1,
+                )
+                solar_windows.extend(fallback_tomorrow_windows)
+                all_solar_windows.extend(fallback_tomorrow_windows)
+            solar_windows = self._merge_solar_windows(solar_windows)
+            all_solar_windows = self._merge_solar_windows(all_solar_windows)
             if solar_state and solar_forecast <= 0 and not solar_windows:
                 source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
             elif solar_state and solar_forecast is None:
                 source_status["solcast_today_sensor"] = "invalid_solcast_value"
+            if solar_tomorrow_state and solar_tomorrow_forecast <= 0 and not any(
+                window.start.date() > dt_util.now().date() for window in all_solar_windows
+            ):
+                source_status["solcast_tomorrow_sensor"] = "no_solcast_forecast_data"
+            elif solar_tomorrow_state and solar_tomorrow_forecast is None:
+                source_status["solcast_tomorrow_sensor"] = "invalid_solcast_value"
 
             total_energy_daily_average = (
                 await self._async_get_average_daily_usage(total_energy_sensor)
@@ -410,6 +451,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         price_state,
         solar_sensor: str,
         solar_state,
+        solar_tomorrow_sensor: str | None,
+        solar_tomorrow_state,
         temperature_sensor: str,
         temperature_state,
         room_temperature_sensor: str | None,
@@ -426,6 +469,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return {
                 "price_sensor": self._state_status(price_sensor, price_state),
                 "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
+                "solcast_tomorrow_sensor": self._state_status(solar_tomorrow_sensor, solar_tomorrow_state),
                 "total_energy_sensor": self._state_status(total_energy_sensor, total_energy_state),
                 "battery_soc_sensor": self._state_status(battery_soc_sensor, battery_soc_state),
             }
@@ -458,6 +502,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return {
                 "price_sensor": "unknown",
                 "solcast_today_sensor": "unknown",
+                "solcast_tomorrow_sensor": "unknown",
                 "total_energy_sensor": "unknown",
                 "battery_soc_sensor": "unknown",
             }
@@ -1505,11 +1550,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     def _build_fallback_solar_windows(self, daily_forecast_kwh: float) -> list[SolarWindow]:
         """Approximate hourly solar windows when only the daily forecast total is available."""
+        return self._build_fallback_solar_windows_for_day(daily_forecast_kwh, day_offset=0)
+
+    def _build_fallback_solar_windows_for_day(
+        self,
+        daily_forecast_kwh: float,
+        *,
+        day_offset: int,
+    ) -> list[SolarWindow]:
+        """Approximate hourly solar windows when only the daily forecast total is available."""
         if daily_forecast_kwh <= 0:
             return []
 
         now = dt_util.now()
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = (now + timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
         hourly_weights = [
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
             0.0, 0.02, 0.05, 0.09, 0.13, 0.16,
@@ -1524,7 +1578,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
             start = day_start + timedelta(hours=hour)
             end = start + timedelta(hours=1)
-            if end <= now:
+            if day_offset == 0 and end <= now:
                 continue
             forecast_kwh = round(daily_forecast_kwh * (weight / weight_sum), 3)
             windows.append(
@@ -2053,7 +2107,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     forecast_kwh_p90=_coerce_float(entry.get("pv_estimate90")),
                 )
             )
-        return sorted(windows, key=lambda item: item.start)
+        return self._merge_solar_windows(windows)
+
+    def _merge_solar_windows(self, windows: list[SolarWindow]) -> list[SolarWindow]:
+        """Deduplicate solar windows by time range and keep the strongest forecast."""
+        merged: dict[tuple[datetime, datetime], SolarWindow] = {}
+        for window in sorted(windows, key=lambda item: item.start):
+            key = (window.start, window.end)
+            previous = merged.get(key)
+            if previous is None:
+                merged[key] = window
+                continue
+            merged[key] = SolarWindow(
+                start=window.start,
+                end=window.end,
+                forecast_kwh=max(previous.forecast_kwh, window.forecast_kwh),
+                forecast_kwh_p10=window.forecast_kwh_p10
+                if window.forecast_kwh_p10 is not None
+                else previous.forecast_kwh_p10,
+                forecast_kwh_p90=window.forecast_kwh_p90
+                if window.forecast_kwh_p90 is not None
+                else previous.forecast_kwh_p90,
+            )
+
+        return sorted(merged.values(), key=lambda item: item.start)
 
     def _select_best_solar_window(self, windows: list[SolarWindow]) -> SolarWindow | None:
         productive_windows = [window for window in windows if window.forecast_kwh > 0]
