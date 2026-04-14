@@ -199,6 +199,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 current_price,
                 price_resolution,
             )
+            price_average = self._extract_price_average(
+                price_state.attributes if price_state else {},
+                windows,
+            )
 
             if not price_state and planner_kind == PLANNER_KIND_THERMOSTAT:
                 source_status["price_sensor"] = "waiting_for_price_sensor"
@@ -280,6 +284,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return self._build_plan(
                 planner_kind=planner_kind,
                 windows=windows,
+                price_average=price_average,
                 current_price=current_price,
                 solar_forecast_kwh=solar_forecast,
                 solar_windows=solar_windows,
@@ -783,6 +788,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         planner_kind: str,
         windows: list[PlannerWindow],
+        price_average: float | None,
         current_price: float | None,
         solar_forecast_kwh: float,
         solar_windows: list[SolarWindow],
@@ -805,7 +811,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         sorted_by_price = sorted(windows, key=lambda item: item.price)
         cheapest = sorted_by_price[0]
         most_expensive = sorted_by_price[-1]
-        average_price = sum(window.price for window in windows) / len(windows)
+        average_price = (
+            price_average
+            if price_average is not None
+            else sum(window.price for window in windows) / len(windows)
+        )
         price_spread = round(most_expensive.price - cheapest.price, 4)
         price_signal_available = (
             source_status.get("price_sensor") == "ok"
@@ -1024,6 +1034,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and current_price is not None
             and next_high_price_window.price - current_price >= battery_min_profit
         )
+        charge_opportunity_before_peak = (
+            next_charge_opportunity is not None
+            and next_high_price_window is not None
+            and next_charge_opportunity < next_high_price_window.start
+            and charge_allowed_today
+        )
+        if charge_opportunity_before_peak:
+            keep_energy_for_future_peak = False
         future_price_justifies_grid_charge = (
             current_price is not None
             and future_max_price is not None
@@ -1156,6 +1174,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 battery_strategy = "accu_uit"
                 rationale_parts.append(
                     f"battery saves charge for a later higher-price window around {next_high_price_window.start.isoformat()}"
+                )
+            elif (
+                charge_opportunity_before_peak
+                and discharge_profitable_now
+                and battery_energy_available_for_discharge_kwh > 0
+            ):
+                battery_strategy = "ontladen"
+                score += 9
+                rationale_parts.append(
+                    "battery can discharge now because there is still a charging opportunity before the next higher-price window"
                 )
             elif (
                 discharge_profitable_now
@@ -1509,6 +1537,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows = self._aggregate_price_windows_to_hourly(windows)
 
         return sorted(windows, key=lambda item: item.start)
+
+    def _extract_price_average(
+        self,
+        attributes: dict[str, Any],
+        windows: list[PlannerWindow],
+    ) -> float | None:
+        """Prefer the source sensor daily average, then fall back to the mean."""
+        for key in ("average", "mean"):
+            value = _coerce_float(attributes.get(key))
+            if value is not None:
+                return value
+        if not windows:
+            return None
+        return sum(window.price for window in windows) / len(windows)
 
     def _extract_price_windows_from_series(
         self,
