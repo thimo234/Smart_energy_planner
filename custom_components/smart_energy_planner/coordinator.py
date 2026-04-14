@@ -201,6 +201,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 current_price,
                 price_resolution,
             )
+            all_windows = self._extract_price_windows(
+                price_state.attributes if price_state else {},
+                current_price,
+                price_resolution,
+                include_past=True,
+            )
             price_average = self._extract_price_average(
                 price_state.attributes if price_state else {},
                 windows,
@@ -240,6 +246,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             thermostat_setpoint = self._get_manual_thermostat_setpoint()
             thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
+            all_solar_windows = self._extract_solar_windows(
+                solar_state.attributes if solar_state else {},
+                include_past=True,
+            )
             solcast_confidence = _coerce_float(
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
@@ -286,10 +296,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return self._build_plan(
                 planner_kind=planner_kind,
                 windows=windows,
+                all_windows=all_windows,
                 price_average=price_average,
                 current_price=current_price,
                 solar_forecast_kwh=solar_forecast,
                 solar_windows=solar_windows,
+                all_solar_windows=all_solar_windows,
                 solcast_confidence=solcast_confidence,
                 heating_estimate_kwh=heating_estimate,
                 lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
@@ -798,10 +810,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         planner_kind: str,
         windows: list[PlannerWindow],
+        all_windows: list[PlannerWindow],
         price_average: float | None,
         current_price: float | None,
         solar_forecast_kwh: float,
         solar_windows: list[SolarWindow],
+        all_solar_windows: list[SolarWindow],
         solcast_confidence: float | None,
         heating_estimate_kwh: float,
         lookback_average_kwh: float,
@@ -1036,6 +1050,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             default=None,
         )
+        direct_charge_after_now = (
+            next_charge_opportunity is not None
+            and next_charge_opportunity > now
+            and next_charge_opportunity - now <= timedelta(minutes=90)
+        )
         future_solar_charge_window = next_planned_solar_charge_start is not None
         charge_window_active_now = in_planned_solar_charge_window or in_planned_grid_charge_window
         charge_session_consumed_today = (
@@ -1095,6 +1114,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and battery_energy_available_for_discharge_kwh > 0
             and current_price is not None
             and current_price >= average_price
+            and direct_charge_after_now
             and (
                 best_solar_is_now
                 or projected_solar_surplus_until_sunset
@@ -1250,7 +1270,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and (future_solar_charge_window or future_min_price is not None or battery_room_needed_for_solar_kwh > 0)
             ):
                 battery_strategy = (
-                    "ontladen_naar_net" if future_solar_charge_window or battery_room_needed_for_solar_kwh > 0 else "ontladen"
+                    "ontladen_naar_net"
+                    if direct_charge_after_now and (future_solar_charge_window or battery_room_needed_for_solar_kwh > 0)
+                    else "ontladen"
                 )
                 score += 10
                 rationale_parts.append(
@@ -1309,12 +1331,46 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"battery stays above the configured minimum reserve of {battery_min_soc_percent:.0f}%"
                 )
 
+        planning_start = min((window.start for window in all_windows), default=now.replace(hour=0, minute=0, second=0, microsecond=0))
+        planning_end = max((window.end for window in all_windows), default=now)
+        full_planned_solar_charge_windows = self._merge_planned_windows(
+            self._select_cheapest_solar_charge_windows(
+                price_windows=all_windows,
+                solar_windows=all_solar_windows,
+                hourly_demand=estimated_hourly_home_demand,
+                now=planning_start,
+                until=planning_end,
+                needed_kwh=solar_charge_target_kwh,
+                max_charge_kw=max_charge,
+            )
+        )
+        full_planned_grid_charge_windows = self._merge_planned_windows(
+            self._select_cheapest_charge_windows(
+                windows=all_windows,
+                now=planning_start,
+                until=planning_end,
+                needed_kwh=grid_charge_needed_until_sunset,
+                max_charge_kw=max_charge,
+            )
+        )
+        full_planned_discharge_windows = self._mark_discharge_window_modes(
+            self._select_battery_discharge_windows(
+                windows=all_windows,
+                now=planning_start,
+                after=sunset_time,
+                average_price=average_price,
+                battery_min_profit=battery_min_profit,
+            ),
+            [*full_planned_solar_charge_windows, *full_planned_grid_charge_windows],
+        )
         planned_battery_mode_schedule = self._build_battery_mode_schedule(
-            now=now,
+            schedule_start=planning_start,
+            initial_mode="accu_uit",
+            current_time=now,
             current_mode=battery_strategy,
-            planned_solar_charge_windows=planned_solar_charge_windows,
-            planned_grid_charge_windows=planned_grid_charge_windows,
-            planned_discharge_windows=planned_discharge_windows,
+            planned_solar_charge_windows=full_planned_solar_charge_windows,
+            planned_grid_charge_windows=full_planned_grid_charge_windows,
+            planned_discharge_windows=full_planned_discharge_windows,
         )
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
@@ -1666,6 +1722,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "end": window.end.isoformat(),
                 "price": round(window.price, 6),
                 "usable_hours": round(max((window.end - max(window.start, now)).total_seconds() / 3600, 0.0), 3),
+                "mode": "ontladen",
             }
             for window in windows
             if window.end > now
@@ -1674,27 +1731,59 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         ]
         return self._merge_planned_windows(discharge_windows)
 
+    def _mark_discharge_window_modes(
+        self,
+        discharge_windows: list[dict[str, str | float]],
+        charge_windows: list[dict[str, str | float]],
+    ) -> list[dict[str, str | float]]:
+        if not discharge_windows:
+            return []
+
+        charge_starts = sorted(
+            (
+                charge_start
+                for window in charge_windows
+                if (charge_start := dt_util.parse_datetime(str(window.get("start")))) is not None
+            )
+        )
+
+        marked: list[dict[str, str | float]] = []
+        for window in discharge_windows:
+            window_end = dt_util.parse_datetime(str(window.get("end")))
+            mode = "ontladen"
+            if window_end is not None:
+                next_charge_start = next((start for start in charge_starts if start >= window_end), None)
+                if next_charge_start is not None and next_charge_start - window_end <= timedelta(minutes=90):
+                    mode = "ontladen_naar_net"
+
+            marked.append({**window, "mode": mode})
+
+        return marked
+
     def _build_battery_mode_schedule(
         self,
         *,
-        now: datetime,
+        schedule_start: datetime,
+        initial_mode: str,
+        current_time: datetime,
         current_mode: str,
         planned_solar_charge_windows: list[dict[str, str | float]],
         planned_grid_charge_windows: list[dict[str, str | float]],
         planned_discharge_windows: list[dict[str, str | float]],
     ) -> list[dict[str, str]]:
-        schedule: list[dict[str, str]] = [{"at": now.isoformat(), "mode": current_mode}]
+        schedule: list[dict[str, str]] = [{"at": schedule_start.isoformat(), "mode": initial_mode}]
+
+        if current_time > schedule_start:
+            schedule.append({"at": current_time.isoformat(), "mode": current_mode})
 
         for window in planned_solar_charge_windows:
             schedule.append({"at": str(window["start"]), "mode": "laden_met_zonne_energie"})
-            schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
 
         for window in planned_grid_charge_windows:
             schedule.append({"at": str(window["start"]), "mode": "laden_van_net"})
-            schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
 
         for window in planned_discharge_windows:
-            schedule.append({"at": str(window["start"]), "mode": "ontladen_naar_net"})
+            schedule.append({"at": str(window["start"]), "mode": str(window.get("mode", "ontladen"))})
             schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
 
         deduped: list[dict[str, str]] = []
@@ -1723,7 +1812,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         return (overlap_end - overlap_start).total_seconds() / 3600
 
     def _extract_price_windows(
-        self, attributes: dict[str, Any], current_price: float | None, price_resolution: str
+        self,
+        attributes: dict[str, Any],
+        current_price: float | None,
+        price_resolution: str,
+        *,
+        include_past: bool = False,
     ) -> list[PlannerWindow]:
         now = dt_util.now()
         raw_entries = list(attributes.get("raw_today", [])) + list(attributes.get("raw_tomorrow", []))
@@ -1746,12 +1840,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
             if start <= now < end:
                 active_window = PlannerWindow(start=start, end=end, price=price)
-            if end <= now:
+            if not include_past and end <= now:
                 continue
             windows.append(PlannerWindow(start=start, end=end, price=price))
 
         if not windows:
-            windows = self._extract_price_windows_from_series(attributes, now)
+            windows = self._extract_price_windows_from_series(attributes, now, include_past=include_past)
 
         if active_window and not any(w.start == active_window.start and w.end == active_window.end for w in windows):
             windows.insert(0, active_window)
@@ -1782,6 +1876,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         attributes: dict[str, Any],
         now: datetime,
+        *,
+        include_past: bool = False,
     ) -> list[PlannerWindow]:
         """Build price windows from today/tomorrow lists when raw entries are unavailable."""
         today_values = attributes.get("today")
@@ -1795,6 +1891,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             tomorrow_windows = self._series_to_price_windows(tomorrow_values, tomorrow_start)
 
+        if include_past:
+            return [*today_windows, *tomorrow_windows]
         return [window for window in [*today_windows, *tomorrow_windows] if window.end > now]
 
     def _series_to_price_windows(
@@ -1862,7 +1960,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
         return sorted(aggregated, key=lambda item: item.start)
 
-    def _extract_solar_windows(self, attributes: dict[str, Any]) -> list[SolarWindow]:
+    def _extract_solar_windows(
+        self,
+        attributes: dict[str, Any],
+        *,
+        include_past: bool = False,
+    ) -> list[SolarWindow]:
         raw_entries = attributes.get("detailedHourly", [])
         windows: list[SolarWindow] = []
         for entry in raw_entries:
@@ -1873,7 +1976,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if start is None:
                 continue
             end = start + timedelta(hours=1)
-            if end <= dt_util.now():
+            if not include_past and end <= dt_util.now():
                 continue
             windows.append(
                 SolarWindow(
