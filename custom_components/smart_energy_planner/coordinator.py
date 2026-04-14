@@ -1332,27 +1332,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
 
         planning_start = min((window.start for window in all_windows), default=now.replace(hour=0, minute=0, second=0, microsecond=0))
-        planning_end = max((window.end for window in all_windows), default=now)
-        full_planned_solar_charge_windows = self._merge_planned_windows(
-            self._select_cheapest_solar_charge_windows(
-                price_windows=all_windows,
-                solar_windows=all_solar_windows,
-                hourly_demand=estimated_hourly_home_demand,
-                now=planning_start,
-                until=planning_end,
-                needed_kwh=solar_charge_target_kwh,
-                max_charge_kw=max_charge,
-            )
-        )
-        full_planned_grid_charge_windows = self._merge_planned_windows(
-            self._select_cheapest_charge_windows(
-                windows=all_windows,
-                now=planning_start,
-                until=planning_end,
-                needed_kwh=grid_charge_needed_until_sunset,
-                max_charge_kw=max_charge,
-            )
-        )
         full_planned_discharge_windows = self._mark_discharge_window_modes(
             self._select_battery_discharge_windows(
                 windows=all_windows,
@@ -1361,15 +1340,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 average_price=average_price,
                 battery_min_profit=battery_min_profit,
             ),
-            [*full_planned_solar_charge_windows, *full_planned_grid_charge_windows],
+            [*planned_solar_charge_windows, *planned_grid_charge_windows],
         )
         planned_battery_mode_schedule = self._build_battery_mode_schedule(
             schedule_start=planning_start,
             initial_mode="accu_uit",
             current_time=now,
             current_mode=battery_strategy,
-            planned_solar_charge_windows=full_planned_solar_charge_windows,
-            planned_grid_charge_windows=full_planned_grid_charge_windows,
+            planned_solar_charge_windows=planned_solar_charge_windows,
+            planned_grid_charge_windows=planned_grid_charge_windows,
             planned_discharge_windows=full_planned_discharge_windows,
         )
 
