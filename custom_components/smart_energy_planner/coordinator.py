@@ -1173,7 +1173,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_discharge_windows = self._select_battery_discharge_windows(
             windows=windows,
             now=now,
-            after=sunset_time,
+            after=now,
             average_price=average_price,
             battery_min_profit=battery_min_profit,
         )
@@ -1436,7 +1436,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._select_battery_discharge_windows(
                 windows=all_windows,
                 now=planning_start,
-                after=sunset_time,
+                after=planning_start,
                 average_price=average_price,
                 battery_min_profit=battery_min_profit,
             ),
