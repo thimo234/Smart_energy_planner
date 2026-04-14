@@ -1059,6 +1059,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and next_charge_opportunity > now
             and next_charge_opportunity - now <= timedelta(minutes=90)
         )
+        direct_solar_charge_soon = (
+            next_planned_solar_charge_start is not None
+            and next_planned_solar_charge_start > now
+            and next_planned_solar_charge_start - now <= timedelta(minutes=90)
+        )
         solar_covers_remaining_demand = (
             sunset_time is not None
             and sunset_time > now
@@ -1213,6 +1218,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 score += 12
                 rationale_parts.append(
                     f"battery should charge in this planned cheap solar window up to {min(max_charge, battery_remaining_capacity_kwh, max_charge):.1f} kW"
+                )
+            elif (
+                direct_solar_charge_soon
+                and battery_remaining_capacity_kwh > 0
+                and solar_covers_remaining_demand
+                and charge_allowed_today
+            ):
+                battery_strategy = "laden_met_zonne_energie"
+                score += 8
+                rationale_parts.append(
+                    "battery stays in solar charging mode because the next planned solar charge window starts shortly"
                 )
             elif (
                 should_make_room_for_solar_now
