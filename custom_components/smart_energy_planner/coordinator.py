@@ -983,6 +983,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             needed_kwh=solar_charge_target_kwh,
             max_charge_kw=max_charge,
         )
+        planned_solar_charge_windows = self._merge_planned_windows(planned_solar_charge_windows)
         planned_grid_charge_windows = self._select_cheapest_charge_windows(
             windows=windows,
             now=now,
@@ -990,6 +991,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             needed_kwh=grid_charge_needed_until_sunset,
             max_charge_kw=max_charge,
         )
+        planned_grid_charge_windows = self._merge_planned_windows(planned_grid_charge_windows)
         in_planned_solar_charge_window = any(
             (window_start := dt_util.parse_datetime(str(window["start"]))) is not None
             and (window_end := dt_util.parse_datetime(str(window["end"]))) is not None
@@ -1067,6 +1069,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             key=lambda item: item.start,
             default=None,
+        )
+        planned_discharge_windows = self._select_battery_discharge_windows(
+            windows=windows,
+            now=now,
+            after=sunset_time,
+            average_price=average_price,
+            battery_min_profit=battery_min_profit,
         )
         keep_energy_for_future_peak = (
             next_high_price_window is not None
@@ -1305,6 +1314,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_mode=battery_strategy,
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
+            planned_discharge_windows=planned_discharge_windows,
         )
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
@@ -1609,6 +1619,61 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return sorted(planned_windows, key=lambda item: str(item["start"]))
 
+    def _merge_planned_windows(
+        self,
+        windows: list[dict[str, str | float]],
+    ) -> list[dict[str, str | float]]:
+        if not windows:
+            return []
+
+        merged: list[dict[str, str | float]] = []
+        for window in sorted(windows, key=lambda item: str(item["start"])):
+            if not merged:
+                merged.append(dict(window))
+                continue
+
+            previous = merged[-1]
+            previous_end = dt_util.parse_datetime(str(previous["end"]))
+            current_start = dt_util.parse_datetime(str(window["start"]))
+            if previous_end is not None and current_start is not None and previous_end == current_start:
+                previous["end"] = window["end"]
+                previous["usable_hours"] = round(
+                    float(previous.get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
+                    3,
+                )
+                previous["price"] = min(float(previous.get("price", 0.0)), float(window.get("price", 0.0)))
+                continue
+
+            merged.append(dict(window))
+
+        return merged
+
+    def _select_battery_discharge_windows(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        now: datetime,
+        after: datetime | None,
+        average_price: float,
+        battery_min_profit: float,
+    ) -> list[dict[str, str | float]]:
+        if after is None:
+            return []
+
+        discharge_windows = [
+            {
+                "start": window.start.isoformat(),
+                "end": window.end.isoformat(),
+                "price": round(window.price, 6),
+                "usable_hours": round(max((window.end - max(window.start, now)).total_seconds() / 3600, 0.0), 3),
+            }
+            for window in windows
+            if window.end > now
+            and window.start >= after
+            and window.price >= max(average_price, average_price + (battery_min_profit / 2))
+        ]
+        return self._merge_planned_windows(discharge_windows)
+
     def _build_battery_mode_schedule(
         self,
         *,
@@ -1616,6 +1681,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_mode: str,
         planned_solar_charge_windows: list[dict[str, str | float]],
         planned_grid_charge_windows: list[dict[str, str | float]],
+        planned_discharge_windows: list[dict[str, str | float]],
     ) -> list[dict[str, str]]:
         schedule: list[dict[str, str]] = [{"at": now.isoformat(), "mode": current_mode}]
 
@@ -1627,9 +1693,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             schedule.append({"at": str(window["start"]), "mode": "laden_van_net"})
             schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
 
+        for window in planned_discharge_windows:
+            schedule.append({"at": str(window["start"]), "mode": "ontladen_naar_net"})
+            schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
+
         deduped: list[dict[str, str]] = []
         for item in sorted(schedule, key=lambda entry: entry["at"]):
             if deduped and deduped[-1]["at"] == item["at"] and deduped[-1]["mode"] == item["mode"]:
+                continue
+            if deduped and deduped[-1]["at"] == item["at"] and deduped[-1]["mode"] != item["mode"]:
+                deduped[-1] = item
                 continue
             deduped.append(item)
         return deduped
