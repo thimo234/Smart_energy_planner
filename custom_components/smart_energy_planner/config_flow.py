@@ -22,6 +22,7 @@ from .const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
+    CONF_PLANNER_NAME,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
@@ -176,6 +177,10 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
     return vol.Schema(
         {
             vol.Required(
+                CONF_PLANNER_NAME,
+                default=user_input.get(CONF_PLANNER_NAME, f"{DEFAULT_NAME} Battery"),
+            ): selector.TextSelector(),
+            vol.Required(
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
             ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
             vol.Required(
@@ -259,6 +264,10 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
     user_input = _base_defaults(user_input)
     return vol.Schema(
         {
+            vol.Required(
+                CONF_PLANNER_NAME,
+                default=user_input.get(CONF_PLANNER_NAME, f"{DEFAULT_NAME} Thermostat"),
+            ): selector.TextSelector(),
             vol.Required(
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
             ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
@@ -394,15 +403,20 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             data = {CONF_PLANNER_KIND: planner_kind, **user_input}
+            title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(planner_kind))
             unique_anchor = (
-                user_input.get(CONF_PRICE_SENSOR)
+                user_input.get(CONF_HEATING_SWITCH_ENTITY)
+                or user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
+                or user_input.get(CONF_BATTERY_SOC_SENSOR)
                 or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-                or user_input.get(CONF_HEATING_SWITCH_ENTITY)
+                or user_input.get(CONF_PLANNER_NAME)
+                or user_input.get(CONF_PRICE_SENSOR)
+                or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
                 or planner_kind
             )
             await self.async_set_unique_id(f"{DOMAIN}-{planner_kind}-{unique_anchor}")
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(title=_title_for_kind(planner_kind), data=data)
+            return self.async_create_entry(title=title, data=data)
 
         return self.async_show_form(
             step_id="configure",
@@ -426,6 +440,8 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
         planner_kind = merged.get(CONF_PLANNER_KIND, DEFAULT_PLANNER_KIND)
 
         if user_input is not None:
+            title = str(user_input.get(CONF_PLANNER_NAME) or self.config_entry.title)
+            self.hass.config_entries.async_update_entry(self.config_entry, title=title)
             return self.async_create_entry(title="", data={CONF_PLANNER_KIND: planner_kind, **user_input})
 
         return self.async_show_form(

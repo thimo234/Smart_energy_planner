@@ -317,12 +317,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _build_pending_result(
         self, status: str, planner_kind: str, source_status: dict[str, str], source_errors: list[str]
     ) -> PlannerResult:
+        battery_strategy = "accu_uit"
+        if planner_kind == PLANNER_KIND_BATTERY and status == "planner_runtime_error":
+            battery_strategy = "zelfvoorzienend"
+        elif planner_kind == PLANNER_KIND_THERMOSTAT:
+            battery_strategy = "not_applicable"
+
         return PlannerResult(
             planner_kind=planner_kind,
             status=status,
             score=0,
             recommendation="waiting_for_data",
-            battery_strategy="accu_uit",
+            battery_strategy=battery_strategy,
             heat_pump_strategy="normal",
             heating_estimate_kwh=0.0,
             solar_forecast_kwh=0.0,
@@ -1049,7 +1055,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and current_price >= average_price
             and (
                 best_solar_is_now
-                or projected_solar_surplus_until_sunset_kwh
+                or projected_solar_surplus_until_sunset
                 >= max(battery_remaining_capacity_kwh, max_charge)
             )
         )

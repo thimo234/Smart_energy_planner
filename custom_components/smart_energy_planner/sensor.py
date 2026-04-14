@@ -13,6 +13,11 @@ from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIM
 from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
 
 
+def _planner_entity_name(entry: ConfigEntry, suffix: str) -> str:
+    """Build a readable entity name from the planner entry title."""
+    return f"{entry.title} {suffix}".strip()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -88,7 +93,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         super().__init__(coordinator)
         self._value_key = value_key
         self._entry_id = entry.entry_id
-        self._attr_name = name
+        self._attr_name = _planner_entity_name(entry, name)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_native_unit_of_measurement = native_unit_of_measurement
         self._attr_icon = "mdi:home-lightning-bolt-outline"

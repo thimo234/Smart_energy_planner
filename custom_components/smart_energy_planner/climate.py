@@ -41,6 +41,11 @@ from .__init__ import _async_save_runtime_state
 PRESET_NORMAL = "normal"
 
 
+def _planner_thermostat_name(entry: ConfigEntry) -> str:
+    """Build the visible thermostat name from the planner entry title."""
+    return entry.title
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -68,7 +73,6 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_has_entity_name = True
-    _attr_name = "Planner Thermostat"
     _attr_target_temperature_step = 0.5
     _attr_precision = 0.1
     _attr_preset_modes = [PRESET_NORMAL, PRESET_ECO]
@@ -76,6 +80,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     def __init__(self, coordinator: SmartEnergyPlannerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
         self._entry = entry
+        self._attr_name = _planner_thermostat_name(entry)
         self._attr_unique_id = f"{entry.entry_id}_planner_thermostat"
         self._attr_icon = "mdi:thermostat-auto"
 

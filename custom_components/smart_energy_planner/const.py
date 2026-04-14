@@ -9,6 +9,7 @@ RUNTIME_STATE = f"{DOMAIN}_runtime"
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_runtime_store"
 
+CONF_PLANNER_NAME = "planner_name"
 CONF_PLANNER_KIND = "planner_kind"
 CONF_PRICE_SENSOR = "price_sensor"
 CONF_SOLCAST_TODAY_SENSOR = "solcast_today_sensor"
