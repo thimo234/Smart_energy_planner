@@ -891,15 +891,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and len(windows) > 1
             and price_spread > 0
         )
-        best_solar_window = self._select_best_solar_window(solar_windows)
+        now = dt_util.now()
+        today_solar_windows = [window for window in solar_windows if window.start.date() == now.date()]
+        future_solar_windows = [window for window in solar_windows if window.start.date() > now.date()]
+        best_solar_window = self._select_best_solar_window(today_solar_windows or solar_windows)
         estimated_total_home_demand_kwh = round(non_heating_daily_average_kwh + heating_estimate_kwh, 2)
         estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
         )
-        now = dt_util.now()
-        sunset_time = self._get_solar_day_end(solar_windows)
-        remaining_solar_until_sunset = self._sum_remaining_solar_until(solar_windows, now, sunset_time)
+        sunset_time = self._get_solar_day_end(today_solar_windows)
+        planning_horizon_solar_end = self._get_solar_day_end(solar_windows)
+        remaining_solar_until_sunset = self._sum_remaining_solar_until(today_solar_windows, now, sunset_time)
         remaining_home_demand_until_sunset = self._sum_remaining_home_demand_until(
             estimated_hourly_home_demand, now, sunset_time
         )
@@ -918,7 +921,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (window for window in windows if window.start > now and window.price <= cheap_threshold),
             next((window for window in windows if window.price <= cheap_threshold), cheapest),
         )
-        solar_covers_today = solar_forecast_kwh >= estimated_total_home_demand_kwh and estimated_total_home_demand_kwh > 0
+        solar_covers_today = (
+            self._sum_remaining_solar_until(today_solar_windows, now, sunset_time) >= remaining_home_demand_until_sunset
+            and estimated_total_home_demand_kwh > 0
+        )
         cheap_now = current_price is not None and current_price <= cheap_threshold
         best_solar_is_now = (
             best_solar_window is not None
@@ -1037,16 +1043,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if target_battery_full_by_sunset and max_charge > 0
             else 0.0
         )
-        planned_solar_charge_windows = self._select_cheapest_solar_charge_windows(
+        planned_solar_charge_windows_today = self._select_cheapest_solar_charge_windows(
             price_windows=windows,
-            solar_windows=solar_windows,
+            solar_windows=today_solar_windows,
             hourly_demand=estimated_hourly_home_demand,
             now=now,
             until=sunset_time,
             needed_kwh=solar_charge_target_kwh,
             max_charge_kw=max_charge,
         )
-        planned_solar_charge_windows = self._merge_planned_windows(planned_solar_charge_windows)
+        planned_solar_charge_windows_future = self._select_cheapest_solar_charge_windows(
+            price_windows=all_windows,
+            solar_windows=future_solar_windows,
+            hourly_demand=estimated_hourly_home_demand,
+            now=now,
+            until=planning_horizon_solar_end,
+            needed_kwh=min(battery_remaining_capacity_kwh, battery_capacity * 0.8),
+            max_charge_kw=max_charge,
+        )
+        planned_solar_charge_windows = self._merge_planned_windows(
+            [*planned_solar_charge_windows_today, *planned_solar_charge_windows_future]
+        )
         planned_grid_charge_windows = self._select_cheapest_charge_windows(
             windows=windows,
             now=now,
@@ -1060,6 +1077,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and (window_end := dt_util.parse_datetime(str(window["end"]))) is not None
             and window_start <= now < window_end
             for window in planned_solar_charge_windows
+        )
+        in_productive_solar_window_now = any(
+            window.start <= now < window.end and window.forecast_kwh > 0
+            for window in today_solar_windows
         )
         next_planned_solar_charge_start = min(
             (
@@ -1258,7 +1279,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         elif battery_enabled:
             if battery_soc_percent is None:
                 rationale_parts.append("battery state of charge is unavailable, so battery control stays idle")
-            elif in_planned_solar_charge_window and battery_remaining_capacity_kwh > 0 and charge_allowed_today:
+            elif (
+                (in_planned_solar_charge_window or in_productive_solar_window_now)
+                and battery_remaining_capacity_kwh > 0
+                and charge_allowed_today
+            ):
                 battery_strategy = "laden_met_zonne_energie"
                 score += 12
                 rationale_parts.append(
@@ -1302,7 +1327,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 rationale_parts.append(
                     f"the planner reserved roughly {battery_charge_hours_needed_until_sunset:.1f} charging hours in the cheapest pre-sunset windows"
                 )
-            elif solar_covers_today and in_planned_solar_charge_window and charge_allowed_today:
+            elif solar_covers_today and (in_planned_solar_charge_window or in_productive_solar_window_now) and charge_allowed_today:
                 battery_strategy = "laden_met_zonne_energie"
                 score += 10
                 rationale_parts.append(
