@@ -1145,7 +1145,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             elif (
                 should_make_room_for_solar_now
             ):
-                battery_strategy = "ontladen"
+                battery_strategy = "ontladen_naar_net"
                 score += 12
                 rationale_parts.append(
                     f"battery can discharge about {min(battery_energy_available_for_discharge_kwh, max_discharge):.1f} kWh-equivalent now to create room for the coming solar surplus"
@@ -1207,7 +1207,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and battery_energy_available_for_discharge_kwh > 0
                 and (future_solar_charge_window or future_min_price is not None or battery_room_needed_for_solar_kwh > 0)
             ):
-                battery_strategy = "ontladen"
+                battery_strategy = (
+                    "ontladen_naar_net" if future_solar_charge_window or battery_room_needed_for_solar_kwh > 0 else "ontladen"
+                )
                 score += 10
                 rationale_parts.append(
                     f"battery can discharge up to {min(max_discharge, battery_energy_available_for_discharge_kwh):.1f} kW because a later charging opportunity is at least {battery_min_profit:.2f} EUR/kWh cheaper"
