@@ -71,6 +71,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "last_switch_change": None,
         "cooling_model": persisted_state.get("cooling_model", {}),
         "last_cooling_observation": persisted_state.get("last_cooling_observation"),
+        "eco_cooling_session": persisted_state.get("eco_cooling_session"),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -224,6 +225,7 @@ async def _async_apply_heating_switch_control(
         if merged.get(CONF_TEMPERATURE_SENSOR) and coordinator.hass.states.get(merged.get(CONF_TEMPERATURE_SENSOR))
         else None,
         heating_is_on=str(switch_state.state).lower() in {"on", "heat", "heating"},
+        eco_active=eco_active,
     )
 
     cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
@@ -289,6 +291,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
         "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
         "cooling_model": runtime_state.get("cooling_model", {}),
         "last_cooling_observation": runtime_state.get("last_cooling_observation"),
+        "eco_cooling_session": runtime_state.get("eco_cooling_session"),
     }
     await store.async_save(data)
 
@@ -301,8 +304,9 @@ async def _async_update_cooling_model(
     current_temperature: float | None,
     outdoor_temperature,
     heating_is_on: bool,
+    eco_active: bool,
 ) -> None:
-    """Learn normalized room cooling speed while heating is off and persist it."""
+    """Learn normalized room cooling speed from complete eco windows."""
     if current_temperature is None:
         return
     try:
@@ -313,7 +317,6 @@ async def _async_update_cooling_model(
         return
 
     now = dt_util.now()
-    observation = runtime_state.get("last_cooling_observation")
     runtime_state["last_cooling_observation"] = {
         "timestamp": now.isoformat(),
         "room_temperature_c": round(current_temperature, 3),
@@ -321,34 +324,49 @@ async def _async_update_cooling_model(
         "heating_is_on": heating_is_on,
     }
 
-    if (
-        observation is None
-        or observation.get("heating_is_on")
-        or heating_is_on
-    ):
+    session = runtime_state.get("eco_cooling_session")
+    if eco_active:
+        if session is None:
+            runtime_state["eco_cooling_session"] = {
+                "start_timestamp": now.isoformat(),
+                "start_room_temperature_c": round(current_temperature, 3),
+                "start_outdoor_temperature_c": round(outdoor_temp, 3),
+                "heating_was_on": heating_is_on,
+            }
+        else:
+            session["heating_was_on"] = bool(session.get("heating_was_on")) or heating_is_on
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    if session is None:
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    runtime_state["eco_cooling_session"] = None
+    if bool(session.get("heating_was_on")) or heating_is_on:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
     try:
-        previous_time = dt_util.parse_datetime(observation["timestamp"])
-        previous_room_temp = float(observation["room_temperature_c"])
-        previous_outdoor_temp = float(observation["outdoor_temperature_c"])
+        start_time = dt_util.parse_datetime(session["start_timestamp"])
+        start_room_temp = float(session["start_room_temperature_c"])
+        start_outdoor_temp = float(session["start_outdoor_temperature_c"])
     except (KeyError, TypeError, ValueError):
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    if previous_time is None:
+    if start_time is None:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    elapsed_hours = (now - previous_time).total_seconds() / 3600
-    cooling_drop = previous_room_temp - current_temperature
+    elapsed_hours = (now - start_time).total_seconds() / 3600
+    cooling_drop = start_room_temp - current_temperature
     if elapsed_hours <= 0 or cooling_drop <= 0:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    average_room_temp = (previous_room_temp + current_temperature) / 2
-    average_outdoor_temp = (previous_outdoor_temp + outdoor_temp) / 2
+    average_room_temp = (start_room_temp + current_temperature) / 2
+    average_outdoor_temp = (start_outdoor_temp + outdoor_temp) / 2
     average_delta_temp = max(average_room_temp - average_outdoor_temp, 0.5)
     cooling_rate = cooling_drop / elapsed_hours
     normalized_cooling_rate = cooling_rate / average_delta_temp
@@ -365,4 +383,7 @@ async def _async_update_cooling_model(
     cooling_model["sample_count"] = previous_samples + 1
     cooling_model["last_delta_temp_c"] = round(average_delta_temp, 3)
     cooling_model["last_observed_drop_c_per_hour"] = round(cooling_rate, 4)
+    cooling_model["last_eco_duration_hours"] = round(elapsed_hours, 3)
+    cooling_model["last_eco_start_temp_c"] = round(start_room_temp, 3)
+    cooling_model["last_eco_end_temp_c"] = round(current_temperature, 3)
     await _async_save_runtime_state(hass, entry_id, runtime_state)
