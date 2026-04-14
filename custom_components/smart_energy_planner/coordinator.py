@@ -1667,6 +1667,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
+        last_charge_mode = "accu_uit"
 
         slot_index = 0
         while slot_index < len(slots):
@@ -1678,6 +1679,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     usable_capacity_kwh,
                     sim_usable_energy_kwh + float(solar_charge_starts[slot_start]),
                 )
+                last_charge_mode = mode
                 if slot["start"] <= now < slot["end"]:
                     current_mode = mode
                 hourly_modes.append(
@@ -1698,6 +1700,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     usable_capacity_kwh,
                     sim_usable_energy_kwh + float(grid_charge_starts[slot_start]),
                 )
+                last_charge_mode = mode
                 if slot["start"] <= now < slot["end"]:
                     current_mode = mode
                 hourly_modes.append(
@@ -1741,7 +1744,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     if other["start"] > segment_slot_start
                 )
 
-                mode = "accu_uit"
+                mode = (
+                    last_charge_mode
+                    if last_charge_mode != "accu_uit" and sim_usable_energy_kwh < usable_capacity_kwh
+                    else "accu_uit"
+                )
                 if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen"
                     sim_usable_energy_kwh = max(
