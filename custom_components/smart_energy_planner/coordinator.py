@@ -1668,64 +1668,166 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
 
-        for slot in slots:
+        slot_index = 0
+        while slot_index < len(slots):
+            slot = slots[slot_index]
             slot_start = slot["start"]
-            next_charge_start = next((start for start in future_charge_starts if start > slot_start), None)
-            remaining_deficit_until_next_charge = sum(
-                max(0.0, float(other["demand_kwh"]) - float(other["solar_kwh"]))
-                for other in slots
-                if other["start"] >= slot_start
-                and (next_charge_start is None or other["start"] < next_charge_start)
-                and other["start"] not in solar_charge_starts
-                and other["start"] not in grid_charge_starts
-            )
-
-            mode = "accu_uit"
             if slot_start in solar_charge_starts:
                 mode = "laden_met_zonne_energie"
                 sim_usable_energy_kwh = min(
                     usable_capacity_kwh,
                     sim_usable_energy_kwh + float(solar_charge_starts[slot_start]),
                 )
-            elif slot_start in grid_charge_starts:
+                if slot["start"] <= now < slot["end"]:
+                    current_mode = mode
+                hourly_modes.append(
+                    {
+                        "start": slot["start"].isoformat(),
+                        "end": slot["end"].isoformat(),
+                        "price": round(float(slot["price"]), 6),
+                        "usable_hours": round(float(slot["hours"]), 3),
+                        "mode": mode,
+                    }
+                )
+                slot_index += 1
+                continue
+
+            if slot_start in grid_charge_starts:
                 mode = "laden_van_net"
                 sim_usable_energy_kwh = min(
                     usable_capacity_kwh,
                     sim_usable_energy_kwh + float(grid_charge_starts[slot_start]),
                 )
-            elif float(slot["net_solar_kwh"]) < 0 and sim_usable_energy_kwh > 0:
-                if float(slot["price"]) < battery_min_profit and remaining_deficit_until_next_charge > sim_usable_energy_kwh:
-                    mode = "accu_uit"
-                else:
+                if slot["start"] <= now < slot["end"]:
+                    current_mode = mode
+                hourly_modes.append(
+                    {
+                        "start": slot["start"].isoformat(),
+                        "end": slot["end"].isoformat(),
+                        "price": round(float(slot["price"]), 6),
+                        "usable_hours": round(float(slot["hours"]), 3),
+                        "mode": mode,
+                    }
+                )
+                slot_index += 1
+                continue
+
+            segment_end_index = slot_index
+            while segment_end_index < len(slots):
+                segment_slot_start = slots[segment_end_index]["start"]
+                if (
+                    segment_end_index > slot_index
+                    and (
+                        segment_slot_start in solar_charge_starts
+                        or segment_slot_start in grid_charge_starts
+                    )
+                ):
+                    break
+                segment_end_index += 1
+
+            segment_slots = slots[slot_index:segment_end_index]
+            planned_discharge_kwh = self._plan_segment_discharge_kwh(
+                slots=segment_slots,
+                available_energy_kwh=sim_usable_energy_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
+
+            for segment_slot in segment_slots:
+                segment_slot_start = segment_slot["start"]
+                segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
+                remaining_planned_discharge_kwh = sum(
+                    float(planned_discharge_kwh.get(other["start"], 0.0))
+                    for other in segment_slots
+                    if other["start"] > segment_slot_start
+                )
+
+                mode = "accu_uit"
+                if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen"
                     sim_usable_energy_kwh = max(
                         0.0,
-                        sim_usable_energy_kwh - min(max_discharge_kw, abs(float(slot["net_solar_kwh"]))),
+                        sim_usable_energy_kwh - min(segment_discharge_kwh, sim_usable_energy_kwh),
                     )
-            else:
-                exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_deficit_until_next_charge)
-                if (
-                    exportable_kwh > 0
-                    and next_charge_start is not None
-                    and float(slot["price"]) >= average_price + battery_min_profit
-                ):
-                    mode = "ontladen_naar_net"
-                    sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - min(max_discharge_kw, exportable_kwh))
+                else:
+                    exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
+                    slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
+                    if (
+                        exportable_kwh > 0
+                        and float(segment_slot["net_solar_kwh"]) >= 0
+                        and segment_end_index < len(slots)
+                        and float(segment_slot["price"]) >= average_price + battery_min_profit
+                    ):
+                        mode = "ontladen_naar_net"
+                        sim_usable_energy_kwh = max(
+                            0.0,
+                            sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
+                        )
 
-            if slot["start"] <= now < slot["end"]:
-                current_mode = mode
+                if segment_slot["start"] <= now < segment_slot["end"]:
+                    current_mode = mode
 
-            hourly_modes.append(
+                hourly_modes.append(
+                    {
+                        "start": segment_slot["start"].isoformat(),
+                        "end": segment_slot["end"].isoformat(),
+                        "price": round(float(segment_slot["price"]), 6),
+                        "usable_hours": round(float(segment_slot["hours"]), 3),
+                        "mode": mode,
+                    }
+                )
+
+            slot_index = segment_end_index
+
+        return self._merge_mode_windows(hourly_modes), current_mode
+
+    def _plan_segment_discharge_kwh(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        available_energy_kwh: float,
+        max_discharge_kw: float,
+    ) -> dict[datetime, float]:
+        if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
+            return {}
+
+        deficit_slots: list[dict[str, Any]] = []
+        for slot in slots:
+            deficit_kwh = min(
+                max_discharge_kw * float(slot["hours"]),
+                max(0.0, abs(float(slot["net_solar_kwh"]))) if float(slot["net_solar_kwh"]) < 0 else 0.0,
+            )
+            if deficit_kwh <= 0:
+                continue
+            deficit_slots.append(
                 {
-                    "start": slot["start"].isoformat(),
-                    "end": slot["end"].isoformat(),
-                    "price": round(float(slot["price"]), 6),
-                    "usable_hours": round(float(slot["hours"]), 3),
-                    "mode": mode,
+                    "start": slot["start"],
+                    "price": float(slot["price"]),
+                    "required_kwh": deficit_kwh,
                 }
             )
 
-        return self._merge_mode_windows(hourly_modes), current_mode
+        if not deficit_slots:
+            return {}
+
+        total_required_kwh = sum(float(slot["required_kwh"]) for slot in deficit_slots)
+        if available_energy_kwh >= total_required_kwh:
+            return {
+                slot["start"]: round(float(slot["required_kwh"]), 6)
+                for slot in deficit_slots
+            }
+
+        remaining_energy_kwh = available_energy_kwh
+        planned_discharge: dict[datetime, float] = {}
+        for slot in sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"])):
+            if remaining_energy_kwh <= 0:
+                break
+            assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
+            if assigned_kwh <= 0:
+                continue
+            planned_discharge[slot["start"]] = round(assigned_kwh, 6)
+            remaining_energy_kwh -= assigned_kwh
+
+        return planned_discharge
 
     def _merge_mode_windows(
         self,
