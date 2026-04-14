@@ -666,6 +666,118 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return sorted(peak_blocks, key=lambda item: item["start"])
 
+    def _select_thermostat_peak_eco_windows(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        now: datetime,
+        cooldown_hours: float,
+        average_price: float,
+    ) -> list[dict[str, datetime | float]]:
+        """Plan eco windows around each above-average price peak.
+
+        Eco starts before the peak based on the estimated cooldown time and
+        ends as soon as the room is expected to have cooled down or when the
+        price drops back below the daily average, whichever comes first.
+        """
+        if cooldown_hours <= 0:
+            return []
+
+        future_windows = [window for window in windows if window.end > now]
+        if not future_windows:
+            return []
+
+        above_average_windows = [
+            window for window in future_windows if window.price > average_price
+        ]
+        if not above_average_windows:
+            return []
+
+        grouped_windows: list[list[PlannerWindow]] = []
+        current_group: list[PlannerWindow] = []
+        for window in above_average_windows:
+            if not current_group:
+                current_group = [window]
+                continue
+            previous = current_group[-1]
+            if window.start <= previous.end:
+                current_group.append(window)
+            else:
+                grouped_windows.append(current_group)
+                current_group = [window]
+        if current_group:
+            grouped_windows.append(current_group)
+
+        eco_windows: list[dict[str, datetime | float]] = []
+        cooldown_delta = timedelta(hours=cooldown_hours)
+        for group in grouped_windows:
+            peak_window = max(group, key=lambda item: item.price)
+            peak_start = max(peak_window.start, now)
+            eco_start = max(now, peak_start - cooldown_delta)
+            cooled_at = eco_start + cooldown_delta
+            below_average_at = next(
+                (
+                    window.start
+                    for window in future_windows
+                    if window.start >= eco_start and window.price <= average_price
+                ),
+                None,
+            )
+
+            candidate_ends = [cooled_at]
+            if below_average_at is not None:
+                candidate_ends.append(below_average_at)
+            eco_end = min(candidate_ends)
+            if eco_end <= eco_start:
+                continue
+
+            span_hours = (eco_end - eco_start).total_seconds() / 3600
+            if span_hours <= 0:
+                continue
+
+            weighted_price = 0.0
+            total_hours = 0.0
+            for window in future_windows:
+                overlap_start = max(window.start, eco_start)
+                overlap_end = min(window.end, eco_end)
+                overlap_hours = (overlap_end - overlap_start).total_seconds() / 3600
+                if overlap_hours <= 0:
+                    continue
+                weighted_price += window.price * overlap_hours
+                total_hours += overlap_hours
+
+            average_window_price = (
+                weighted_price / total_hours if total_hours > 0 else peak_window.price
+            )
+            eco_windows.append(
+                {
+                    "start": eco_start,
+                    "end": eco_end,
+                    "average_price": average_window_price,
+                }
+            )
+
+        if not eco_windows:
+            return []
+
+        merged_windows: list[dict[str, datetime | float]] = []
+        for window in sorted(eco_windows, key=lambda item: item["start"]):
+            if not merged_windows:
+                merged_windows.append(window)
+                continue
+
+            previous = merged_windows[-1]
+            if window["start"] <= previous["end"]:
+                previous["end"] = max(previous["end"], window["end"])
+                previous["average_price"] = max(
+                    float(previous["average_price"]),
+                    float(window["average_price"]),
+                )
+            else:
+                merged_windows.append(window)
+
+        return merged_windows
+
     def _build_plan(
         self,
         *,
@@ -693,6 +805,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         sorted_by_price = sorted(windows, key=lambda item: item.price)
         cheapest = sorted_by_price[0]
         most_expensive = sorted_by_price[-1]
+        average_price = sum(window.price for window in windows) / len(windows)
         price_spread = round(most_expensive.price - cheapest.price, 4)
         price_signal_available = (
             source_status.get("price_sensor") == "ok"
@@ -716,8 +829,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
 
         cheap_threshold = cheapest.price + (price_spread * 0.25 if price_signal_available else 0)
+        mid_price_threshold = cheapest.price + (price_spread * 0.5 if price_signal_available else 0)
         expensive_threshold = most_expensive.price - (price_spread * 0.25 if price_signal_available else 0)
-        next_cheap = next((window for window in windows if window.price <= cheap_threshold), cheapest)
+        next_cheap = next(
+            (window for window in windows if window.start > now and window.price <= cheap_threshold),
+            next((window for window in windows if window.price <= cheap_threshold), cheapest),
+        )
         solar_covers_today = solar_forecast_kwh >= estimated_total_home_demand_kwh and estimated_total_home_demand_kwh > 0
         cheap_now = current_price is not None and current_price <= cheap_threshold
         best_solar_is_now = (
@@ -742,16 +859,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         future_solar_charge_window = best_solar_window is not None and best_solar_window.start > now
         eco_duration_hours = room_cooling_hours_to_eco or 0.0
-        eco_windows = (
-            self._select_expensive_peak_blocks(
-                windows=windows,
-                now=now,
-                duration_hours=eco_duration_hours,
-                expensive_threshold=expensive_threshold,
-            )
-            if price_signal_available
-            else []
+        eco_expensive_threshold = (
+            mid_price_threshold if planner_kind == PLANNER_KIND_THERMOSTAT else expensive_threshold
         )
+        eco_windows = []
+        if price_signal_available:
+            if planner_kind == PLANNER_KIND_THERMOSTAT:
+                eco_windows = self._select_thermostat_peak_eco_windows(
+                    windows=windows,
+                    now=now,
+                    cooldown_hours=eco_duration_hours,
+                    average_price=average_price,
+                )
+            else:
+                eco_windows = self._select_expensive_peak_blocks(
+                    windows=windows,
+                    now=now,
+                    duration_hours=eco_duration_hours,
+                    expensive_threshold=eco_expensive_threshold,
+                )
         eco_window = next(
             (
                 window
@@ -884,13 +1010,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
         )
-        next_high_price_window = max(
+        next_high_price_window = min(
             (
                 window
                 for window in future_windows
                 if current_price is None or window.price >= current_price + battery_min_profit
             ),
-            key=lambda item: item.price,
+            key=lambda item: item.start,
             default=None,
         )
         keep_energy_for_future_peak = (
@@ -942,11 +1068,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score += 8
             recommendation = "set_thermostat_to_eco"
             rationale_parts.append(
-                "thermostat should be in eco mode during the current expensive price peak"
+                "thermostat eco is active around the current price peak"
             )
             if thermostat_eco_setpoint_c is not None:
                 rationale_parts.append(
-                    f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the current expensive peak ends"
+                    f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the room is cooled down or the price falls below the daily average"
                 )
         elif planner_kind == PLANNER_KIND_THERMOSTAT and preheat_active_now:
             heat_pump_strategy = "preheating"
@@ -954,36 +1080,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale_parts.append(
                 "preheating is active so the floor can store heat before the upcoming eco window"
             )
+        elif cheap_now and (best_solar_is_now or solar_covers_today):
+            heat_pump_strategy = "normal"
+            rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
         elif planner_kind == PLANNER_KIND_THERMOSTAT and eco_windows:
             rationale_parts.append(
-                f"thermostat eco is planned for {len(eco_windows)} expensive price peak(s) today"
+                f"thermostat eco is planned around {len(eco_windows)} above-average price peak(s) in the current planning horizon"
             )
             if preheat_minutes > 0:
                 rationale_parts.append(
                     f"preheating starts about {preheat_minutes} minute(s) before each eco window"
                 )
-        elif cheap_now and (best_solar_is_now or solar_covers_today):
-            heat_pump_strategy = "normal"
-            rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
-        elif (
-            current_price is not None
-            and current_price > cheap_threshold
-            and best_solar_window is not None
-            and best_solar_window.start > dt_util.now()
-            and best_solar_window.forecast_kwh >= 1.0
-        ):
-            heat_pump_strategy = "energy_saving_on"
-            score += 5
-            rationale_parts.append("thermostat can wait for a cheaper or sunnier period")
-        elif (
-            current_price is not None
-            and price_spread > 0
-            and not cheap_now
-            and current_price >= most_expensive.price - (price_spread * 0.15)
-        ):
-            heat_pump_strategy = "energy_saving_on"
-            score += 5
-            rationale_parts.append("current price is close to the daily peak, so eco mode is preferred")
+            rationale_parts.append(
+                "each eco window starts early enough for the room to cool down before the peak and ends when cooling is done or the price normalizes"
+            )
 
         battery_strategy = "accu_uit"
         if planner_kind == PLANNER_KIND_THERMOSTAT:
