@@ -1767,6 +1767,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen"
+                    last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
                         0.0,
                         sim_usable_energy_kwh - min(segment_discharge_kwh, sim_usable_energy_kwh),
@@ -1781,6 +1782,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and float(segment_slot["price"]) >= average_price + battery_min_profit
                     ):
                         mode = "ontladen_naar_net"
+                        last_charge_mode = "accu_uit"
                         sim_usable_energy_kwh = max(
                             0.0,
                             sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
