@@ -212,6 +212,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_resolution,
                 include_past=True,
             )
+            battery_switch_windows = self._build_battery_switch_windows(
+                attributes=price_state.attributes if price_state else {},
+                current_price=current_price,
+                price_resolution=price_resolution,
+                include_past=True,
+            )
             price_average = self._extract_price_average(
                 price_state.attributes if price_state else {},
                 windows,
@@ -338,6 +344,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planner_kind=planner_kind,
                 windows=windows,
                 all_windows=all_windows,
+                battery_switch_windows=battery_switch_windows,
                 price_average=price_average,
                 current_price=current_price,
                 solar_forecast_kwh=solar_forecast,
@@ -872,6 +879,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planner_kind: str,
         windows: list[PlannerWindow],
         all_windows: list[PlannerWindow],
+        battery_switch_windows: list[PlannerWindow],
         price_average: float | None,
         current_price: float | None,
         solar_forecast_kwh: float,
@@ -1044,7 +1052,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         remaining_usable_capacity_kwh = max(0.0, round(usable_battery_capacity_kwh - battery_energy_available_kwh, 3))
         target_battery_full_by_sunset = battery_enabled and remaining_usable_capacity_kwh > 0
         energy_balance_slots = self._build_energy_balance_slots(
-            price_windows=all_windows,
+            price_windows=battery_switch_windows or all_windows,
             solar_windows=all_solar_windows,
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
@@ -1465,23 +1473,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         hourly_demand: list[dict[str, str | float]],
         horizon_start: datetime,
     ) -> list[dict[str, Any]]:
-        demand_by_start = {
-            start: _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
-            for slot in hourly_demand
-            if (start := dt_util.parse_datetime(str(slot.get("start")))) is not None
-        }
-        solar_by_start = {
-            window.start: window.forecast_kwh
-            for window in solar_windows
-        }
-
         slots: list[dict[str, Any]] = []
         for window in price_windows:
             if window.end <= horizon_start:
                 continue
             slot_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
-            demand_kwh = demand_by_start.get(window.start, 0.0)
-            solar_kwh = solar_by_start.get(window.start, 0.0)
+            demand_kwh = 0.0
+            for demand_slot in hourly_demand:
+                demand_start = dt_util.parse_datetime(str(demand_slot.get("start")))
+                demand_end = dt_util.parse_datetime(str(demand_slot.get("end")))
+                estimated_kwh = _coerce_float(demand_slot.get("estimated_kwh"), default=0.0) or 0.0
+                if demand_start is None or demand_end is None:
+                    continue
+                overlap_hours = self._overlap_hours(window.start, window.end, demand_start, demand_end)
+                if overlap_hours <= 0:
+                    continue
+                demand_slot_hours = max((demand_end - demand_start).total_seconds() / 3600, 0.0001)
+                demand_kwh += estimated_kwh * (overlap_hours / demand_slot_hours)
+
+            solar_kwh = 0.0
+            for solar_window in solar_windows:
+                overlap_hours = self._overlap_hours(window.start, window.end, solar_window.start, solar_window.end)
+                if overlap_hours <= 0:
+                    continue
+                solar_slot_hours = max((solar_window.end - solar_window.start).total_seconds() / 3600, 0.0001)
+                solar_kwh += float(solar_window.forecast_kwh) * (overlap_hours / solar_slot_hours)
             net_solar_kwh = round(solar_kwh - demand_kwh, 3)
             slots.append(
                 {
@@ -1496,6 +1512,42 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
 
         return slots
+
+    def _build_battery_switch_windows(
+        self,
+        *,
+        attributes: dict[str, Any],
+        current_price: float | None,
+        price_resolution: str,
+        include_past: bool = False,
+    ) -> list[PlannerWindow]:
+        raw_windows = self._extract_price_windows(
+            attributes,
+            current_price,
+            "__battery_switch__",
+            include_past=include_past,
+        )
+        if not raw_windows:
+            return []
+        if price_resolution != PRICE_RESOLUTION_HOURLY:
+            return raw_windows
+
+        hourly_windows = self._aggregate_price_windows_to_hourly(raw_windows)
+        hourly_price_by_start = {
+            window.start: window.price
+            for window in hourly_windows
+        }
+        switch_windows: list[PlannerWindow] = []
+        for window in raw_windows:
+            hour_start = window.start.replace(minute=0, second=0, microsecond=0)
+            switch_windows.append(
+                PlannerWindow(
+                    start=window.start,
+                    end=window.end,
+                    price=hourly_price_by_start.get(hour_start, window.price),
+                )
+            )
+        return switch_windows
 
     def _select_contiguous_charge_block(
         self,
@@ -1660,20 +1712,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         max_discharge_kw: float,
     ) -> tuple[list[dict[str, str | float]], str]:
         solar_charge_starts = {
-            dt_util.parse_datetime(str(window["start"])): min(
-                max_charge_kw,
-                float(window.get("usable_hours", 0.0)) * max_charge_kw,
-            )
+            parsed_start: {
+                "end": parsed_end,
+                "usable_hours": float(window.get("usable_hours", 0.0)),
+                "charge_kwh": min(max_charge_kw, float(window.get("usable_hours", 0.0)) * max_charge_kw),
+            }
             for window in planned_solar_charge_windows
-            if dt_util.parse_datetime(str(window["start"])) is not None
+            if (parsed_start := dt_util.parse_datetime(str(window["start"]))) is not None
+            and (parsed_end := dt_util.parse_datetime(str(window["end"]))) is not None
         }
         grid_charge_starts = {
-            dt_util.parse_datetime(str(window["start"])): min(
-                max_charge_kw,
-                float(window.get("usable_hours", 0.0)) * max_charge_kw,
-            )
+            parsed_start: {
+                "end": parsed_end,
+                "usable_hours": float(window.get("usable_hours", 0.0)),
+                "charge_kwh": min(max_charge_kw, float(window.get("usable_hours", 0.0)) * max_charge_kw),
+            }
             for window in planned_grid_charge_windows
-            if dt_util.parse_datetime(str(window["start"])) is not None
+            if (parsed_start := dt_util.parse_datetime(str(window["start"]))) is not None
+            and (parsed_end := dt_util.parse_datetime(str(window["end"]))) is not None
         }
 
         future_charge_starts = sorted(
@@ -1690,45 +1746,51 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot = slots[slot_index]
             slot_start = slot["start"]
             if slot_start in solar_charge_starts:
+                charge_window = solar_charge_starts[slot_start]
                 mode = "laden_met_zonne_energie"
                 sim_usable_energy_kwh = min(
                     usable_capacity_kwh,
-                    sim_usable_energy_kwh + float(solar_charge_starts[slot_start]),
+                    sim_usable_energy_kwh + float(charge_window["charge_kwh"]),
                 )
                 last_charge_mode = mode
-                if slot["start"] <= now < slot["end"]:
+                charge_end = charge_window["end"]
+                if slot["start"] <= now < charge_end:
                     current_mode = mode
                 hourly_modes.append(
                     {
                         "start": slot["start"].isoformat(),
-                        "end": slot["end"].isoformat(),
+                        "end": charge_end.isoformat(),
                         "price": round(float(slot["price"]), 6),
-                        "usable_hours": round(float(slot["hours"]), 3),
+                        "usable_hours": round(float(charge_window["usable_hours"]), 3),
                         "mode": mode,
                     }
                 )
-                slot_index += 1
+                while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
+                    slot_index += 1
                 continue
 
             if slot_start in grid_charge_starts:
+                charge_window = grid_charge_starts[slot_start]
                 mode = "laden_van_net"
                 sim_usable_energy_kwh = min(
                     usable_capacity_kwh,
-                    sim_usable_energy_kwh + float(grid_charge_starts[slot_start]),
+                    sim_usable_energy_kwh + float(charge_window["charge_kwh"]),
                 )
                 last_charge_mode = mode
-                if slot["start"] <= now < slot["end"]:
+                charge_end = charge_window["end"]
+                if slot["start"] <= now < charge_end:
                     current_mode = mode
                 hourly_modes.append(
                     {
                         "start": slot["start"].isoformat(),
-                        "end": slot["end"].isoformat(),
+                        "end": charge_end.isoformat(),
                         "price": round(float(slot["price"]), 6),
-                        "usable_hours": round(float(slot["hours"]), 3),
+                        "usable_hours": round(float(charge_window["usable_hours"]), 3),
                         "mode": mode,
                     }
                 )
-                slot_index += 1
+                while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
+                    slot_index += 1
                 continue
 
             segment_end_index = slot_index
