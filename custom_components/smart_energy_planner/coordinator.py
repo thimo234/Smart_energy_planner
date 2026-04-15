@@ -601,7 +601,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "reference_outdoor_temp_c": outdoor_temperature_c,
             }
 
-        cooldown_delta = max(thermostat_setpoint_c - thermostat_eco_setpoint_c, 0.1)
+        cooldown_delta = max(room_temperature_c - thermostat_eco_setpoint_c, 0.1)
         estimated_rate, hours_to_eco = self._estimate_cooling_profile_from_model(
             outdoor_temperature_c=outdoor_temperature_c,
             room_temperature_c=room_temperature_c,
