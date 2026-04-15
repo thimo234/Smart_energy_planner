@@ -625,7 +625,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
         cooling_model = runtime_state.get("cooling_model", {})
         learned_factor = _coerce_float(cooling_model.get("rolling_cooling_factor"))
-        learned_samples = int(_coerce_float(cooling_model.get("sample_count"), default=0.0) or 0)
+        learned_samples = int(_coerce_float(cooling_model.get("eco_sample_count"), default=0.0) or 0)
         delta_temp = max(room_temperature_c - outdoor_temperature_c, 1.0)
 
         fallback_hours = min(12.0, max(1.0, delta_temp * 0.3))

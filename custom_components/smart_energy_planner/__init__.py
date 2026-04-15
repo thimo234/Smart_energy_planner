@@ -361,7 +361,7 @@ async def _async_update_cooling_model(
 
     elapsed_hours = (now - start_time).total_seconds() / 3600
     cooling_drop = start_room_temp - current_temperature
-    if elapsed_hours <= 0 or cooling_drop <= 0:
+    if elapsed_hours <= 0 or cooling_drop < 0.5:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
@@ -374,6 +374,7 @@ async def _async_update_cooling_model(
     cooling_model = runtime_state.setdefault("cooling_model", {})
     previous_factor = cooling_model.get("rolling_cooling_factor")
     previous_samples = int(cooling_model.get("sample_count", 0) or 0)
+    previous_eco_samples = int(cooling_model.get("eco_sample_count", 0) or 0)
     learned_factor = (
         normalized_cooling_rate
         if previous_factor is None
@@ -381,6 +382,7 @@ async def _async_update_cooling_model(
     )
     cooling_model["rolling_cooling_factor"] = round(max(0.001, learned_factor), 5)
     cooling_model["sample_count"] = previous_samples + 1
+    cooling_model["eco_sample_count"] = previous_eco_samples + 1
     cooling_model["last_delta_temp_c"] = round(average_delta_temp, 3)
     cooling_model["last_observed_drop_c_per_hour"] = round(cooling_rate, 4)
     cooling_model["last_eco_duration_hours"] = round(elapsed_hours, 3)
