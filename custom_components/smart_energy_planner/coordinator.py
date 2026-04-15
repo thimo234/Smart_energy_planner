@@ -602,30 +602,42 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             }
 
         cooldown_delta = max(thermostat_setpoint_c - thermostat_eco_setpoint_c, 0.1)
-        estimated_rate = self._estimate_cooling_rate_from_model(outdoor_temperature_c, room_temperature_c)
+        estimated_rate, hours_to_eco = self._estimate_cooling_profile_from_model(
+            outdoor_temperature_c=outdoor_temperature_c,
+            room_temperature_c=room_temperature_c,
+            cooldown_delta_c=cooldown_delta,
+        )
         reference_outdoor = outdoor_temperature_c
 
-        hours_to_eco = round(min(12.0, max(1.0, cooldown_delta / estimated_rate)), 2)
         return {
-            "hours_to_eco": hours_to_eco,
+            "hours_to_eco": round(hours_to_eco, 2),
             "cooling_rate_c_per_hour": round(estimated_rate, 3),
             "reference_outdoor_temp_c": reference_outdoor,
         }
 
-    def _estimate_cooling_rate_from_model(
+    def _estimate_cooling_profile_from_model(
         self,
+        *,
         outdoor_temperature_c: float,
         room_temperature_c: float,
-    ) -> float:
+        cooldown_delta_c: float,
+    ) -> tuple[float, float]:
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
         cooling_model = runtime_state.get("cooling_model", {})
         learned_factor = _coerce_float(cooling_model.get("rolling_cooling_factor"))
-        if learned_factor is not None:
-            delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            return max(0.05, learned_factor * delta_temp)
+        learned_samples = int(_coerce_float(cooling_model.get("sample_count"), default=0.0) or 0)
+        delta_temp = max(room_temperature_c - outdoor_temperature_c, 1.0)
 
-        temp_delta_now = max(room_temperature_c - outdoor_temperature_c, 1.0)
-        return max(0.1, temp_delta_now * 0.03)
+        fallback_hours = min(12.0, max(1.0, delta_temp * 0.3))
+        fallback_rate = max(0.05, cooldown_delta_c / fallback_hours)
+
+        if learned_factor is not None and learned_samples >= 3:
+            delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
+            learned_rate = max(0.05, learned_factor * delta_temp)
+            learned_hours = min(12.0, max(1.0, cooldown_delta_c / learned_rate))
+            return learned_rate, learned_hours
+
+        return fallback_rate, fallback_hours
 
     def _select_most_expensive_window_block(
         self,
