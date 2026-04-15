@@ -628,8 +628,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         learned_samples = int(_coerce_float(cooling_model.get("eco_sample_count"), default=0.0) or 0)
         delta_temp = max(room_temperature_c - outdoor_temperature_c, 1.0)
 
-        fallback_hours = min(12.0, max(1.0, delta_temp * 0.3))
-        fallback_rate = max(0.05, cooldown_delta_c / fallback_hours)
+        # Fallback to a simple linear cooling-rate model until enough complete
+        # eco sessions have been learned. Lower outdoor temperature increases
+        # the cooling rate, while a lower eco target increases the required
+        # cooldown duration.
+        fallback_rate = max(0.05, delta_temp * 0.1)
+        fallback_hours = min(12.0, max(1.0, cooldown_delta_c / fallback_rate))
 
         if learned_factor is not None and learned_samples >= 3:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
