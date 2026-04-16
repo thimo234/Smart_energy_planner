@@ -24,6 +24,7 @@ from .const import (
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
+    CONF_EXPORT_PRICE_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
@@ -164,6 +165,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         try:
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             price_sensor = self._config[CONF_PRICE_SENSOR]
+            export_price_sensor = self._config.get(CONF_EXPORT_PRICE_SENSOR)
             solar_sensor = self._config.get(CONF_SOLCAST_TODAY_SENSOR)
             solar_tomorrow_sensor = self._config.get(CONF_SOLCAST_TOMORROW_SENSOR)
             temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
@@ -174,6 +176,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_soc_sensor = self._config.get(CONF_BATTERY_SOC_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
+            export_price_state = self.hass.states.get(export_price_sensor) if export_price_sensor else None
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
             solar_tomorrow_state = self.hass.states.get(solar_tomorrow_sensor) if solar_tomorrow_sensor else None
             temperature_state = self.hass.states.get(temperature_sensor) if temperature_sensor else None
@@ -188,6 +191,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             source_status = self._build_source_status(
                 price_sensor=price_sensor,
                 price_state=price_state,
+                export_price_sensor=export_price_sensor,
+                export_price_state=export_price_state,
                 solar_sensor=solar_sensor,
                 solar_state=solar_state,
                 solar_tomorrow_sensor=solar_tomorrow_sensor,
@@ -209,6 +214,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             source_errors = self._collect_source_errors(source_status)
 
             current_price = _coerce_float(price_state.state) if price_state else None
+            export_current_price = (
+                _coerce_float(export_price_state.state)
+                if export_price_state
+                else current_price
+            )
             price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
             windows = self._extract_price_windows(
                 price_state.attributes if price_state else {},
@@ -221,6 +231,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_resolution,
                 include_past=True,
             )
+            export_windows = self._extract_price_windows(
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_current_price,
+                price_resolution,
+            )
+            all_export_windows = self._extract_price_windows(
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_current_price,
+                price_resolution,
+                include_past=True,
+            )
             battery_switch_windows = self._build_battery_switch_windows(
                 attributes=price_state.attributes if price_state else {},
                 current_price=current_price,
@@ -230,6 +251,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             price_average = self._extract_price_average(
                 price_state.attributes if price_state else {},
                 windows,
+            )
+            export_price_average = self._extract_price_average(
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_windows,
             )
 
             if not price_state and planner_kind == PLANNER_KIND_THERMOSTAT:
@@ -357,8 +382,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planner_kind=planner_kind,
                 windows=windows,
                 all_windows=all_windows,
+                export_windows=export_windows,
+                all_export_windows=all_export_windows,
                 battery_switch_windows=battery_switch_windows,
                 price_average=price_average,
+                export_price_average=export_price_average,
                 current_price=current_price,
                 solar_forecast_kwh=solar_forecast,
                 solar_windows=solar_windows,
@@ -471,6 +499,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         price_sensor: str,
         price_state,
+        export_price_sensor: str | None,
+        export_price_state,
         solar_sensor: str,
         solar_state,
         solar_tomorrow_sensor: str | None,
@@ -492,6 +522,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if planner_kind == PLANNER_KIND_BATTERY:
             return {
                 "price_sensor": self._state_status(price_sensor, price_state),
+                "export_price_sensor": self._state_status(export_price_sensor, export_price_state),
                 "solcast_today_sensor": self._state_status(solar_sensor, solar_state),
                 "solcast_tomorrow_sensor": self._state_status(solar_tomorrow_sensor, solar_tomorrow_state),
                 "total_energy_sensor": self._state_status(total_energy_sensor, total_energy_state),
@@ -529,6 +560,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if planner_kind == PLANNER_KIND_BATTERY:
             return {
                 "price_sensor": "unknown",
+                "export_price_sensor": "unknown",
                 "solcast_today_sensor": "unknown",
                 "solcast_tomorrow_sensor": "unknown",
                 "total_energy_sensor": "unknown",
@@ -937,8 +969,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planner_kind: str,
         windows: list[PlannerWindow],
         all_windows: list[PlannerWindow],
+        export_windows: list[PlannerWindow],
+        all_export_windows: list[PlannerWindow],
         battery_switch_windows: list[PlannerWindow],
         price_average: float | None,
+        export_price_average: float | None,
         current_price: float | None,
         solar_forecast_kwh: float,
         solar_windows: list[SolarWindow],
@@ -1117,6 +1152,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         target_battery_full_by_sunset = battery_enabled and remaining_usable_capacity_kwh > 0
         energy_balance_slots = self._build_energy_balance_slots(
             price_windows=battery_switch_windows or all_windows,
+            export_price_windows=all_export_windows or export_windows or all_windows,
             solar_windows=all_solar_windows,
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
@@ -1186,6 +1222,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             initial_usable_energy_kwh=battery_energy_available_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
+            average_export_price=export_price_average if export_price_average is not None else average_price,
             battery_min_profit=battery_min_profit,
             max_charge_kw=max_charge,
             max_discharge_kw=max_discharge,
@@ -1535,6 +1572,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         *,
         price_windows: list[PlannerWindow],
+        export_price_windows: list[PlannerWindow],
         solar_windows: list[SolarWindow],
         hourly_demand: list[dict[str, str | float]],
         horizon_start: datetime,
@@ -1565,11 +1603,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_slot_hours = max((solar_window.end - solar_window.start).total_seconds() / 3600, 0.0001)
                 solar_kwh += float(solar_window.forecast_kwh) * (overlap_hours / solar_slot_hours)
             net_solar_kwh = round(solar_kwh - demand_kwh, 3)
+            export_price = self._match_window_price(
+                start=window.start,
+                end=window.end,
+                windows=export_price_windows,
+                default=window.price,
+            )
             slots.append(
                 {
                     "start": window.start,
                     "end": window.end,
                     "price": window.price,
+                    "import_price": window.price,
+                    "export_price": export_price,
                     "hours": slot_hours,
                     "solar_kwh": round(solar_kwh, 3),
                     "demand_kwh": round(demand_kwh, 3),
@@ -1578,6 +1624,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
 
         return slots
+
+    def _match_window_price(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        windows: list[PlannerWindow],
+        default: float,
+    ) -> float:
+        weighted_price = 0.0
+        weighted_hours = 0.0
+        for window in windows:
+            overlap_hours = self._overlap_hours(start, end, window.start, window.end)
+            if overlap_hours <= 0:
+                continue
+            weighted_price += float(window.price) * overlap_hours
+            weighted_hours += overlap_hours
+
+        if weighted_hours <= 0:
+            return round(default, 6)
+        return round(weighted_price / weighted_hours, 6)
 
     def _build_battery_switch_windows(
         self,
@@ -1651,7 +1718,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     break
                 block.append(slot)
                 total_charge_kwh += float(slot["charge_potential_kwh"])
-                weighted_price += float(slot["price"]) * float(slot["charge_potential_kwh"])
+                weighted_price += float(slot["export_price"]) * float(slot["charge_potential_kwh"])
                 previous_end = slot["end"]
                 if total_charge_kwh >= target_kwh:
                     break
@@ -1726,7 +1793,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     {
                         "start": block_slot["start"].isoformat(),
                         "end": block_slot["end"].isoformat(),
-                        "price": round(float(block_slot["price"]), 6),
+                        "price": round(float(block_slot["export_price"]), 6),
                         "usable_hours": round(charge_kwh / max_charge_kw, 3),
                     }
                 )
@@ -1741,10 +1808,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot
                 for slot in future_day_slots
                 if slot["start"] not in charge_block_starts
-                and (next_peak_price := self._calculate_next_battery_peak_price(future_day_slots, slot["end"])) is not None
-                and next_peak_price - float(slot["price"]) >= battery_min_profit
+                and (
+                    next_peak_price := self._calculate_next_battery_peak_price(
+                        future_day_slots,
+                        slot["end"],
+                        price_key="import_price",
+                    )
+                ) is not None
+                and next_peak_price - float(slot["import_price"]) >= battery_min_profit
             ]
-            for slot in sorted(remaining_slots, key=lambda item: (float(item["price"]), item["start"])):
+            for slot in sorted(remaining_slots, key=lambda item: (float(item["import_price"]), item["start"])):
                 if missing_kwh <= 0:
                     break
                 slot_charge_kwh = min(max_charge_kw * float(slot["hours"]), missing_kwh)
@@ -1754,7 +1827,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     {
                         "start": slot["start"].isoformat(),
                         "end": slot["end"].isoformat(),
-                        "price": round(float(slot["price"]), 6),
+                        "price": round(float(slot["import_price"]), 6),
                         "usable_hours": round(slot_charge_kwh / max_charge_kw, 3),
                     }
                 )
@@ -1769,12 +1842,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         slots: list[dict[str, Any]],
         after: datetime,
+        *,
+        price_key: str = "price",
     ) -> float | None:
         trailing_slots = [slot for slot in slots if slot["start"] >= after]
         if len(trailing_slots) < 2:
             return None
 
-        prices = [float(slot["price"]) for slot in trailing_slots]
+        prices = [float(slot[price_key]) for slot in trailing_slots]
         index = 0
         while index + 1 < len(prices) and prices[index + 1] <= prices[index]:
             index += 1
@@ -1796,6 +1871,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         initial_usable_energy_kwh: float,
         usable_capacity_kwh: float,
         average_price: float,
+        average_export_price: float,
         battery_min_profit: float,
         max_charge_kw: float,
         max_discharge_kw: float,
@@ -1853,7 +1929,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     {
                         "start": slot["start"].isoformat(),
                         "end": charge_end.isoformat(),
-                        "price": round(float(slot["price"]), 6),
+                        "price": round(float(slot["export_price"]), 6),
                         "usable_hours": round(float(charge_window["usable_hours"]), 3),
                         "mode": mode,
                     }
@@ -1877,7 +1953,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     {
                         "start": slot["start"].isoformat(),
                         "end": charge_end.isoformat(),
-                        "price": round(float(slot["price"]), 6),
+                        "price": round(float(slot["import_price"]), 6),
                         "usable_hours": round(float(charge_window["usable_hours"]), 3),
                         "mode": mode,
                     }
@@ -1958,7 +2034,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         exportable_kwh > 0
                         and float(segment_slot["net_solar_kwh"]) >= 0
                         and segment_end_index < len(slots)
-                        and float(segment_slot["price"]) >= average_price + battery_min_profit
+                        and float(segment_slot["export_price"]) >= average_export_price + battery_min_profit
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
@@ -1974,7 +2050,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     {
                         "start": segment_slot["start"].isoformat(),
                         "end": segment_slot["end"].isoformat(),
-                        "price": round(float(segment_slot["price"]), 6),
+                        "price": round(float(segment_slot["import_price"]), 6),
                         "usable_hours": round(float(segment_slot["hours"]), 3),
                         "mode": mode,
                     }
@@ -2050,7 +2126,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             export_slots.append(
                 {
                     "start": slot["start"],
-                    "price": float(slot["price"]),
+                    "price": float(slot["export_price"]),
                     "capacity_kwh": export_capacity_kwh,
                 }
             )
@@ -2092,7 +2168,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             deficit_slots.append(
                 {
                     "start": slot["start"],
-                    "price": float(slot["price"]),
+                    "price": float(slot["import_price"]),
                     "required_kwh": deficit_kwh,
                 }
             )

@@ -13,6 +13,7 @@
         "description": "Configure the sensors and optional settings for the selected planner.",
         "data": {
           "price_sensor": "Energy price sensor",
+          "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "heating_lookback_days": "Historical days",
           "battery_soc_sensor": "Battery state of charge sensor",
@@ -47,6 +48,7 @@
         "description": "Update the sensors and settings for this planner.",
         "data": {
           "price_sensor": "Energy price sensor",
+          "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "heating_lookback_days": "Historical days",
           "battery_soc_sensor": "Battery state of charge sensor",

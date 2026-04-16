@@ -13,6 +13,7 @@
         "description": "Configureer de sensoren en instellingen voor de gekozen planner.",
         "data": {
           "price_sensor": "Energieprijs sensor",
+          "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "heating_lookback_days": "Aantal historische dagen",
           "battery_soc_sensor": "Accu laadstatus sensor",
@@ -47,6 +48,7 @@
         "description": "Werk de sensoren en instellingen van deze planner bij.",
         "data": {
           "price_sensor": "Energieprijs sensor",
+          "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "heating_lookback_days": "Aantal historische dagen",
           "battery_soc_sensor": "Accu laadstatus sensor",
