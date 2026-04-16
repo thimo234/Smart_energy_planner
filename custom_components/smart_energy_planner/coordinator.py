@@ -839,7 +839,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         eco_windows: list[dict[str, datetime | float]] = []
         for group in grouped_windows:
             peak_window = max(group, key=lambda item: item.price)
-            eco_start = max(group[0].start, now)
+            peak_start = self._calculate_thermostat_peak_start(
+                future_windows=future_windows,
+                peak_group=group,
+                now=now,
+            )
+            eco_start = peak_start
             peak_threshold_price = self._calculate_thermostat_peak_end_threshold(
                 future_windows=future_windows,
                 peak_group=group,
@@ -879,6 +884,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             eco_windows.append(
                 {
                     "start": eco_start,
+                    "peak_start": peak_start,
                     "end": eco_end,
                     "average_price": average_window_price,
                 }
@@ -896,6 +902,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             previous = merged_windows[-1]
             if window["start"] <= previous["end"]:
                 previous["end"] = max(previous["end"], window["end"])
+                previous["peak_start"] = min(previous.get("peak_start", previous["start"]), window.get("peak_start", window["start"]))
                 previous["average_price"] = max(
                     float(previous["average_price"]),
                     float(window["average_price"]),
@@ -904,6 +911,44 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 merged_windows.append(window)
 
         return merged_windows
+
+    def _calculate_thermostat_peak_start(
+        self,
+        *,
+        future_windows: list[PlannerWindow],
+        peak_group: list[PlannerWindow],
+        now: datetime,
+    ) -> datetime:
+        peak_max_price = max(float(window.price) for window in peak_group)
+        leading_windows = [
+            window
+            for window in future_windows
+            if window.end <= peak_group[0].start
+        ]
+        if not leading_windows:
+            return max(peak_group[0].start, now)
+
+        valley_slice = [leading_windows[-1]]
+        valley_min_price = float(leading_windows[-1].price)
+        for window in reversed(leading_windows[:-1]):
+            window_price = float(window.price)
+            if window_price <= valley_min_price:
+                valley_slice.append(window)
+                valley_min_price = window_price
+                continue
+            break
+
+        start_threshold_price = (valley_min_price + peak_max_price) / 2.0
+        valley_start = min(window.start for window in valley_slice)
+        threshold_start = next(
+            (
+                window.start
+                for window in future_windows
+                if window.start >= valley_start and window.price >= start_threshold_price
+            ),
+            peak_group[0].start,
+        )
+        return max(threshold_start, now)
 
     def _calculate_thermostat_peak_end_threshold(
         self,
@@ -1070,8 +1115,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         preheat_windows = [
             {
-                "start": max(window["start"] - timedelta(minutes=preheat_minutes), now.replace(hour=0, minute=0, second=0, microsecond=0)),
-                "end": window["start"],
+                "start": max(
+                    window.get("peak_start", window["start"]) - timedelta(minutes=preheat_minutes),
+                    now.replace(hour=0, minute=0, second=0, microsecond=0),
+                ),
+                "end": window.get("peak_start", window["start"]),
                 "average_price": window["average_price"],
             }
             for window in eco_windows
