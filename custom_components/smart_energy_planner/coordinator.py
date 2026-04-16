@@ -1196,10 +1196,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         preheat_windows = [
             {
                 "start": max(
-                    window.get("peak_start", window["start"]) - timedelta(minutes=preheat_minutes),
+                    window["start"] - timedelta(minutes=preheat_minutes),
                     now.replace(hour=0, minute=0, second=0, microsecond=0),
                 ),
-                "end": window.get("peak_start", window["start"]),
+                "end": window["start"],
                 "average_price": window["average_price"],
             }
             for window in eco_windows
