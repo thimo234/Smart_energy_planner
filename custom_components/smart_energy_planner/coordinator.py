@@ -803,14 +803,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         windows: list[PlannerWindow],
         now: datetime,
+        cooldown_hours: float,
+        average_price: float,
         expensive_threshold: float,
     ) -> list[dict[str, datetime | float]]:
-        """Plan eco windows around each above-average price peak.
+        """Plan eco windows by expanding around the local peak price."""
+        if cooldown_hours <= 0:
+            return []
 
-        Eco is only active during the truly expensive peak windows. The peak
-        group is determined from the expensive threshold, and the end can be
-        further constrained by the peak-to-valley normalization threshold.
-        """
         future_windows = [window for window in windows if window.end > now]
         if not future_windows:
             return []
@@ -839,27 +839,46 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         eco_windows: list[dict[str, datetime | float]] = []
         for group in grouped_windows:
             peak_window = max(group, key=lambda item: item.price)
-            peak_start = self._calculate_thermostat_peak_start(
-                future_windows=future_windows,
-                peak_group=group,
-                now=now,
-            )
-            eco_start = peak_start
-            peak_threshold_price = self._calculate_thermostat_peak_end_threshold(
-                future_windows=future_windows,
-                peak_group=group,
-            )
-            normalized_at = next(
+            peak_index = future_windows.index(peak_window)
+            selected_indices = {peak_index}
+            total_hours = max((peak_window.end - max(peak_window.start, now)).total_seconds() / 3600, 0.0)
+            left_index = peak_index - 1
+            right_index = peak_index + 1
+
+            while total_hours < cooldown_hours:
+                left_window = future_windows[left_index] if left_index >= 0 else None
+                right_window = future_windows[right_index] if right_index < len(future_windows) else None
+                if left_window is None and right_window is None:
+                    break
+
+                choose_left = False
+                if left_window is not None and right_window is not None:
+                    choose_left = float(left_window.price) >= float(right_window.price)
+                elif left_window is not None:
+                    choose_left = True
+
+                chosen_index = left_index if choose_left else right_index
+                chosen_window = future_windows[chosen_index]
+                selected_indices.add(chosen_index)
+                total_hours += max((chosen_window.end - max(chosen_window.start, now)).total_seconds() / 3600, 0.0)
+                if choose_left:
+                    left_index -= 1
+                else:
+                    right_index += 1
+
+            selected_windows = [future_windows[index] for index in sorted(selected_indices)]
+            eco_start = max(selected_windows[0].start, now)
+            eco_end = selected_windows[-1].end
+            below_average_at = next(
                 (
                     window.start
                     for window in future_windows
-                    if window.start >= peak_window.end and window.price <= peak_threshold_price
+                    if window.start >= peak_window.end and window.price < average_price
                 ),
                 None,
             )
-            eco_end = group[-1].end
-            if normalized_at is not None:
-                eco_end = min(eco_end, normalized_at)
+            if below_average_at is not None:
+                eco_end = min(eco_end, below_average_at)
             if eco_end <= eco_start:
                 continue
 
@@ -884,7 +903,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             eco_windows.append(
                 {
                     "start": eco_start,
-                    "peak_start": peak_start,
+                    "peak_start": peak_window.start,
                     "end": eco_end,
                     "average_price": average_window_price,
                 }
@@ -911,71 +930,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 merged_windows.append(window)
 
         return merged_windows
-
-    def _calculate_thermostat_peak_start(
-        self,
-        *,
-        future_windows: list[PlannerWindow],
-        peak_group: list[PlannerWindow],
-        now: datetime,
-    ) -> datetime:
-        peak_max_price = max(float(window.price) for window in peak_group)
-        leading_windows = [
-            window
-            for window in future_windows
-            if window.end <= peak_group[0].start
-        ]
-        if not leading_windows:
-            return max(peak_group[0].start, now)
-
-        valley_slice = [leading_windows[-1]]
-        valley_min_price = float(leading_windows[-1].price)
-        for window in reversed(leading_windows[:-1]):
-            window_price = float(window.price)
-            if window_price <= valley_min_price:
-                valley_slice.append(window)
-                valley_min_price = window_price
-                continue
-            break
-
-        start_threshold_price = (valley_min_price + peak_max_price) / 2.0
-        valley_start = min(window.start for window in valley_slice)
-        threshold_start = next(
-            (
-                window.start
-                for window in future_windows
-                if window.start >= valley_start and window.price >= start_threshold_price
-            ),
-            peak_group[0].start,
-        )
-        return max(threshold_start, now)
-
-    def _calculate_thermostat_peak_end_threshold(
-        self,
-        *,
-        future_windows: list[PlannerWindow],
-        peak_group: list[PlannerWindow],
-    ) -> float:
-        peak_max_price = max(float(window.price) for window in peak_group)
-        trailing_windows = [
-            window
-            for window in future_windows
-            if window.start >= peak_group[-1].end
-        ]
-        if not trailing_windows:
-            return peak_max_price
-
-        valley_windows: list[PlannerWindow] = [trailing_windows[0]]
-        valley_min_price = float(trailing_windows[0].price)
-        for window in trailing_windows[1:]:
-            window_price = float(window.price)
-            if window_price <= valley_min_price:
-                valley_windows.append(window)
-                valley_min_price = window_price
-                continue
-            break
-
-        return (peak_max_price + valley_min_price) / 2.0
 
     def _build_plan(
         self,
@@ -1092,6 +1046,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 eco_windows = self._select_thermostat_peak_eco_windows(
                     windows=windows,
                     now=now,
+                    cooldown_hours=eco_duration_hours,
+                    average_price=average_price,
                     expensive_threshold=expensive_threshold,
                 )
             else:
@@ -1303,7 +1259,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"preheating starts about {preheat_minutes} minute(s) before each eco window"
                 )
             rationale_parts.append(
-                "each eco window now targets only the real expensive peak block, while preheat covers the lead-up and eco ends when the peak is over"
+                "each eco window is now built around the most expensive moment of the next peak by adding the most expensive neighboring hours until the cooldown duration is covered, and it ends once the price drops below the daily average"
             )
 
         battery_strategy = "accu_uit"
