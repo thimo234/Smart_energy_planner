@@ -490,6 +490,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_high_price_window_price=None,
             room_temperature_c=None,
             thermostat_setpoint_c=None,
+            thermostat_cool_setpoint_c=None,
+            thermostat_preheat_setpoint_c=None,
             thermostat_eco_setpoint_c=None,
             room_cooling_hours_to_eco=None,
             room_cooling_rate_c_per_hour=None,
