@@ -1732,8 +1732,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and (parsed_end := dt_util.parse_datetime(str(window["end"]))) is not None
         }
 
+        charge_starts = {
+            **solar_charge_starts,
+            **grid_charge_starts,
+        }
         future_charge_starts = sorted(
-            [start for start in [*solar_charge_starts.keys(), *grid_charge_starts.keys()] if start is not None]
+            [start for start in charge_starts.keys() if start is not None]
         )
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
@@ -1812,6 +1816,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 available_energy_kwh=sim_usable_energy_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
+            next_charge_window = None
+            if segment_end_index < len(slots):
+                next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
+            forced_export_kwh = self._plan_segment_export_kwh(
+                slots=segment_slots,
+                planned_discharge_kwh=planned_discharge_kwh,
+                available_energy_kwh=sim_usable_energy_kwh,
+                room_needed_for_next_charge_kwh=float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0,
+                usable_capacity_kwh=usable_capacity_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
 
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
@@ -1821,6 +1836,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     for other in segment_slots
                     if other["start"] > segment_slot_start
                 )
+                segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
 
                 mode = (
                     last_charge_mode
@@ -1833,6 +1849,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     sim_usable_energy_kwh = max(
                         0.0,
                         sim_usable_energy_kwh - min(segment_discharge_kwh, sim_usable_energy_kwh),
+                    )
+                elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
+                    mode = "ontladen_naar_net"
+                    last_charge_mode = "accu_uit"
+                    sim_usable_energy_kwh = max(
+                        0.0,
+                        sim_usable_energy_kwh - min(segment_export_kwh, sim_usable_energy_kwh),
                     )
                 else:
                     exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
@@ -1866,6 +1889,69 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot_index = segment_end_index
 
         return self._merge_mode_windows(hourly_modes), current_mode
+
+    def _plan_segment_export_kwh(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        planned_discharge_kwh: dict[datetime, float],
+        available_energy_kwh: float,
+        room_needed_for_next_charge_kwh: float,
+        usable_capacity_kwh: float,
+        max_discharge_kw: float,
+    ) -> dict[datetime, float]:
+        if (
+            available_energy_kwh <= 0
+            or room_needed_for_next_charge_kwh <= 0
+            or max_discharge_kw <= 0
+            or not slots
+        ):
+            return {}
+
+        total_planned_discharge_kwh = sum(float(value) for value in planned_discharge_kwh.values())
+        target_end_energy_kwh = max(0.0, usable_capacity_kwh - room_needed_for_next_charge_kwh)
+        required_export_kwh = max(
+            0.0,
+            available_energy_kwh - total_planned_discharge_kwh - target_end_energy_kwh,
+        )
+        if required_export_kwh <= 0:
+            return {}
+
+        export_slots: list[dict[str, Any]] = []
+        for slot in slots:
+            if float(planned_discharge_kwh.get(slot["start"], 0.0)) > 0:
+                continue
+            if float(slot["net_solar_kwh"]) < 0:
+                continue
+            export_capacity_kwh = min(
+                max_discharge_kw * float(slot["hours"]),
+                max(0.0, available_energy_kwh),
+            )
+            if export_capacity_kwh <= 0:
+                continue
+            export_slots.append(
+                {
+                    "start": slot["start"],
+                    "price": float(slot["price"]),
+                    "capacity_kwh": export_capacity_kwh,
+                }
+            )
+
+        if not export_slots:
+            return {}
+
+        remaining_export_kwh = required_export_kwh
+        planned_export: dict[datetime, float] = {}
+        for slot in sorted(export_slots, key=lambda item: (-float(item["price"]), item["start"])):
+            if remaining_export_kwh <= 0:
+                break
+            assigned_kwh = min(float(slot["capacity_kwh"]), remaining_export_kwh)
+            if assigned_kwh <= 0:
+                continue
+            planned_export[slot["start"]] = round(assigned_kwh, 6)
+            remaining_export_kwh -= assigned_kwh
+
+        return planned_export
 
     def _plan_segment_discharge_kwh(
         self,
