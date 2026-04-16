@@ -121,6 +121,7 @@ class PlannerResult:
     next_high_price_window_price: float | None
     room_temperature_c: float | None
     thermostat_setpoint_c: float | None
+    thermostat_preheat_setpoint_c: float | None
     thermostat_eco_setpoint_c: float | None
     room_cooling_hours_to_eco: float | None
     room_cooling_rate_c_per_hour: float | None
@@ -259,6 +260,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             room_temperature = _coerce_float(room_temperature_state.state if room_temperature_state else None)
             thermostat_setpoint = self._get_manual_thermostat_setpoint()
+            thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
             thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
             solar_windows.extend(
@@ -337,6 +339,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 room_temperature_c=room_temperature,
                 outdoor_temperature_c=outdoor_temperature,
                 thermostat_setpoint_c=thermostat_setpoint,
+                thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
 
@@ -357,6 +360,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 non_heating_daily_average_kwh=non_heating_daily_average,
                 room_temperature_c=room_temperature,
                 thermostat_setpoint_c=thermostat_setpoint,
+                thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
                 room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
                 room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
@@ -585,6 +589,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if thermostat_setpoint_c is not None:
             eco_temperature = min(eco_temperature, thermostat_setpoint_c)
         return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), eco_temperature)), 2)
+
+    def _get_manual_preheat_temperature(self) -> float:
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        preheat_temperature = _coerce_float(runtime_state.get("manual_preheat_temperature"))
+        if preheat_temperature is None:
+            base_temperature = self._get_manual_thermostat_setpoint()
+            preheat_temperature = min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), base_temperature + 1.0))
+        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), preheat_temperature)), 2)
 
     def _thermostat_min_temp(self) -> float:
         return float(self._config.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
@@ -892,6 +904,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         non_heating_daily_average_kwh: float,
         room_temperature_c: float | None,
         thermostat_setpoint_c: float | None,
+        thermostat_preheat_setpoint_c: float | None,
         thermostat_eco_setpoint_c: float | None,
         room_cooling_hours_to_eco: float | None,
         room_cooling_rate_c_per_hour: float | None,
@@ -1303,6 +1316,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
             thermostat_setpoint_c=thermostat_setpoint_c,
+            thermostat_preheat_setpoint_c=thermostat_preheat_setpoint_c,
             thermostat_eco_setpoint_c=thermostat_eco_setpoint_c,
             room_cooling_hours_to_eco=room_cooling_hours_to_eco,
             room_cooling_rate_c_per_hour=room_cooling_rate_c_per_hour,

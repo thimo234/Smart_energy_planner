@@ -38,15 +38,17 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
+    HVAC_MODE_SMART,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_THERMOSTAT,
+    PRESET_ECO,
+    PRESET_NORMAL,
+    PRESET_PREHEAT,
     RUNTIME_STATE,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
-
-PRESET_NORMAL = "normal"
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
@@ -65,6 +67,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "manual_eco_temperature": persisted_state.get(
             "manual_eco_temperature",
             _default_manual_eco_temperature(merged),
+        ),
+        "manual_preheat_temperature": persisted_state.get(
+            "manual_preheat_temperature",
+            _default_manual_preheat_temperature(merged),
         ),
         "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
         "manual_preset_mode": persisted_state.get("manual_preset_mode", PRESET_NORMAL),
@@ -202,17 +208,32 @@ async def _async_apply_heating_switch_control(
     current_temperature = coordinator.data.room_temperature_c
     base_target = coordinator.data.thermostat_setpoint_c
     eco_target = coordinator.data.thermostat_eco_setpoint_c
-    outdoor_temperature = coordinator.data.cooling_reference_outdoor_temp_c or coordinator.data.room_temperature_c
+    preheat_target = getattr(coordinator.data, "thermostat_preheat_setpoint_c", None)
     hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
     if hvac_mode == HVACMode.OFF:
         if str(switch_state.state).lower() in {"on", "heat", "heating"}:
             await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
             runtime_state["last_switch_change"] = dt_util.now()
         return
-    manual_preset_mode = runtime_state.get("manual_preset_mode", "none")
-    eco_active = manual_preset_mode == "eco" or coordinator.data.heat_pump_strategy == "energy_saving_on"
-    preheat_active = coordinator.data.heat_pump_strategy == "preheating"
-    active_target = eco_target if eco_active else base_target
+    manual_preset_mode = runtime_state.get("manual_preset_mode", PRESET_NORMAL)
+    if hvac_mode == HVAC_MODE_SMART:
+        if coordinator.data.heat_pump_strategy == "preheating":
+            active_preset_mode = PRESET_PREHEAT
+        elif coordinator.data.heat_pump_strategy == "energy_saving_on":
+            active_preset_mode = PRESET_ECO
+        else:
+            active_preset_mode = PRESET_NORMAL
+    elif manual_preset_mode in {PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO}:
+        active_preset_mode = manual_preset_mode
+    else:
+        active_preset_mode = PRESET_NORMAL
+
+    if active_preset_mode == PRESET_PREHEAT:
+        active_target = preheat_target
+    elif active_preset_mode == PRESET_ECO:
+        active_target = eco_target
+    else:
+        active_target = base_target
     if current_temperature is None or active_target is None:
         return
 
@@ -225,15 +246,15 @@ async def _async_apply_heating_switch_control(
         if merged.get(CONF_TEMPERATURE_SENSOR) and coordinator.hass.states.get(merged.get(CONF_TEMPERATURE_SENSOR))
         else None,
         heating_is_on=str(switch_state.state).lower() in {"on", "heat", "heating"},
-        eco_active=eco_active,
+        eco_active=active_preset_mode == PRESET_ECO,
     )
 
     cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
     hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
     min_cycle_minutes = int(merged.get(CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES))
 
-    should_turn_on = preheat_active or current_temperature <= active_target - cold_tolerance
-    should_turn_off = (not preheat_active) and current_temperature >= active_target + hot_tolerance
+    should_turn_on = current_temperature <= active_target - cold_tolerance
+    should_turn_off = current_temperature >= active_target + hot_tolerance
     current_is_on = str(switch_state.state).lower() in {"on", "heat", "heating"}
 
     last_switch_change = runtime_state.get("last_switch_change")
@@ -241,7 +262,7 @@ async def _async_apply_heating_switch_control(
     if last_switch_change is not None:
         cycle_blocked = dt_util.now() - last_switch_change < timedelta(minutes=min_cycle_minutes)
 
-    if should_turn_on and not current_is_on and (preheat_active or not cycle_blocked):
+    if should_turn_on and not current_is_on and not cycle_blocked:
         await _async_call_turn_service(hass, heating_switch_entity, "turn_on")
         runtime_state["last_switch_change"] = dt_util.now()
     elif should_turn_off and current_is_on and not cycle_blocked:
@@ -273,6 +294,13 @@ def _default_manual_eco_temperature(merged: dict[str, Any]) -> float:
     return round(min(max(configured, min_temp), max_temp), 2)
 
 
+def _default_manual_preheat_temperature(merged: dict[str, Any]) -> float:
+    min_temp = float(merged.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
+    max_temp = float(merged.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
+    base = _default_manual_temperature(merged)
+    return round(min(max(base + 1.0, min_temp), max_temp), 2)
+
+
 async def _async_load_runtime_state(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     """Load persisted runtime state for a planner entry."""
     store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
@@ -287,6 +315,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
     data[entry_id] = {
         "manual_temperature": runtime_state.get("manual_temperature"),
         "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
+        "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
         "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
         "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
         "cooling_model": runtime_state.get("cooling_model", {}),

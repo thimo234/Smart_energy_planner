@@ -154,6 +154,7 @@ class ThermostatPlannerSensor(PlannerSensor):
             "next_cheap_window_price": data.next_window_price,
             "room_temperature_c": getattr(data, "room_temperature_c", None),
             "thermostat_setpoint_c": getattr(data, "thermostat_setpoint_c", None),
+            "thermostat_preheat_setpoint_c": getattr(data, "thermostat_preheat_setpoint_c", None),
             "thermostat_eco_setpoint_c": getattr(data, "thermostat_eco_setpoint_c", None),
             "room_cooling_hours_to_eco": getattr(data, "room_cooling_hours_to_eco", None),
             "room_cooling_rate_c_per_hour": getattr(data, "room_cooling_rate_c_per_hour", None),

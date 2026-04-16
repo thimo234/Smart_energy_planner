@@ -7,7 +7,6 @@ from homeassistant.components.climate.const import (
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
-    PRESET_ECO,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
@@ -32,13 +31,15 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
+    HVAC_MODE_SMART,
     PLANNER_KIND_THERMOSTAT,
+    PRESET_ECO,
+    PRESET_NORMAL,
+    PRESET_PREHEAT,
     RUNTIME_STATE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 from .__init__ import _async_save_runtime_state
-
-PRESET_NORMAL = "normal"
 
 
 def _planner_thermostat_name(entry: ConfigEntry) -> str:
@@ -63,7 +64,7 @@ async def async_setup_entry(
 class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], ClimateEntity):
     """A planned thermostat that represents the integration target temperature."""
 
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVAC_MODE_SMART]
     _attr_hvac_mode = HVACMode.HEAT
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
@@ -75,7 +76,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     _attr_has_entity_name = True
     _attr_target_temperature_step = 0.5
     _attr_precision = 0.1
-    _attr_preset_modes = [PRESET_NORMAL, PRESET_ECO]
+    _attr_preset_modes = [PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO]
 
     def __init__(self, coordinator: SmartEnergyPlannerCoordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator)
@@ -115,12 +116,11 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         if self.hvac_mode == HVACMode.OFF:
             return None
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
-        is_eco = self.preset_mode == PRESET_ECO
-        key = "manual_eco_temperature" if is_eco else "manual_temperature"
-        fallback = self.coordinator.data.thermostat_eco_setpoint_c if is_eco else self.coordinator.data.thermostat_setpoint_c
+        key = self._preset_temperature_key(self.preset_mode)
+        fallback = self._preset_fallback_temperature(self.preset_mode)
         manual = runtime_state.get(key, fallback)
         if manual is None:
-            manual = min(self.max_temp, max(self.min_temp, 18.0 if is_eco else 20.0))
+            manual = self._default_target_for_preset(self.preset_mode)
         return round(float(manual), 2)
 
     @property
@@ -128,10 +128,12 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return 0.5
 
     @property
-    def hvac_mode(self) -> HVACMode:
+    def hvac_mode(self) -> HVACMode | str:
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         if runtime_state.get("hvac_mode") == HVACMode.OFF:
             return HVACMode.OFF
+        if runtime_state.get("hvac_mode") == HVAC_MODE_SMART:
+            return HVAC_MODE_SMART
         return HVACMode.HEAT
 
     @property
@@ -139,19 +141,21 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         if self.hvac_mode == HVACMode.OFF:
             return PRESET_NORMAL
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
-        if runtime_state.get("manual_preset_mode") == PRESET_ECO:
-            return PRESET_ECO
-        return PRESET_ECO if self.coordinator.data.heat_pump_strategy == "energy_saving_on" else PRESET_NORMAL
+        if self.hvac_mode == HVAC_MODE_SMART:
+            if self.coordinator.data.heat_pump_strategy == "preheating":
+                return PRESET_PREHEAT
+            if self.coordinator.data.heat_pump_strategy == "energy_saving_on":
+                return PRESET_ECO
+            return PRESET_NORMAL
+        manual_preset_mode = runtime_state.get("manual_preset_mode", PRESET_NORMAL)
+        if manual_preset_mode in (PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO):
+            return str(manual_preset_mode)
+        return PRESET_NORMAL
 
     @property
     def hvac_action(self) -> HVACAction:
         if self.hvac_mode == HVACMode.OFF:
             return HVACAction.OFF
-        if self.preset_mode == PRESET_ECO:
-            if self.current_temperature is not None and self.coordinator.data.thermostat_eco_setpoint_c is not None:
-                if self.current_temperature <= self.coordinator.data.thermostat_eco_setpoint_c:
-                    return HVACAction.HEATING
-            return HVACAction.IDLE
         current = self.current_temperature
         target = self.target_temperature
         if current is None or target is None:
@@ -168,9 +172,9 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     def max_temp(self) -> float:
         return float(self._merged_config.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
         """Keep a simple heat-only thermostat interface."""
-        if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF):
+        if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF, HVAC_MODE_SMART):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["hvac_mode"] = hvac_mode
@@ -186,8 +190,11 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             "status": data.status,
             "planner_kind": data.planner_kind,
             "thermostat_setpoint_c": data.thermostat_setpoint_c,
+            "thermostat_preheat_setpoint_c": getattr(data, "thermostat_preheat_setpoint_c", None),
             "thermostat_eco_setpoint_c": data.thermostat_eco_setpoint_c,
             "effective_target_temperature": self.target_temperature,
+            "active_hvac_mode": self.hvac_mode,
+            "active_preset_mode": self.preset_mode,
             "cold_tolerance": self._merged_config.get(
                 CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE
             ),
@@ -227,7 +234,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Allow Home Assistant to present normal and eco controls."""
-        if preset_mode not in (PRESET_NORMAL, PRESET_ECO):
+        if preset_mode not in (PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["manual_preset_mode"] = preset_mode
@@ -246,7 +253,28 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
             self._entry.entry_id, {}
         )
-        key = "manual_eco_temperature" if self.preset_mode == PRESET_ECO else "manual_temperature"
+        key = self._preset_temperature_key(self.preset_mode)
         runtime_state[key] = round(clamped_temperature, 2)
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         await self.coordinator.async_request_refresh()
+
+    def _preset_temperature_key(self, preset_mode: str) -> str:
+        if preset_mode == PRESET_PREHEAT:
+            return "manual_preheat_temperature"
+        if preset_mode == PRESET_ECO:
+            return "manual_eco_temperature"
+        return "manual_temperature"
+
+    def _preset_fallback_temperature(self, preset_mode: str) -> float | None:
+        if preset_mode == PRESET_PREHEAT:
+            return getattr(self.coordinator.data, "thermostat_preheat_setpoint_c", None)
+        if preset_mode == PRESET_ECO:
+            return self.coordinator.data.thermostat_eco_setpoint_c
+        return self.coordinator.data.thermostat_setpoint_c
+
+    def _default_target_for_preset(self, preset_mode: str) -> float:
+        if preset_mode == PRESET_PREHEAT:
+            return min(self.max_temp, max(self.min_temp, 21.0))
+        if preset_mode == PRESET_ECO:
+            return min(self.max_temp, max(self.min_temp, 18.0))
+        return min(self.max_temp, max(self.min_temp, 20.0))

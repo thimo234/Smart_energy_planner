@@ -39,6 +39,11 @@ CONF_BATTERY_MAX_DISCHARGE_KW = "battery_max_discharge_kw"
 PLANNER_KIND_BATTERY = "battery"
 PLANNER_KIND_THERMOSTAT = "thermostat"
 
+HVAC_MODE_SMART = "smart"
+PRESET_NORMAL = "normal"
+PRESET_PREHEAT = "preheat"
+PRESET_ECO = "eco"
+
 PRICE_RESOLUTION_HOURLY = "hourly"
 PRICE_RESOLUTION_QUARTER_HOURLY = "quarter_hourly"
 
