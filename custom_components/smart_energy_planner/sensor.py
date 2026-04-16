@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
@@ -33,6 +33,12 @@ async def async_setup_entry(
             [
                 BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
                 BatteryPlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
+                BatteryProfitSensor(
+                    coordinator,
+                    entry,
+                    "battery_profit_total_eur",
+                    "Battery Profit Total",
+                ),
                 BatteryPlannerSensor(
                     coordinator,
                     entry,
@@ -136,6 +142,59 @@ class BatteryPlannerSensor(PlannerSensor):
             "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
+        }
+
+
+class BatteryProfitSensor(PlannerSensor):
+    """Cumulative realized battery profit sensor."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+
+    def __init__(
+        self,
+        coordinator: SmartEnergyPlannerCoordinator,
+        entry: ConfigEntry,
+        key: str,
+        name: str,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            entry,
+            key,
+            name,
+            value_key="score",
+            native_unit_of_measurement="EUR",
+        )
+        self._attr_icon = "mdi:cash-multiple"
+
+    @property
+    def native_value(self):
+        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
+        value = runtime_state.get("battery_profit_total_eur", 0.0)
+        try:
+            return round(float(value), 4)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | float | int | None]:
+        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
+        tracked_energy = runtime_state.get("battery_profit_tracked_energy_kwh", 0.0)
+        cost_basis = runtime_state.get("battery_profit_cost_basis_eur", 0.0)
+        average_cost = None
+        try:
+            tracked_energy_float = float(tracked_energy)
+            cost_basis_float = float(cost_basis)
+            if tracked_energy_float > 0:
+                average_cost = round(cost_basis_float / tracked_energy_float, 4)
+        except (TypeError, ValueError, ZeroDivisionError):
+            average_cost = None
+        return super().extra_state_attributes | {
+            "tracked_battery_energy_kwh": tracked_energy,
+            "tracked_cost_basis_eur": cost_basis,
+            "tracked_average_cost_per_kwh": average_cost,
+            "last_tracked_battery_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
+            "last_profit_update": runtime_state.get("battery_profit_last_updated"),
         }
 
 

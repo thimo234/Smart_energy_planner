@@ -84,6 +84,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "cooling_model": persisted_state.get("cooling_model", {}),
         "last_cooling_observation": persisted_state.get("last_cooling_observation"),
         "eco_cooling_session": persisted_state.get("eco_cooling_session"),
+        "battery_profit_total_eur": persisted_state.get("battery_profit_total_eur", 0.0),
+        "battery_profit_cost_basis_eur": persisted_state.get("battery_profit_cost_basis_eur", 0.0),
+        "battery_profit_tracked_energy_kwh": persisted_state.get("battery_profit_tracked_energy_kwh", 0.0),
+        "battery_profit_last_energy_kwh": persisted_state.get("battery_profit_last_energy_kwh"),
+        "battery_profit_last_updated": persisted_state.get("battery_profit_last_updated"),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -350,6 +355,11 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
         "cooling_model": runtime_state.get("cooling_model", {}),
         "last_cooling_observation": runtime_state.get("last_cooling_observation"),
         "eco_cooling_session": runtime_state.get("eco_cooling_session"),
+        "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
+        "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
+        "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
+        "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
+        "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
     }
     await store.async_save(data)
 

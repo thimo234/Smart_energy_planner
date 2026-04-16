@@ -12,6 +12,7 @@ from homeassistant.components.recorder import history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -56,6 +57,8 @@ from .const import (
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     RUNTIME_STATE,
+    STORAGE_KEY,
+    STORAGE_VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -378,7 +381,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
 
-            return self._build_plan(
+            result = self._build_plan(
                 planner_kind=planner_kind,
                 windows=windows,
                 all_windows=all_windows,
@@ -409,6 +412,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status=source_status,
                 source_errors=self._collect_source_errors(source_status),
             )
+            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
+                configured_battery_capacity = float(
+                    self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
+                )
+                battery_total_energy_kwh = round(configured_battery_capacity * (battery_soc_percent / 100), 3)
+                await self._async_update_battery_profit_tracking(
+                    current_battery_energy_kwh=battery_total_energy_kwh,
+                    current_mode=result.battery_strategy,
+                    import_price=current_price,
+                    export_price=export_current_price,
+                )
+            return result
         except Exception as err:
             _LOGGER.exception("Planner update failed")
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
@@ -574,6 +589,80 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "heating_switch_entity": "unknown",
             "cooling_mode_switch_entity": "unknown",
         }
+
+    async def _async_update_battery_profit_tracking(
+        self,
+        *,
+        current_battery_energy_kwh: float,
+        current_mode: str,
+        import_price: float | None,
+        export_price: float | None,
+    ) -> None:
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self.config_entry.entry_id, {})
+        last_energy = _coerce_float(runtime_state.get("battery_profit_last_energy_kwh"))
+        total_profit = _coerce_float(runtime_state.get("battery_profit_total_eur"), default=0.0) or 0.0
+        tracked_energy = _coerce_float(runtime_state.get("battery_profit_tracked_energy_kwh"), default=0.0) or 0.0
+        cost_basis = _coerce_float(runtime_state.get("battery_profit_cost_basis_eur"), default=0.0) or 0.0
+        now = dt_util.now().isoformat()
+
+        if last_energy is None:
+            runtime_state["battery_profit_last_energy_kwh"] = round(current_battery_energy_kwh, 3)
+            runtime_state["battery_profit_last_updated"] = now
+            await self._async_persist_runtime_state(runtime_state)
+            return
+
+        delta_kwh = round(current_battery_energy_kwh - last_energy, 3)
+        if abs(delta_kwh) < 0.01:
+            runtime_state["battery_profit_last_energy_kwh"] = round(current_battery_energy_kwh, 3)
+            runtime_state["battery_profit_last_updated"] = now
+            return
+
+        if delta_kwh > 0 and current_mode == "laden_van_net" and import_price is not None:
+            tracked_energy += delta_kwh
+            cost_basis += delta_kwh * import_price
+        elif delta_kwh > 0 and current_mode == "laden_met_zonne_energie" and export_price is not None:
+            tracked_energy += delta_kwh
+            cost_basis += delta_kwh * export_price
+        elif delta_kwh < 0 and current_mode in ("ontladen", "ontladen_naar_net"):
+            discharged_kwh = min(-delta_kwh, tracked_energy)
+            if discharged_kwh > 0:
+                average_cost = cost_basis / tracked_energy if tracked_energy > 0 else 0.0
+                realized_price = (
+                    import_price if current_mode == "ontladen" else export_price
+                )
+                if realized_price is not None:
+                    total_profit += discharged_kwh * (realized_price - average_cost)
+                tracked_energy = max(0.0, tracked_energy - discharged_kwh)
+                cost_basis = max(0.0, cost_basis - (average_cost * discharged_kwh))
+
+        runtime_state["battery_profit_total_eur"] = round(total_profit, 4)
+        runtime_state["battery_profit_tracked_energy_kwh"] = round(max(0.0, tracked_energy), 4)
+        runtime_state["battery_profit_cost_basis_eur"] = round(max(0.0, cost_basis), 4)
+        runtime_state["battery_profit_last_energy_kwh"] = round(current_battery_energy_kwh, 3)
+        runtime_state["battery_profit_last_updated"] = now
+        await self._async_persist_runtime_state(runtime_state)
+
+    async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
+        store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
+        data = await store.async_load() or {}
+        data[self.config_entry.entry_id] = {
+            **(data.get(self.config_entry.entry_id, {}) or {}),
+            "manual_temperature": runtime_state.get("manual_temperature"),
+            "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
+            "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
+            "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
+            "hvac_mode": runtime_state.get("hvac_mode"),
+            "manual_preset_mode": runtime_state.get("manual_preset_mode"),
+            "cooling_model": runtime_state.get("cooling_model", {}),
+            "last_cooling_observation": runtime_state.get("last_cooling_observation"),
+            "eco_cooling_session": runtime_state.get("eco_cooling_session"),
+            "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
+            "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
+            "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
+            "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
+            "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
+        }
+        await store.async_save(data)
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
         """Estimate average daily usage from recorder history of a cumulative kWh sensor."""
