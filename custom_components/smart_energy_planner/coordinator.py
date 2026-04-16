@@ -803,32 +803,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         windows: list[PlannerWindow],
         now: datetime,
-        cooldown_hours: float,
-        average_price: float,
+        expensive_threshold: float,
     ) -> list[dict[str, datetime | float]]:
         """Plan eco windows around each above-average price peak.
 
-        Eco starts before the peak based on the estimated cooldown time and
-        ends as soon as the room is expected to have cooled down or when the
-        price has normalized to halfway between the peak maximum and the next
-        valley minimum, whichever comes first.
+        Eco is only active during the truly expensive peak windows. The peak
+        group is determined from the expensive threshold, and the end can be
+        further constrained by the peak-to-valley normalization threshold.
         """
-        if cooldown_hours <= 0:
-            return []
-
         future_windows = [window for window in windows if window.end > now]
         if not future_windows:
             return []
 
-        above_average_windows = [
-            window for window in future_windows if window.price > average_price
+        expensive_windows = [
+            window for window in future_windows if window.price >= expensive_threshold
         ]
-        if not above_average_windows:
+        if not expensive_windows:
             return []
 
         grouped_windows: list[list[PlannerWindow]] = []
         current_group: list[PlannerWindow] = []
-        for window in above_average_windows:
+        for window in expensive_windows:
             if not current_group:
                 current_group = [window]
                 continue
@@ -842,12 +837,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             grouped_windows.append(current_group)
 
         eco_windows: list[dict[str, datetime | float]] = []
-        cooldown_delta = timedelta(hours=cooldown_hours)
         for group in grouped_windows:
             peak_window = max(group, key=lambda item: item.price)
-            peak_start = max(peak_window.start, now)
-            eco_start = max(now, peak_start - cooldown_delta)
-            cooled_at = eco_start + cooldown_delta
+            eco_start = max(group[0].start, now)
             peak_threshold_price = self._calculate_thermostat_peak_end_threshold(
                 future_windows=future_windows,
                 peak_group=group,
@@ -860,11 +852,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ),
                 None,
             )
-
-            candidate_ends = [cooled_at]
+            eco_end = group[-1].end
             if normalized_at is not None:
-                candidate_ends.append(normalized_at)
-            eco_end = min(candidate_ends)
+                eco_end = min(eco_end, normalized_at)
             if eco_end <= eco_start:
                 continue
 
@@ -1057,8 +1047,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 eco_windows = self._select_thermostat_peak_eco_windows(
                     windows=windows,
                     now=now,
-                    cooldown_hours=eco_duration_hours,
-                    average_price=average_price,
+                    expensive_threshold=expensive_threshold,
                 )
             else:
                 eco_windows = self._select_expensive_peak_blocks(
@@ -1266,7 +1255,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"preheating starts about {preheat_minutes} minute(s) before each eco window"
                 )
             rationale_parts.append(
-                "each eco window starts early enough for the room to cool down before the peak and ends when cooling is done or the price falls halfway from the peak toward the next valley"
+                "each eco window now targets only the real expensive peak block, while preheat covers the lead-up and eco ends when the peak is over"
             )
 
         battery_strategy = "accu_uit"
