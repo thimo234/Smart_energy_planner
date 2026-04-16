@@ -1879,11 +1879,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
 
-                mode = (
-                    last_charge_mode
-                    if last_charge_mode != "accu_uit" and sim_usable_energy_kwh < usable_capacity_kwh
-                    else "accu_uit"
-                )
+                mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
                 if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
