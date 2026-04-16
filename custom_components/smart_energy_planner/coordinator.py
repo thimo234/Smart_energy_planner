@@ -810,7 +810,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         Eco starts before the peak based on the estimated cooldown time and
         ends as soon as the room is expected to have cooled down or when the
-        price drops back below the daily average, whichever comes first.
+        price has normalized to halfway between the peak maximum and the next
+        valley minimum, whichever comes first.
         """
         if cooldown_hours <= 0:
             return []
@@ -847,18 +848,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             peak_start = max(peak_window.start, now)
             eco_start = max(now, peak_start - cooldown_delta)
             cooled_at = eco_start + cooldown_delta
-            below_average_at = next(
+            peak_threshold_price = self._calculate_thermostat_peak_end_threshold(
+                future_windows=future_windows,
+                peak_group=group,
+            )
+            normalized_at = next(
                 (
                     window.start
                     for window in future_windows
-                    if window.start >= eco_start and window.price <= average_price
+                    if window.start >= peak_window.end and window.price <= peak_threshold_price
                 ),
                 None,
             )
 
             candidate_ends = [cooled_at]
-            if below_average_at is not None:
-                candidate_ends.append(below_average_at)
+            if normalized_at is not None:
+                candidate_ends.append(normalized_at)
             eco_end = min(candidate_ends)
             if eco_end <= eco_start:
                 continue
@@ -909,6 +914,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 merged_windows.append(window)
 
         return merged_windows
+
+    def _calculate_thermostat_peak_end_threshold(
+        self,
+        *,
+        future_windows: list[PlannerWindow],
+        peak_group: list[PlannerWindow],
+    ) -> float:
+        peak_max_price = max(float(window.price) for window in peak_group)
+        trailing_windows = [
+            window
+            for window in future_windows
+            if window.start >= peak_group[-1].end
+        ]
+        if not trailing_windows:
+            return peak_max_price
+
+        valley_windows: list[PlannerWindow] = [trailing_windows[0]]
+        valley_min_price = float(trailing_windows[0].price)
+        for window in trailing_windows[1:]:
+            window_price = float(window.price)
+            if window_price <= valley_min_price:
+                valley_windows.append(window)
+                valley_min_price = window_price
+                continue
+            break
+
+        return (peak_max_price + valley_min_price) / 2.0
 
     def _build_plan(
         self,
@@ -1234,7 +1266,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"preheating starts about {preheat_minutes} minute(s) before each eco window"
                 )
             rationale_parts.append(
-                "each eco window starts early enough for the room to cool down before the peak and ends when cooling is done or the price normalizes"
+                "each eco window starts early enough for the room to cool down before the peak and ends when cooling is done or the price falls halfway from the peak toward the next valley"
             )
 
         battery_strategy = "accu_uit"
@@ -1678,6 +1710,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             day_slots = [slot for slot in by_day[slot_day] if slot["end"] > now and float(slot["solar_kwh"]) > 0]
             if not day_slots:
                 continue
+            future_day_slots = [slot for slot in by_day[slot_day] if slot["end"] > now]
 
             daily_target_kwh = current_remaining_capacity_kwh if slot_day == now.date() else usable_capacity_kwh
             charge_block = self._select_contiguous_charge_block(
@@ -1710,33 +1743,55 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if missing_kwh <= 0:
                 continue
 
+            charge_block_starts = {block_slot["start"] for block_slot in charge_block}
             remaining_slots = [
                 slot
-                for slot in day_slots
-                if slot["start"] not in {block_slot["start"] for block_slot in charge_block}
-                and any(
-                    float(future_slot["price"]) - float(slot["price"]) >= battery_min_profit
-                    for future_slot in slots
-                    if future_slot["start"] > slot["end"] and float(future_slot["net_solar_kwh"]) < 0
-                )
+                for slot in future_day_slots
+                if slot["start"] not in charge_block_starts
+                and (next_peak_price := self._calculate_next_battery_peak_price(future_day_slots, slot["end"])) is not None
+                and next_peak_price - float(slot["price"]) >= battery_min_profit
             ]
             for slot in sorted(remaining_slots, key=lambda item: (float(item["price"]), item["start"])):
                 if missing_kwh <= 0:
                     break
+                slot_charge_kwh = min(max_charge_kw * float(slot["hours"]), missing_kwh)
+                if slot_charge_kwh <= 0:
+                    continue
                 planned_grid_charge_windows.append(
                     {
                         "start": slot["start"].isoformat(),
                         "end": slot["end"].isoformat(),
                         "price": round(float(slot["price"]), 6),
-                        "usable_hours": round(min(1.0, missing_kwh / max_charge_kw), 3),
+                        "usable_hours": round(slot_charge_kwh / max_charge_kw, 3),
                     }
                 )
-                missing_kwh = max(0.0, missing_kwh - max_charge_kw)
+                missing_kwh = max(0.0, round(missing_kwh - slot_charge_kwh, 3))
 
         return (
             self._merge_planned_windows(planned_solar_charge_windows),
             self._merge_planned_windows(planned_grid_charge_windows),
         )
+
+    def _calculate_next_battery_peak_price(
+        self,
+        slots: list[dict[str, Any]],
+        after: datetime,
+    ) -> float | None:
+        trailing_slots = [slot for slot in slots if slot["start"] >= after]
+        if len(trailing_slots) < 2:
+            return None
+
+        prices = [float(slot["price"]) for slot in trailing_slots]
+        index = 0
+        while index + 1 < len(prices) and prices[index + 1] <= prices[index]:
+            index += 1
+
+        peak_max = prices[index]
+        while index + 1 < len(prices) and prices[index + 1] >= prices[index]:
+            index += 1
+            peak_max = max(peak_max, prices[index])
+
+        return peak_max
 
     def _build_mode_windows_from_hourly_plan(
         self,
@@ -1868,6 +1923,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 usable_capacity_kwh=usable_capacity_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
+            discharge_start_threshold_price = (
+                self._calculate_battery_discharge_start_threshold(segment_slots)
+                if last_charge_mode != "accu_uit" and grid_charge_starts
+                else None
+            )
 
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
@@ -1878,9 +1938,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     if other["start"] > segment_slot_start
                 )
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
+                discharge_threshold_reached = (
+                    discharge_start_threshold_price is None
+                    or float(segment_slot["price"]) >= discharge_start_threshold_price
+                )
 
                 mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
-                if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
+                if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
@@ -1926,6 +1990,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot_index = segment_end_index
 
         return self._merge_mode_windows(hourly_modes), current_mode
+
+    def _calculate_battery_discharge_start_threshold(
+        self,
+        slots: list[dict[str, Any]],
+    ) -> float | None:
+        if len(slots) < 2:
+            return None
+
+        prices = [float(slot["price"]) for slot in slots]
+        valley_min = prices[0]
+        index = 0
+        while index + 1 < len(prices) and prices[index + 1] <= prices[index]:
+            index += 1
+            valley_min = min(valley_min, prices[index])
+
+        peak_max = prices[index]
+        while index + 1 < len(prices) and prices[index + 1] >= prices[index]:
+            index += 1
+            peak_max = max(peak_max, prices[index])
+
+        if peak_max <= valley_min:
+            return None
+
+        return (valley_min + peak_max) / 2.0
 
     def _plan_segment_export_kwh(
         self,
