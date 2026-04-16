@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_HEATING_SWITCH_ENTITY,
+    CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_PLANNER_KIND,
     CONF_BATTERY_SOC_SENSOR,
     CONF_PRICE_SENSOR,
@@ -64,6 +65,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     persisted_state = await _async_load_runtime_state(hass, entry.entry_id)
     runtime_state[entry.entry_id] = {
         "manual_temperature": persisted_state.get("manual_temperature", _default_manual_temperature(merged)),
+        "manual_cool_temperature": persisted_state.get(
+            "manual_cool_temperature",
+            _default_manual_cool_temperature(merged),
+        ),
         "manual_eco_temperature": persisted_state.get(
             "manual_eco_temperature",
             _default_manual_eco_temperature(merged),
@@ -93,6 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 merged.get(CONF_TEMPERATURE_SENSOR),
                 merged.get(CONF_ROOM_TEMPERATURE_SENSOR),
                 merged.get(CONF_HEATING_SWITCH_ENTITY),
+                merged.get(CONF_COOLING_MODE_SWITCH_ENTITY),
             ]
         )
     if planner_kind == PLANNER_KIND_BATTERY:
@@ -207,33 +213,43 @@ async def _async_apply_heating_switch_control(
 
     current_temperature = coordinator.data.room_temperature_c
     base_target = coordinator.data.thermostat_setpoint_c
+    cool_target = getattr(coordinator.data, "thermostat_cool_setpoint_c", None)
     eco_target = coordinator.data.thermostat_eco_setpoint_c
     preheat_target = getattr(coordinator.data, "thermostat_preheat_setpoint_c", None)
+    cooling_mode_switch_entity = merged.get(CONF_COOLING_MODE_SWITCH_ENTITY)
+    cooling_mode_switch_state = hass.states.get(cooling_mode_switch_entity) if cooling_mode_switch_entity else None
+    cooling_mode_active = str(cooling_mode_switch_state.state).lower() in {"on", "heat", "heating", "cool", "cooling"} if cooling_mode_switch_state else False
     hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
     if hvac_mode == HVACMode.OFF:
         if str(switch_state.state).lower() in {"on", "heat", "heating"}:
             await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
             runtime_state["last_switch_change"] = dt_util.now()
         return
-    manual_preset_mode = runtime_state.get("manual_preset_mode", PRESET_NORMAL)
-    if hvac_mode == HVAC_MODE_SMART:
-        if coordinator.data.heat_pump_strategy == "preheating":
-            active_preset_mode = PRESET_PREHEAT
-        elif coordinator.data.heat_pump_strategy == "energy_saving_on":
-            active_preset_mode = PRESET_ECO
+    if cooling_mode_active:
+        active_preset_mode = PRESET_NORMAL
+        active_target = cool_target
+        cooling_active = True
+    else:
+        cooling_active = False
+        manual_preset_mode = runtime_state.get("manual_preset_mode", PRESET_NORMAL)
+        if hvac_mode in {HVAC_MODE_SMART, "smart", HVACMode.AUTO}:
+            if coordinator.data.heat_pump_strategy == "preheating":
+                active_preset_mode = PRESET_PREHEAT
+            elif coordinator.data.heat_pump_strategy == "energy_saving_on":
+                active_preset_mode = PRESET_ECO
+            else:
+                active_preset_mode = PRESET_NORMAL
+        elif manual_preset_mode in {PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO}:
+            active_preset_mode = manual_preset_mode
         else:
             active_preset_mode = PRESET_NORMAL
-    elif manual_preset_mode in {PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO}:
-        active_preset_mode = manual_preset_mode
-    else:
-        active_preset_mode = PRESET_NORMAL
 
-    if active_preset_mode == PRESET_PREHEAT:
-        active_target = preheat_target
-    elif active_preset_mode == PRESET_ECO:
-        active_target = eco_target
-    else:
-        active_target = base_target
+        if active_preset_mode == PRESET_PREHEAT:
+            active_target = preheat_target
+        elif active_preset_mode == PRESET_ECO:
+            active_target = eco_target
+        else:
+            active_target = base_target
     if current_temperature is None or active_target is None:
         return
 
@@ -246,15 +262,19 @@ async def _async_apply_heating_switch_control(
         if merged.get(CONF_TEMPERATURE_SENSOR) and coordinator.hass.states.get(merged.get(CONF_TEMPERATURE_SENSOR))
         else None,
         heating_is_on=str(switch_state.state).lower() in {"on", "heat", "heating"},
-        eco_active=active_preset_mode == PRESET_ECO,
+        eco_active=(not cooling_active) and active_preset_mode == PRESET_ECO,
     )
 
     cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
     hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
     min_cycle_minutes = int(merged.get(CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES))
 
-    should_turn_on = current_temperature <= active_target - cold_tolerance
-    should_turn_off = current_temperature >= active_target + hot_tolerance
+    if cooling_active:
+        should_turn_on = current_temperature >= active_target + hot_tolerance
+        should_turn_off = current_temperature <= active_target - cold_tolerance
+    else:
+        should_turn_on = current_temperature <= active_target - cold_tolerance
+        should_turn_off = current_temperature >= active_target + hot_tolerance
     current_is_on = str(switch_state.state).lower() in {"on", "heat", "heating"}
 
     last_switch_change = runtime_state.get("last_switch_change")
@@ -287,6 +307,12 @@ def _default_manual_temperature(merged: dict[str, Any]) -> float:
     return round(min(max(20.0, min_temp), max_temp), 2)
 
 
+def _default_manual_cool_temperature(merged: dict[str, Any]) -> float:
+    min_temp = float(merged.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
+    max_temp = float(merged.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
+    return round(min(max(24.0, min_temp), max_temp), 2)
+
+
 def _default_manual_eco_temperature(merged: dict[str, Any]) -> float:
     min_temp = float(merged.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
     max_temp = float(merged.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
@@ -314,6 +340,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
     data = await store.async_load() or {}
     data[entry_id] = {
         "manual_temperature": runtime_state.get("manual_temperature"),
+        "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
         "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
         "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
         "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),

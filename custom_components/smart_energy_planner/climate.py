@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_THERMOSTAT_MIN_TEMP,
     DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
+    CONF_COOLING_MODE_SWITCH_ENTITY,
     HVAC_MODE_SMART,
     PLANNER_KIND_THERMOSTAT,
     PRESET_ECO,
@@ -39,7 +40,7 @@ from .const import (
     RUNTIME_STATE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
-from .__init__ import _async_save_runtime_state
+from .__init__ import _async_call_turn_service, _async_save_runtime_state
 
 
 def _planner_thermostat_name(entry: ConfigEntry) -> str:
@@ -64,7 +65,6 @@ async def async_setup_entry(
 class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], ClimateEntity):
     """A planned thermostat that represents the integration target temperature."""
 
-    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT, HVAC_MODE_SMART]
     _attr_hvac_mode = HVACMode.HEAT
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
@@ -132,13 +132,24 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         if runtime_state.get("hvac_mode") == HVACMode.OFF:
             return HVACMode.OFF
-        if runtime_state.get("hvac_mode") == HVAC_MODE_SMART:
-            return HVAC_MODE_SMART
+        if self._cooling_mode_active:
+            return HVACMode.COOL
+        if runtime_state.get("hvac_mode") in {HVAC_MODE_SMART, "smart", HVACMode.AUTO}:
+            return HVACMode.AUTO
         return HVACMode.HEAT
+
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
+        if self._cooling_mode_switch_entity:
+            modes.append(HVACMode.COOL)
+        return modes
 
     @property
     def preset_mode(self) -> str:
         if self.hvac_mode == HVACMode.OFF:
+            return PRESET_NORMAL
+        if self.hvac_mode == HVACMode.COOL:
             return PRESET_NORMAL
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         if self.hvac_mode == HVAC_MODE_SMART:
@@ -160,6 +171,10 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         target = self.target_temperature
         if current is None or target is None:
             return HVACAction.OFF
+        if self.hvac_mode == HVACMode.COOL:
+            if current > target:
+                return HVACAction.COOLING
+            return HVACAction.IDLE
         if current < target:
             return HVACAction.HEATING
         return HVACAction.IDLE
@@ -174,13 +189,22 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
         """Keep a simple heat-only thermostat interface."""
-        if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF, HVAC_MODE_SMART):
+        if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF, HVACMode.AUTO, HVACMode.COOL, HVAC_MODE_SMART):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
-        runtime_state["hvac_mode"] = hvac_mode
+        if hvac_mode == HVACMode.COOL:
+            if not self._cooling_mode_switch_entity:
+                return
+            await _async_call_turn_service(self.hass, self._cooling_mode_switch_entity, "turn_on")
+            runtime_state["hvac_mode"] = HVACMode.COOL
+        else:
+            if self._cooling_mode_switch_entity and self._cooling_mode_active:
+                await _async_call_turn_service(self.hass, self._cooling_mode_switch_entity, "turn_off")
+            runtime_state["hvac_mode"] = HVAC_MODE_SMART if hvac_mode in (HVACMode.AUTO, HVAC_MODE_SMART) else hvac_mode
         if hvac_mode == HVACMode.OFF:
             runtime_state["manual_preset_mode"] = PRESET_NORMAL
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
+        await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
     @property
@@ -190,11 +214,14 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             "status": data.status,
             "planner_kind": data.planner_kind,
             "thermostat_setpoint_c": data.thermostat_setpoint_c,
+            "thermostat_cool_setpoint_c": getattr(data, "thermostat_cool_setpoint_c", None),
             "thermostat_preheat_setpoint_c": getattr(data, "thermostat_preheat_setpoint_c", None),
             "thermostat_eco_setpoint_c": data.thermostat_eco_setpoint_c,
             "effective_target_temperature": self.target_temperature,
             "active_hvac_mode": self.hvac_mode,
             "active_preset_mode": self.preset_mode,
+            "cooling_mode_switch_entity": self._cooling_mode_switch_entity,
+            "cooling_mode_active": self._cooling_mode_active,
             "cold_tolerance": self._merged_config.get(
                 CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE
             ),
@@ -236,6 +263,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         """Allow Home Assistant to present normal and eco controls."""
         if preset_mode not in (PRESET_NORMAL, PRESET_PREHEAT, PRESET_ECO):
             return
+        if self.hvac_mode == HVACMode.COOL:
+            return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         runtime_state["manual_preset_mode"] = preset_mode
         runtime_state["hvac_mode"] = HVACMode.HEAT
@@ -259,6 +288,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         await self.coordinator.async_request_refresh()
 
     def _preset_temperature_key(self, preset_mode: str) -> str:
+        if self.hvac_mode == HVACMode.COOL:
+            return "manual_cool_temperature"
         if preset_mode == PRESET_PREHEAT:
             return "manual_preheat_temperature"
         if preset_mode == PRESET_ECO:
@@ -266,6 +297,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return "manual_temperature"
 
     def _preset_fallback_temperature(self, preset_mode: str) -> float | None:
+        if self.hvac_mode == HVACMode.COOL:
+            return getattr(self.coordinator.data, "thermostat_cool_setpoint_c", None)
         if preset_mode == PRESET_PREHEAT:
             return getattr(self.coordinator.data, "thermostat_preheat_setpoint_c", None)
         if preset_mode == PRESET_ECO:
@@ -273,8 +306,24 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         return self.coordinator.data.thermostat_setpoint_c
 
     def _default_target_for_preset(self, preset_mode: str) -> float:
+        if self.hvac_mode == HVACMode.COOL:
+            return min(self.max_temp, max(self.min_temp, 24.0))
         if preset_mode == PRESET_PREHEAT:
             return min(self.max_temp, max(self.min_temp, 21.0))
         if preset_mode == PRESET_ECO:
             return min(self.max_temp, max(self.min_temp, 18.0))
         return min(self.max_temp, max(self.min_temp, 20.0))
+
+    @property
+    def _cooling_mode_switch_entity(self) -> str | None:
+        return self._merged_config.get(CONF_COOLING_MODE_SWITCH_ENTITY)
+
+    @property
+    def _cooling_mode_active(self) -> bool:
+        cooling_switch = self._cooling_mode_switch_entity
+        if not cooling_switch:
+            return False
+        state = self.hass.states.get(cooling_switch)
+        if state is None:
+            return False
+        return str(state.state).lower() in {"on", "heat", "heating", "cool", "cooling"}

@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_NAME,
@@ -292,6 +293,14 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
             ): _entity_selector(
                 _filter_heating_switch_entities(hass),
                 current_value=user_input.get(CONF_HEATING_SWITCH_ENTITY),
+                domain=None,
+            ),
+            vol.Optional(
+                CONF_COOLING_MODE_SWITCH_ENTITY,
+                default=user_input.get(CONF_COOLING_MODE_SWITCH_ENTITY),
+            ): _entity_selector(
+                _filter_heating_switch_entities(hass),
+                current_value=user_input.get(CONF_COOLING_MODE_SWITCH_ENTITY),
                 domain=None,
             ),
             vol.Required(

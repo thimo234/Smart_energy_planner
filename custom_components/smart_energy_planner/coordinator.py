@@ -23,6 +23,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
@@ -121,6 +122,7 @@ class PlannerResult:
     next_high_price_window_price: float | None
     room_temperature_c: float | None
     thermostat_setpoint_c: float | None
+    thermostat_cool_setpoint_c: float | None
     thermostat_preheat_setpoint_c: float | None
     thermostat_eco_setpoint_c: float | None
     room_cooling_hours_to_eco: float | None
@@ -167,6 +169,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
             room_temperature_sensor = self._config.get(CONF_ROOM_TEMPERATURE_SENSOR)
             heating_switch_entity = self._config.get(CONF_HEATING_SWITCH_ENTITY)
+            cooling_mode_switch_entity = self._config.get(CONF_COOLING_MODE_SWITCH_ENTITY)
             total_energy_sensor = self._config.get(CONF_TOTAL_ENERGY_SENSOR)
             battery_soc_sensor = self._config.get(CONF_BATTERY_SOC_SENSOR)
 
@@ -176,6 +179,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             temperature_state = self.hass.states.get(temperature_sensor) if temperature_sensor else None
             room_temperature_state = self.hass.states.get(room_temperature_sensor) if room_temperature_sensor else None
             heating_switch_state = self.hass.states.get(heating_switch_entity) if heating_switch_entity else None
+            cooling_mode_switch_state = (
+                self.hass.states.get(cooling_mode_switch_entity) if cooling_mode_switch_entity else None
+            )
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
             battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
@@ -192,6 +198,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 room_temperature_state=room_temperature_state,
                 heating_switch_entity=heating_switch_entity,
                 heating_switch_state=heating_switch_state,
+                cooling_mode_switch_entity=cooling_mode_switch_entity,
+                cooling_mode_switch_state=cooling_mode_switch_state,
                 total_energy_sensor=total_energy_sensor,
                 total_energy_state=total_energy_state,
                 battery_soc_sensor=battery_soc_sensor,
@@ -260,6 +268,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             room_temperature = _coerce_float(room_temperature_state.state if room_temperature_state else None)
             thermostat_setpoint = self._get_manual_thermostat_setpoint()
+            thermostat_cool_setpoint = self._get_manual_cool_temperature()
             thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
             thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
@@ -339,6 +348,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 room_temperature_c=room_temperature,
                 outdoor_temperature_c=outdoor_temperature,
                 thermostat_setpoint_c=thermostat_setpoint,
+                thermostat_cool_setpoint_c=thermostat_cool_setpoint,
                 thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
@@ -360,6 +370,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 non_heating_daily_average_kwh=non_heating_daily_average,
                 room_temperature_c=room_temperature,
                 thermostat_setpoint_c=thermostat_setpoint,
+                thermostat_cool_setpoint_c=thermostat_cool_setpoint,
                 thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
                 room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
@@ -470,6 +481,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         room_temperature_state,
         heating_switch_entity: str | None,
         heating_switch_state,
+        cooling_mode_switch_entity: str | None,
+        cooling_mode_switch_state,
         total_energy_sensor: str | None,
         total_energy_state,
         battery_soc_sensor: str | None,
@@ -490,6 +503,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "temperature_sensor": self._state_status(temperature_sensor, temperature_state),
             "room_temperature_sensor": self._state_status(room_temperature_sensor, room_temperature_state),
             "heating_switch_entity": self._state_status(heating_switch_entity, heating_switch_state),
+            "cooling_mode_switch_entity": self._state_status(
+                cooling_mode_switch_entity,
+                cooling_mode_switch_state,
+            ),
         }
 
     def _collect_source_errors(self, source_status: dict[str, str]) -> list[str]:
@@ -523,6 +540,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "temperature_sensor": "unknown",
             "room_temperature_sensor": "unknown",
             "heating_switch_entity": "unknown",
+            "cooling_mode_switch_entity": "unknown",
         }
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
@@ -589,6 +607,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if thermostat_setpoint_c is not None:
             eco_temperature = min(eco_temperature, thermostat_setpoint_c)
         return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), eco_temperature)), 2)
+
+    def _get_manual_cool_temperature(self) -> float:
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        cool_temperature = _coerce_float(runtime_state.get("manual_cool_temperature"))
+        if cool_temperature is None:
+            cool_temperature = min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), 24.0))
+        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), cool_temperature)), 2)
 
     def _get_manual_preheat_temperature(self) -> float:
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
@@ -904,6 +929,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         non_heating_daily_average_kwh: float,
         room_temperature_c: float | None,
         thermostat_setpoint_c: float | None,
+        thermostat_cool_setpoint_c: float | None,
         thermostat_preheat_setpoint_c: float | None,
         thermostat_eco_setpoint_c: float | None,
         room_cooling_hours_to_eco: float | None,
@@ -1316,6 +1342,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
             thermostat_setpoint_c=thermostat_setpoint_c,
+            thermostat_cool_setpoint_c=thermostat_cool_setpoint_c,
             thermostat_preheat_setpoint_c=thermostat_preheat_setpoint_c,
             thermostat_eco_setpoint_c=thermostat_eco_setpoint_c,
             room_cooling_hours_to_eco=room_cooling_hours_to_eco,
