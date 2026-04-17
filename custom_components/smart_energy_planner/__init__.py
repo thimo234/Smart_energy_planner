@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import Platform
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
@@ -59,6 +59,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Energy Planner from a config entry."""
     coordinator = SmartEnergyPlannerCoordinator(hass, entry)
     await coordinator.async_refresh()
+    if coordinator.data is None:
+        raise ConfigEntryNotReady("Planner data is not ready yet")
+    if coordinator.data.status in {"waiting_for_price_sensor", "waiting_for_nordpool_prices"}:
+        raise ConfigEntryNotReady("Nord Pool prices are not available yet")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     merged = {**entry.data, **entry.options}
