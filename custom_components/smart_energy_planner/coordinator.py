@@ -2112,6 +2112,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         future_charge_starts = sorted(
             [start for start in charge_starts.keys() if start is not None]
         )
+        charge_phase_start = min(future_charge_starts, default=None)
+        charge_phase_end = max(
+            (
+                window["end"]
+                for window in [*solar_charge_starts.values(), *grid_charge_starts.values()]
+                if window.get("end") is not None
+            ),
+            default=None,
+        )
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []
@@ -2208,6 +2217,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
+                segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = sum(
                     float(planned_discharge_kwh.get(other["start"], 0.0))
@@ -2219,9 +2229,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     discharge_start_threshold_price is None
                     or float(segment_slot["price"]) >= discharge_start_threshold_price
                 )
+                within_charge_phase = (
+                    charge_phase_start is not None
+                    and charge_phase_end is not None
+                    and segment_slot_end > charge_phase_start
+                    and segment_slot_start < charge_phase_end
+                )
 
                 mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
-                if segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
+                if within_charge_phase:
+                    mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
+                elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
