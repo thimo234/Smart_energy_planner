@@ -1659,9 +1659,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_start = day_start + timedelta(hours=hour)
                 slot_end = slot_start + timedelta(hours=1)
                 previous_week_usage = historical_hourly_usage.get(slot_start - timedelta(days=7))
+                previous_week_previous_hour_usage = historical_hourly_usage.get(
+                    slot_start - timedelta(days=7, hours=1)
+                )
                 hour_average = hourly_average_by_hour.get(hour)
-                if previous_week_usage is not None:
-                    historical_hourly = previous_week_usage + (((hour_average or previous_week_usage) + previous_week_usage) / 2.0) * 0.1
+                if previous_week_usage is not None and previous_week_previous_hour_usage is not None:
+                    historical_hourly = previous_week_previous_hour_usage + (
+                        (previous_week_usage - previous_week_previous_hour_usage) * 0.2
+                    )
+                elif previous_week_usage is not None:
+                    historical_hourly = previous_week_usage
                 elif hour_average is not None:
                     historical_hourly = hour_average
                 else:
