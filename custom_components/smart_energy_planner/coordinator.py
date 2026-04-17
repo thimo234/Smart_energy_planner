@@ -1673,6 +1673,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     historical_hourly = hour_average
                 else:
                     historical_hourly = base_hourly
+                historical_hourly = min(3.0, max(0.0, historical_hourly))
                 heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
                 total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
                 forecast.append(
