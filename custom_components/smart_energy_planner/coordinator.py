@@ -2917,42 +2917,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return marked
 
-    def _build_battery_mode_schedule(
-        self,
-        *,
-        schedule_start: datetime,
-        initial_mode: str,
-        current_time: datetime,
-        current_mode: str,
-        planned_solar_charge_windows: list[dict[str, str | float]],
-        planned_grid_charge_windows: list[dict[str, str | float]],
-        planned_discharge_windows: list[dict[str, str | float]],
-    ) -> list[dict[str, str]]:
-        schedule: list[dict[str, str]] = [{"at": schedule_start.isoformat(), "mode": initial_mode}]
-
-        if current_time > schedule_start:
-            schedule.append({"at": current_time.isoformat(), "mode": current_mode})
-
-        for window in planned_solar_charge_windows:
-            schedule.append({"at": str(window["start"]), "mode": "laden_met_zonne_energie"})
-
-        for window in planned_grid_charge_windows:
-            schedule.append({"at": str(window["start"]), "mode": "laden_van_net"})
-
-        for window in planned_discharge_windows:
-            schedule.append({"at": str(window["start"]), "mode": str(window.get("mode", "ontladen"))})
-            schedule.append({"at": str(window["end"]), "mode": "accu_uit"})
-
-        deduped: list[dict[str, str]] = []
-        for item in sorted(schedule, key=lambda entry: entry["at"]):
-            if deduped and deduped[-1]["at"] == item["at"] and deduped[-1]["mode"] == item["mode"]:
-                continue
-            if deduped and deduped[-1]["at"] == item["at"] and deduped[-1]["mode"] != item["mode"]:
-                deduped[-1] = item
-                continue
-            deduped.append(item)
-        return deduped
-
     def _overlap_hours(
         self,
         start_a: datetime,
