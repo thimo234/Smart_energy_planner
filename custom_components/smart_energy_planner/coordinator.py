@@ -1395,9 +1395,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             3,
         )
+        solar_before_next_charge_window_kwh = round(
+            self._sum_remaining_solar_until(
+                all_solar_windows,
+                discharge_to_grid_window_start or now,
+                next_charge_opportunity,
+            ),
+            3,
+        )
         battery_reserved_energy_kwh = min(
             battery_energy_available_kwh,
-            max(0.0, round(home_demand_before_next_charge_window_kwh, 3)),
+            max(0.0, round(home_demand_before_next_charge_window_kwh - solar_before_next_charge_window_kwh, 3)),
         )
         battery_energy_available_for_discharge_kwh = max(
             0.0,
