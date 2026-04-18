@@ -27,7 +27,6 @@ from .const import (
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
-    CONF_HEATING_LOOKBACK_DAYS,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
@@ -46,7 +45,6 @@ from .const import (
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
-    DEFAULT_HEATING_LOOKBACK_DAYS,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
@@ -62,6 +60,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_HISTORY_LOOKBACK_DAYS = 7
 
 
 @dataclass(slots=True)
@@ -671,7 +670,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
         """Estimate average daily usage from recorder history of a cumulative kWh sensor."""
-        lookback_days = int(self._config.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS))
+        lookback_days = _HISTORY_LOOKBACK_DAYS
         end = dt_util.now()
         start = end - timedelta(days=lookback_days)
 
@@ -721,7 +720,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         horizon_end: datetime | None = None,
     ) -> dict[datetime, float]:
         """Estimate hourly usage from a cumulative energy sensor by distributing deltas over time."""
-        lookback_days = int(self._config.get(CONF_HEATING_LOOKBACK_DAYS, DEFAULT_HEATING_LOOKBACK_DAYS))
+        lookback_days = _HISTORY_LOOKBACK_DAYS
         end = horizon_end or dt_util.now()
         start = (dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(lookback_days, 8)))
 
@@ -1372,6 +1371,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         home_demand_until_next_charge_kwh = round(
             self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
+        )
+        solar_until_next_charge_kwh = round(
+            self._sum_remaining_solar_until(solar_windows, now, next_charge_opportunity),
+            3,
+        )
+        home_demand_until_next_charge_kwh = max(
+            0.0,
+            round(home_demand_until_next_charge_kwh - solar_until_next_charge_kwh, 3),
         )
         battery_reserved_energy_kwh = min(
             battery_energy_available_kwh,
