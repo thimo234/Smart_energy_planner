@@ -2050,12 +2050,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if missing_kwh <= 0:
                 continue
 
-            selected_solar_starts = {block_slot["start"] for block_slot in selected_solar_slots}
+            selected_solar_charge_by_start = {
+                block_slot["start"]: float(block_slot["selected_charge_kwh"])
+                for block_slot in selected_solar_slots
+            }
             remaining_slots = [
                 slot
                 for slot in future_day_slots
-                if slot["start"] not in selected_solar_starts
-                and (
+                if (
                     next_peak_price := self._calculate_next_battery_peak_price(
                         future_day_slots,
                         slot["end"],
@@ -2077,7 +2079,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for slot in prioritized_grid_slots:
                 if missing_kwh <= 0:
                     break
-                slot_charge_kwh = min(max_charge_kw * float(slot["hours"]), missing_kwh)
+                slot_headroom_kwh = max(
+                    0.0,
+                    (max_charge_kw * float(slot["hours"]))
+                    - float(selected_solar_charge_by_start.get(slot["start"], 0.0)),
+                )
+                slot_charge_kwh = min(slot_headroom_kwh, missing_kwh)
                 if slot_charge_kwh <= 0:
                     continue
                 planned_grid_charge_windows.append(
