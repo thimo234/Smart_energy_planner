@@ -114,6 +114,7 @@ class PlannerResult:
     planned_battery_mode_schedule: list[dict[str, str]]
     battery_soc_percent: float | None
     battery_min_soc_percent: float
+    battery_total_energy_kwh: float
     battery_energy_available_kwh: float
     battery_remaining_capacity_kwh: float
     next_charge_opportunity_start: str | None
@@ -483,6 +484,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_soc_percent=float(
                 self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
             ),
+            battery_total_energy_kwh=0.0,
             battery_energy_available_kwh=0.0,
             battery_remaining_capacity_kwh=0.0,
             next_charge_opportunity_start=None,
@@ -1578,6 +1580,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_battery_mode_schedule=planned_battery_mode_schedule,
             battery_soc_percent=battery_soc_percent,
             battery_min_soc_percent=battery_min_soc_percent,
+            battery_total_energy_kwh=battery_total_energy_kwh,
             battery_energy_available_kwh=battery_energy_available_kwh,
             battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
             next_charge_opportunity_start=next_charge_opportunity.isoformat() if next_charge_opportunity else None,
