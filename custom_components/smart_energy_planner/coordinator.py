@@ -1372,17 +1372,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
         )
-        solar_until_next_charge_kwh = round(
-            self._sum_remaining_solar_until(solar_windows, now, next_charge_opportunity),
-            3,
+        discharge_to_grid_window_start = (
+            max(now, next_charge_opportunity - timedelta(hours=8))
+            if next_charge_opportunity is not None
+            else None
         )
-        home_demand_until_next_charge_kwh = max(
-            0.0,
-            round(home_demand_until_next_charge_kwh - solar_until_next_charge_kwh, 3),
+        home_demand_before_next_charge_window_kwh = round(
+            self._sum_remaining_home_demand_until(
+                estimated_hourly_home_demand,
+                discharge_to_grid_window_start or now,
+                next_charge_opportunity,
+            ),
+            3,
         )
         battery_reserved_energy_kwh = min(
             battery_energy_available_kwh,
-            max(0.0, round(home_demand_until_next_charge_kwh, 3)),
+            max(0.0, round(home_demand_before_next_charge_window_kwh, 3)),
         )
         battery_energy_available_for_discharge_kwh = max(
             0.0,
@@ -1407,7 +1412,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
-            minimum_energy_before_next_charge_kwh=battery_reserved_energy_kwh,
+            minimum_energy_before_next_charge_kwh=home_demand_before_next_charge_window_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
@@ -2216,6 +2221,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and bool(segment_slots)
                 and segment_slots[0]["start"] < charge_phase_start
             )
+            precharge_export_window_start = (
+                max(now, charge_phase_start - timedelta(hours=8))
+                if before_first_charge_phase and charge_phase_start is not None
+                else None
+            )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
@@ -2225,6 +2235,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planned_discharge_kwh=planned_discharge_kwh,
                 available_energy_kwh=sim_usable_energy_kwh,
                 target_end_energy_kwh=target_end_energy_kwh,
+                export_window_start=precharge_export_window_start,
+                export_window_end=charge_phase_start if before_first_charge_phase else None,
                 max_discharge_kw=max_discharge_kw,
             )
             discharge_start_threshold_price = (
@@ -2335,6 +2347,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_discharge_kwh: dict[datetime, float],
         available_energy_kwh: float,
         target_end_energy_kwh: float,
+        export_window_start: datetime | None,
+        export_window_end: datetime | None,
         max_discharge_kw: float,
     ) -> dict[datetime, float]:
         if (
@@ -2359,8 +2373,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
             if float(slot["net_solar_kwh"]) < 0:
                 continue
+            allowed_hours = float(slot["hours"])
+            if export_window_start is not None and export_window_end is not None:
+                allowed_hours = self._overlap_hours(
+                    slot["start"],
+                    slot["end"],
+                    export_window_start,
+                    export_window_end,
+                )
+            if allowed_hours <= 0:
+                continue
             export_capacity_kwh = min(
-                max_discharge_kw * float(slot["hours"]),
+                max_discharge_kw * allowed_hours,
                 max(0.0, available_energy_kwh),
             )
             if export_capacity_kwh <= 0:
