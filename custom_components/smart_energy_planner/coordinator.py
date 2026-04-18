@@ -2708,13 +2708,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and merged[index + 2].get("mode") == merged[index].get("mode")
             ):
                 current_end = dt_util.parse_datetime(str(merged[index]["end"]))
+                gap_start = dt_util.parse_datetime(str(merged[index + 1]["start"]))
                 gap_end = dt_util.parse_datetime(str(merged[index + 1]["end"]))
                 next_start = dt_util.parse_datetime(str(merged[index + 2]["start"]))
                 if (
                     current_end is not None
+                    and gap_start is not None
                     and gap_end is not None
                     and next_start is not None
-                    and current_end == next_start
+                    and current_end == gap_start
+                    and gap_end == next_start
                     and (gap_end - current_end) <= timedelta(hours=1)
                 ):
                     smoothed.append(
