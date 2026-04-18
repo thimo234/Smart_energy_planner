@@ -1407,6 +1407,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
+            minimum_energy_before_next_charge_kwh=battery_reserved_energy_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
@@ -2084,6 +2085,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_solar_charge_windows: list[dict[str, str | float]],
         planned_grid_charge_windows: list[dict[str, str | float]],
         initial_usable_energy_kwh: float,
+        minimum_energy_before_next_charge_kwh: float,
         usable_capacity_kwh: float,
         average_price: float,
         average_export_price: float,
@@ -2208,12 +2210,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_charge_window = None
             if segment_end_index < len(slots):
                 next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
+            before_first_charge_phase = (
+                charge_phase_start is not None
+                and bool(segment_slots)
+                and segment_slots[0]["start"] < charge_phase_start
+            )
+            target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
+                0.0,
+                usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
+            )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
                 planned_discharge_kwh=planned_discharge_kwh,
                 available_energy_kwh=sim_usable_energy_kwh,
-                room_needed_for_next_charge_kwh=float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0,
-                usable_capacity_kwh=usable_capacity_kwh,
+                target_end_energy_kwh=target_end_energy_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
             discharge_start_threshold_price = (
@@ -2323,20 +2333,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         slots: list[dict[str, Any]],
         planned_discharge_kwh: dict[datetime, float],
         available_energy_kwh: float,
-        room_needed_for_next_charge_kwh: float,
-        usable_capacity_kwh: float,
+        target_end_energy_kwh: float,
         max_discharge_kw: float,
     ) -> dict[datetime, float]:
         if (
             available_energy_kwh <= 0
-            or room_needed_for_next_charge_kwh <= 0
             or max_discharge_kw <= 0
             or not slots
         ):
             return {}
 
         total_planned_discharge_kwh = sum(float(value) for value in planned_discharge_kwh.values())
-        target_end_energy_kwh = max(0.0, usable_capacity_kwh - room_needed_for_next_charge_kwh)
+        target_end_energy_kwh = max(0.0, target_end_energy_kwh)
         required_export_kwh = max(
             0.0,
             available_energy_kwh - total_planned_discharge_kwh - target_end_energy_kwh,
