@@ -157,6 +157,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             name=DOMAIN,
             update_interval=COORDINATOR_UPDATE_INTERVAL,
         )
+        self._active_charge_phase_end: datetime | None = None
+        self._active_charge_phase_mode = "accu_uit"
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -2178,6 +2180,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             default=None,
         )
+        active_charge_phase_end = self._active_charge_phase_end
+        active_charge_phase_mode = self._active_charge_phase_mode
+        if active_charge_phase_end is not None and active_charge_phase_end <= now:
+            active_charge_phase_end = None
+            active_charge_phase_mode = "accu_uit"
+            self._active_charge_phase_end = None
+            self._active_charge_phase_mode = "accu_uit"
+        if active_charge_phase_end is not None and active_charge_phase_end > now:
+            charge_phase_start = min(
+                [moment for moment in (charge_phase_start, now) if moment is not None],
+                default=now,
+            )
+            charge_phase_end = max(
+                [moment for moment in (charge_phase_end, active_charge_phase_end) if moment is not None],
+                default=active_charge_phase_end,
+            )
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []
@@ -2307,10 +2325,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slot_end > charge_phase_start
                     and segment_slot_start < charge_phase_end
                 )
+                charge_phase_mode = (
+                    last_charge_mode
+                    if last_charge_mode != "accu_uit"
+                    else (
+                        active_charge_phase_mode
+                        if active_charge_phase_mode != "accu_uit"
+                        else "accu_uit"
+                    )
+                )
 
-                mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
+                mode = charge_phase_mode
                 if within_charge_phase:
-                    mode = last_charge_mode if last_charge_mode != "accu_uit" else "accu_uit"
+                    mode = charge_phase_mode
                 elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
@@ -2355,6 +2382,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
 
             slot_index = segment_end_index
+
+        if (
+            charge_phase_start is not None
+            and charge_phase_end is not None
+            and charge_phase_start <= now < charge_phase_end
+        ):
+            self._active_charge_phase_end = charge_phase_end
+            self._active_charge_phase_mode = (
+                current_mode
+                if current_mode in ("laden_met_zonne_energie", "laden_van_net")
+                else (
+                    last_charge_mode
+                    if last_charge_mode in ("laden_met_zonne_energie", "laden_van_net")
+                    else active_charge_phase_mode
+                )
+            )
+        else:
+            self._active_charge_phase_end = None
+            self._active_charge_phase_mode = "accu_uit"
 
         return self._merge_mode_windows(hourly_modes), current_mode
 
