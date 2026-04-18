@@ -2142,22 +2142,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         charge_windows: list[dict[str, float | datetime]],
         now: datetime,
-    ) -> tuple[datetime | None, datetime | None, datetime | None, str]:
-        future_charge_starts = sorted(
-            start
-            for window in charge_windows
-            if (start := window.get("start")) is not None and isinstance(start, datetime)
-        )
-        charge_phase_start = min(future_charge_starts, default=None)
-        charge_phase_end = max(
-            (
-                end
+    ) -> tuple[list[dict[str, datetime]], str]:
+        cluster_gap = timedelta(minutes=90)
+        normalized_windows = sorted(
+            [
+                {
+                    "start": cast(datetime, window["start"]),
+                    "end": cast(datetime, window["end"]),
+                }
                 for window in charge_windows
-                if (end := window.get("end")) is not None and isinstance(end, datetime)
-            ),
-            default=None,
+                if isinstance(window.get("start"), datetime) and isinstance(window.get("end"), datetime)
+            ],
+            key=lambda window: window["start"],
         )
-
         active_charge_phase_end = self._active_charge_phase_end
         active_charge_phase_mode = self._active_charge_phase_mode
         if active_charge_phase_end is not None and active_charge_phase_end <= now:
@@ -2166,16 +2163,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
         if active_charge_phase_end is not None and active_charge_phase_end > now:
-            charge_phase_start = min(
-                [moment for moment in (charge_phase_start, now) if moment is not None],
-                default=now,
-            )
-            charge_phase_end = max(
-                [moment for moment in (charge_phase_end, active_charge_phase_end) if moment is not None],
-                default=active_charge_phase_end,
-            )
+            normalized_windows.append({"start": now, "end": active_charge_phase_end})
+            normalized_windows.sort(key=lambda window: window["start"])
 
-        return charge_phase_start, charge_phase_end, active_charge_phase_end, active_charge_phase_mode
+        clusters: list[dict[str, datetime]] = []
+        for window in normalized_windows:
+            if not clusters or window["start"] > clusters[-1]["end"] + cluster_gap:
+                clusters.append(dict(window))
+                continue
+            clusters[-1]["end"] = max(clusters[-1]["end"], window["end"])
+
+        return clusters, active_charge_phase_mode
 
     def _append_charge_window_mode(
         self,
@@ -2223,18 +2221,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         *,
         now: datetime,
-        charge_phase_start: datetime | None,
-        charge_phase_end: datetime | None,
+        active_charge_phase: dict[str, datetime] | None,
         current_mode: str,
         last_charge_mode: str,
         active_charge_phase_mode: str,
     ) -> None:
-        if (
-            charge_phase_start is not None
-            and charge_phase_end is not None
-            and charge_phase_start <= now < charge_phase_end
-        ):
-            self._active_charge_phase_end = charge_phase_end
+        if active_charge_phase is not None and active_charge_phase["start"] <= now < active_charge_phase["end"]:
+            self._active_charge_phase_end = active_charge_phase["end"]
             self._active_charge_phase_mode = (
                 current_mode
                 if current_mode in ("laden_met_zonne_energie", "laden_van_net")
@@ -2304,9 +2297,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             {"start": start, **window}
             for start, window in charge_starts.items()
         ]
-        charge_phase_start, charge_phase_end, _, active_charge_phase_mode = self._resolve_charge_phase_bounds(
+        charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
+        )
+        first_charge_phase_start = charge_phase_clusters[0]["start"] if charge_phase_clusters else None
+        active_charge_phase = next(
+            (
+                cluster
+                for cluster in charge_phase_clusters
+                if cluster["start"] <= now < cluster["end"]
+            ),
+            None,
         )
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
@@ -2377,13 +2379,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if segment_end_index < len(slots):
                 next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
             before_first_charge_phase = (
-                charge_phase_start is not None
+                first_charge_phase_start is not None
                 and bool(segment_slots)
-                and segment_slots[0]["start"] < charge_phase_start
+                and segment_slots[0]["start"] < first_charge_phase_start
             )
             precharge_export_window_start = (
-                max(now, charge_phase_start - timedelta(hours=8))
-                if before_first_charge_phase and charge_phase_start is not None
+                max(now, first_charge_phase_start - timedelta(hours=8))
+                if before_first_charge_phase and first_charge_phase_start is not None
                 else None
             )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
@@ -2396,7 +2398,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 available_energy_kwh=sim_usable_energy_kwh,
                 target_end_energy_kwh=target_end_energy_kwh,
                 export_window_start=precharge_export_window_start,
-                export_window_end=charge_phase_start if before_first_charge_phase else None,
+                export_window_end=first_charge_phase_start if before_first_charge_phase else None,
                 max_discharge_kw=max_discharge_kw,
             )
             discharge_start_threshold_price = (
@@ -2420,10 +2422,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     or float(segment_slot["price"]) >= discharge_start_threshold_price
                 )
                 within_charge_phase = (
-                    charge_phase_start is not None
-                    and charge_phase_end is not None
-                    and segment_slot_end > charge_phase_start
-                    and segment_slot_start < charge_phase_end
+                    any(
+                        segment_slot_end > cluster["start"] and segment_slot_start < cluster["end"]
+                        for cluster in charge_phase_clusters
+                    )
                 )
                 charge_phase_mode = self._resolve_charge_phase_mode(
                     last_charge_mode=last_charge_mode,
@@ -2480,8 +2482,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         self._update_active_charge_phase_state(
             now=now,
-            charge_phase_start=charge_phase_start,
-            charge_phase_end=charge_phase_end,
+            active_charge_phase=active_charge_phase,
             current_mode=current_mode,
             last_charge_mode=last_charge_mode,
             active_charge_phase_mode=active_charge_phase_mode,
