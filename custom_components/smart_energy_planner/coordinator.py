@@ -2689,7 +2689,49 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             merged.append(dict(window))
 
-        return merged
+        smoothed: list[dict[str, str | float]] = []
+        index = 0
+        while index < len(merged):
+            if (
+                index + 2 < len(merged)
+                and merged[index].get("mode") in ("ontladen", "ontladen_naar_net")
+                and merged[index + 1].get("mode") == "accu_uit"
+                and merged[index + 2].get("mode") == merged[index].get("mode")
+            ):
+                current_end = dt_util.parse_datetime(str(merged[index]["end"]))
+                gap_end = dt_util.parse_datetime(str(merged[index + 1]["end"]))
+                next_start = dt_util.parse_datetime(str(merged[index + 2]["start"]))
+                if (
+                    current_end is not None
+                    and gap_end is not None
+                    and next_start is not None
+                    and current_end == next_start
+                    and (gap_end - current_end) <= timedelta(hours=1)
+                ):
+                    smoothed.append(
+                        {
+                            **merged[index],
+                            "end": merged[index + 2]["end"],
+                            "usable_hours": round(
+                                float(merged[index].get("usable_hours", 0.0))
+                                + float(merged[index + 1].get("usable_hours", 0.0))
+                                + float(merged[index + 2].get("usable_hours", 0.0)),
+                                3,
+                            ),
+                            "price": max(
+                                float(merged[index].get("price", 0.0)),
+                                float(merged[index + 1].get("price", 0.0)),
+                                float(merged[index + 2].get("price", 0.0)),
+                            ),
+                        }
+                    )
+                    index += 3
+                    continue
+
+            smoothed.append(dict(merged[index]))
+            index += 1
+
+        return smoothed
 
     def _select_cheapest_charge_windows(
         self,
