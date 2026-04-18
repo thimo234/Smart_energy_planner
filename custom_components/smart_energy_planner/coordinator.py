@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 import statistics
-from typing import Any
+from typing import Any, cast
 
 from homeassistant.components.recorder import history
 from homeassistant.config_entries import ConfigEntry
@@ -1536,20 +1536,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
 
         planning_start = min((window.start for window in all_windows), default=now.replace(hour=0, minute=0, second=0, microsecond=0))
-        planned_battery_mode_schedule = [{"at": planning_start.isoformat(), "mode": "accu_uit"}]
-        planned_battery_mode_schedule.extend(
-            {"at": str(window["start"]), "mode": str(window.get("mode", "accu_uit"))}
-            for window in full_planned_mode_windows
+        planned_battery_mode_schedule = self._build_battery_mode_schedule(
+            planning_start=planning_start,
+            full_planned_mode_windows=full_planned_mode_windows,
         )
-        deduped_schedule: list[dict[str, str]] = []
-        for item in sorted(planned_battery_mode_schedule, key=lambda entry: entry["at"]):
-            if deduped_schedule and deduped_schedule[-1]["at"] == item["at"]:
-                deduped_schedule[-1] = item
-                continue
-            if deduped_schedule and deduped_schedule[-1]["mode"] == item["mode"]:
-                continue
-            deduped_schedule.append(item)
-        planned_battery_mode_schedule = deduped_schedule
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
         planner_status = "ready_with_warnings" if source_errors else "ready"
@@ -2127,59 +2117,47 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return peak_max
 
-    def _build_mode_windows_from_hourly_plan(
+    def _build_charge_window_lookup(
+        self,
+        windows: list[dict[str, str | float]],
+        *,
+        max_charge_kw: float,
+    ) -> dict[datetime, dict[str, float | datetime]]:
+        lookup: dict[datetime, dict[str, float | datetime]] = {}
+        for window in windows:
+            parsed_start = dt_util.parse_datetime(str(window["start"]))
+            parsed_end = dt_util.parse_datetime(str(window["end"]))
+            if parsed_start is None or parsed_end is None:
+                continue
+            usable_hours = float(window.get("usable_hours", 0.0))
+            lookup[parsed_start] = {
+                "end": parsed_end,
+                "usable_hours": usable_hours,
+                "charge_kwh": min(max_charge_kw, usable_hours * max_charge_kw),
+            }
+        return lookup
+
+    def _resolve_charge_phase_bounds(
         self,
         *,
-        slots: list[dict[str, Any]],
+        charge_windows: list[dict[str, float | datetime]],
         now: datetime,
-        planned_solar_charge_windows: list[dict[str, str | float]],
-        planned_grid_charge_windows: list[dict[str, str | float]],
-        initial_usable_energy_kwh: float,
-        minimum_energy_before_next_charge_kwh: float,
-        usable_capacity_kwh: float,
-        average_price: float,
-        average_export_price: float,
-        battery_min_profit: float,
-        max_charge_kw: float,
-        max_discharge_kw: float,
-    ) -> tuple[list[dict[str, str | float]], str]:
-        solar_charge_starts = {
-            parsed_start: {
-                "end": parsed_end,
-                "usable_hours": float(window.get("usable_hours", 0.0)),
-                "charge_kwh": min(max_charge_kw, float(window.get("usable_hours", 0.0)) * max_charge_kw),
-            }
-            for window in planned_solar_charge_windows
-            if (parsed_start := dt_util.parse_datetime(str(window["start"]))) is not None
-            and (parsed_end := dt_util.parse_datetime(str(window["end"]))) is not None
-        }
-        grid_charge_starts = {
-            parsed_start: {
-                "end": parsed_end,
-                "usable_hours": float(window.get("usable_hours", 0.0)),
-                "charge_kwh": min(max_charge_kw, float(window.get("usable_hours", 0.0)) * max_charge_kw),
-            }
-            for window in planned_grid_charge_windows
-            if (parsed_start := dt_util.parse_datetime(str(window["start"]))) is not None
-            and (parsed_end := dt_util.parse_datetime(str(window["end"]))) is not None
-        }
-
-        charge_starts = {
-            **solar_charge_starts,
-            **grid_charge_starts,
-        }
+    ) -> tuple[datetime | None, datetime | None, datetime | None, str]:
         future_charge_starts = sorted(
-            [start for start in charge_starts.keys() if start is not None]
+            start
+            for window in charge_windows
+            if (start := window.get("start")) is not None and isinstance(start, datetime)
         )
         charge_phase_start = min(future_charge_starts, default=None)
         charge_phase_end = max(
             (
-                window["end"]
-                for window in [*solar_charge_starts.values(), *grid_charge_starts.values()]
-                if window.get("end") is not None
+                end
+                for window in charge_windows
+                if (end := window.get("end")) is not None and isinstance(end, datetime)
             ),
             default=None,
         )
+
         active_charge_phase_end = self._active_charge_phase_end
         active_charge_phase_mode = self._active_charge_phase_mode
         if active_charge_phase_end is not None and active_charge_phase_end <= now:
@@ -2197,6 +2175,140 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 default=active_charge_phase_end,
             )
 
+        return charge_phase_start, charge_phase_end, active_charge_phase_end, active_charge_phase_mode
+
+    def _append_charge_window_mode(
+        self,
+        *,
+        hourly_modes: list[dict[str, str | float]],
+        slot: dict[str, Any],
+        charge_window: dict[str, float | datetime],
+        mode: str,
+        price_key: str,
+        now: datetime,
+        current_mode: str,
+        sim_usable_energy_kwh: float,
+        usable_capacity_kwh: float,
+    ) -> tuple[str, float, datetime]:
+        charge_end = cast(datetime, charge_window["end"])
+        charge_kwh = float(charge_window["charge_kwh"])
+        usable_hours = float(charge_window["usable_hours"])
+        sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
+        if slot["start"] <= now < charge_end:
+            current_mode = mode
+        hourly_modes.append(
+            {
+                "start": slot["start"].isoformat(),
+                "end": charge_end.isoformat(),
+                "price": round(float(slot[price_key]), 6),
+                "usable_hours": round(usable_hours, 3),
+                "mode": mode,
+            }
+        )
+        return current_mode, sim_usable_energy_kwh, charge_end
+
+    def _resolve_charge_phase_mode(
+        self,
+        *,
+        last_charge_mode: str,
+        active_charge_phase_mode: str,
+    ) -> str:
+        if last_charge_mode != "accu_uit":
+            return last_charge_mode
+        if active_charge_phase_mode != "accu_uit":
+            return active_charge_phase_mode
+        return "accu_uit"
+
+    def _update_active_charge_phase_state(
+        self,
+        *,
+        now: datetime,
+        charge_phase_start: datetime | None,
+        charge_phase_end: datetime | None,
+        current_mode: str,
+        last_charge_mode: str,
+        active_charge_phase_mode: str,
+    ) -> None:
+        if (
+            charge_phase_start is not None
+            and charge_phase_end is not None
+            and charge_phase_start <= now < charge_phase_end
+        ):
+            self._active_charge_phase_end = charge_phase_end
+            self._active_charge_phase_mode = (
+                current_mode
+                if current_mode in ("laden_met_zonne_energie", "laden_van_net")
+                else (
+                    last_charge_mode
+                    if last_charge_mode in ("laden_met_zonne_energie", "laden_van_net")
+                    else active_charge_phase_mode
+                )
+            )
+            return
+
+        self._active_charge_phase_end = None
+        self._active_charge_phase_mode = "accu_uit"
+
+    def _build_battery_mode_schedule(
+        self,
+        *,
+        planning_start: datetime,
+        full_planned_mode_windows: list[dict[str, str | float]],
+    ) -> list[dict[str, str]]:
+        schedule = [{"at": planning_start.isoformat(), "mode": "accu_uit"}]
+        schedule.extend(
+            {"at": str(window["start"]), "mode": str(window.get("mode", "accu_uit"))}
+            for window in full_planned_mode_windows
+        )
+
+        deduped_schedule: list[dict[str, str]] = []
+        for item in sorted(schedule, key=lambda entry: entry["at"]):
+            if deduped_schedule and deduped_schedule[-1]["at"] == item["at"]:
+                deduped_schedule[-1] = item
+                continue
+            if deduped_schedule and deduped_schedule[-1]["mode"] == item["mode"]:
+                continue
+            deduped_schedule.append(item)
+        return deduped_schedule
+
+    def _build_mode_windows_from_hourly_plan(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        now: datetime,
+        planned_solar_charge_windows: list[dict[str, str | float]],
+        planned_grid_charge_windows: list[dict[str, str | float]],
+        initial_usable_energy_kwh: float,
+        minimum_energy_before_next_charge_kwh: float,
+        usable_capacity_kwh: float,
+        average_price: float,
+        average_export_price: float,
+        battery_min_profit: float,
+        max_charge_kw: float,
+        max_discharge_kw: float,
+    ) -> tuple[list[dict[str, str | float]], str]:
+        solar_charge_starts = self._build_charge_window_lookup(
+            planned_solar_charge_windows,
+            max_charge_kw=max_charge_kw,
+        )
+        grid_charge_starts = self._build_charge_window_lookup(
+            planned_grid_charge_windows,
+            max_charge_kw=max_charge_kw,
+        )
+
+        charge_starts = {
+            **solar_charge_starts,
+            **grid_charge_starts,
+        }
+        charge_windows = [
+            {"start": start, **window}
+            for start, window in charge_starts.items()
+        ]
+        charge_phase_start, charge_phase_end, _, active_charge_phase_mode = self._resolve_charge_phase_bounds(
+            charge_windows=charge_windows,
+            now=now,
+        )
+
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
@@ -2207,49 +2319,37 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot = slots[slot_index]
             slot_start = slot["start"]
             if slot_start in solar_charge_starts:
-                charge_window = solar_charge_starts[slot_start]
                 mode = "laden_met_zonne_energie"
-                sim_usable_energy_kwh = min(
-                    usable_capacity_kwh,
-                    sim_usable_energy_kwh + float(charge_window["charge_kwh"]),
+                current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
+                    hourly_modes=hourly_modes,
+                    slot=slot,
+                    charge_window=solar_charge_starts[slot_start],
+                    mode=mode,
+                    price_key="export_price",
+                    now=now,
+                    current_mode=current_mode,
+                    sim_usable_energy_kwh=sim_usable_energy_kwh,
+                    usable_capacity_kwh=usable_capacity_kwh,
                 )
                 last_charge_mode = mode
-                charge_end = charge_window["end"]
-                if slot["start"] <= now < charge_end:
-                    current_mode = mode
-                hourly_modes.append(
-                    {
-                        "start": slot["start"].isoformat(),
-                        "end": charge_end.isoformat(),
-                        "price": round(float(slot["export_price"]), 6),
-                        "usable_hours": round(float(charge_window["usable_hours"]), 3),
-                        "mode": mode,
-                    }
-                )
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
                     slot_index += 1
                 continue
 
             if slot_start in grid_charge_starts:
-                charge_window = grid_charge_starts[slot_start]
                 mode = "laden_van_net"
-                sim_usable_energy_kwh = min(
-                    usable_capacity_kwh,
-                    sim_usable_energy_kwh + float(charge_window["charge_kwh"]),
+                current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
+                    hourly_modes=hourly_modes,
+                    slot=slot,
+                    charge_window=grid_charge_starts[slot_start],
+                    mode=mode,
+                    price_key="import_price",
+                    now=now,
+                    current_mode=current_mode,
+                    sim_usable_energy_kwh=sim_usable_energy_kwh,
+                    usable_capacity_kwh=usable_capacity_kwh,
                 )
                 last_charge_mode = mode
-                charge_end = charge_window["end"]
-                if slot["start"] <= now < charge_end:
-                    current_mode = mode
-                hourly_modes.append(
-                    {
-                        "start": slot["start"].isoformat(),
-                        "end": charge_end.isoformat(),
-                        "price": round(float(slot["import_price"]), 6),
-                        "usable_hours": round(float(charge_window["usable_hours"]), 3),
-                        "mode": mode,
-                    }
-                )
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
                     slot_index += 1
                 continue
@@ -2325,14 +2425,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slot_end > charge_phase_start
                     and segment_slot_start < charge_phase_end
                 )
-                charge_phase_mode = (
-                    last_charge_mode
-                    if last_charge_mode != "accu_uit"
-                    else (
-                        active_charge_phase_mode
-                        if active_charge_phase_mode != "accu_uit"
-                        else "accu_uit"
-                    )
+                charge_phase_mode = self._resolve_charge_phase_mode(
+                    last_charge_mode=last_charge_mode,
+                    active_charge_phase_mode=active_charge_phase_mode,
                 )
 
                 mode = charge_phase_mode
@@ -2383,24 +2478,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             slot_index = segment_end_index
 
-        if (
-            charge_phase_start is not None
-            and charge_phase_end is not None
-            and charge_phase_start <= now < charge_phase_end
-        ):
-            self._active_charge_phase_end = charge_phase_end
-            self._active_charge_phase_mode = (
-                current_mode
-                if current_mode in ("laden_met_zonne_energie", "laden_van_net")
-                else (
-                    last_charge_mode
-                    if last_charge_mode in ("laden_met_zonne_energie", "laden_van_net")
-                    else active_charge_phase_mode
-                )
-            )
-        else:
-            self._active_charge_phase_end = None
-            self._active_charge_phase_mode = "accu_uit"
+        self._update_active_charge_phase_state(
+            now=now,
+            charge_phase_start=charge_phase_start,
+            charge_phase_end=charge_phase_end,
+            current_mode=current_mode,
+            last_charge_mode=last_charge_mode,
+            active_charge_phase_mode=active_charge_phase_mode,
+        )
 
         return self._merge_mode_windows(hourly_modes), current_mode
 
