@@ -1430,7 +1430,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
-            minimum_energy_before_next_charge_kwh=home_demand_before_next_charge_window_kwh,
+            minimum_energy_before_next_charge_kwh=battery_reserved_energy_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
@@ -2411,14 +2411,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and bool(segment_slots)
                 and segment_slots[0]["start"] < first_charge_phase_start
             )
-            precharge_export_window_start = (
-                max(now, first_charge_phase_start - timedelta(hours=8))
-                if before_first_charge_phase and first_charge_phase_start is not None
-                else None
-            )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
+            )
+            precharge_export_window_start = (
+                now
+                if before_first_charge_phase and target_end_energy_kwh <= 0
+                else (
+                    max(now, first_charge_phase_start - timedelta(hours=8))
+                    if before_first_charge_phase and first_charge_phase_start is not None
+                    else None
+                )
             )
             discharge_budget_kwh = (
                 max(0.0, sim_usable_energy_kwh - target_end_energy_kwh)
