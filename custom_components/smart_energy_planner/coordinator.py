@@ -1989,6 +1989,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if daily_target_kwh <= 0:
                 continue
 
+            has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
             selected_solar_charge_by_start: dict[datetime, float] = {}
             selected_grid_charge_by_start: dict[datetime, float] = {}
             charge_candidates: list[dict[str, Any]] = []
@@ -2005,7 +2006,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                             "start": slot["start"],
                             "end": slot["end"],
                             "charge_kwh": round(solar_charge_kwh, 6),
-                            "effective_price": 0.0,
+                            "effective_price": round(
+                                float(slot["export_price"])
+                                if has_export_price_sensor
+                                else float(slot["import_price"]) - 0.15,
+                                6,
+                            ),
                         }
                     )
 
