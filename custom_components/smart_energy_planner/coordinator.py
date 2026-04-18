@@ -1635,6 +1635,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> list[dict[str, str | float]]:
         """Build a simple hourly demand forecast for the visible planning horizon."""
         base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
+        empty_slot_hourly = max(0.4, base_hourly)
         historical_hourly_usage = historical_hourly_usage or {}
 
         # Higher heating share during morning and evening hours.
@@ -1680,7 +1681,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 elif hour_average is not None:
                     historical_hourly = hour_average
                 else:
-                    historical_hourly = base_hourly
+                    historical_hourly = empty_slot_hourly
                 historical_hourly = min(3.0, max(0.0, historical_hourly))
                 heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
                 total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
