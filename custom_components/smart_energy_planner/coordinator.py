@@ -165,20 +165,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _config(self) -> dict[str, Any]:
         return {**self.config_entry.data, **self.config_entry.options}
 
+    def _config_entity_id(self, key: str) -> str | None:
+        value = self._config.get(key)
+        if isinstance(value, dict):
+            value = value.get("entity_id")
+        return str(value) if value else None
+
     async def _async_update_data(self) -> PlannerResult:
         """Fetch data and calculate planner output."""
         try:
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
-            price_sensor = self._config[CONF_PRICE_SENSOR]
-            export_price_sensor = self._config.get(CONF_EXPORT_PRICE_SENSOR)
-            solar_sensor = self._config.get(CONF_SOLCAST_TODAY_SENSOR)
-            solar_tomorrow_sensor = self._config.get(CONF_SOLCAST_TOMORROW_SENSOR)
-            temperature_sensor = self._config.get(CONF_TEMPERATURE_SENSOR)
-            room_temperature_sensor = self._config.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            heating_switch_entity = self._config.get(CONF_HEATING_SWITCH_ENTITY)
-            cooling_mode_switch_entity = self._config.get(CONF_COOLING_MODE_SWITCH_ENTITY)
-            total_energy_sensor = self._config.get(CONF_TOTAL_ENERGY_SENSOR)
-            battery_soc_sensor = self._config.get(CONF_BATTERY_SOC_SENSOR)
+            price_sensor = self._config_entity_id(CONF_PRICE_SENSOR) or str(self._config[CONF_PRICE_SENSOR])
+            export_price_sensor = self._config_entity_id(CONF_EXPORT_PRICE_SENSOR)
+            solar_sensor = self._config_entity_id(CONF_SOLCAST_TODAY_SENSOR)
+            solar_tomorrow_sensor = self._config_entity_id(CONF_SOLCAST_TOMORROW_SENSOR)
+            temperature_sensor = self._config_entity_id(CONF_TEMPERATURE_SENSOR)
+            room_temperature_sensor = self._config_entity_id(CONF_ROOM_TEMPERATURE_SENSOR)
+            heating_switch_entity = self._config_entity_id(CONF_HEATING_SWITCH_ENTITY)
+            cooling_mode_switch_entity = self._config_entity_id(CONF_COOLING_MODE_SWITCH_ENTITY)
+            total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
+            battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
             export_price_state = self.hass.states.get(export_price_sensor) if export_price_sensor else None

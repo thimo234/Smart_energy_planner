@@ -169,7 +169,20 @@ def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
 
 
 def _base_defaults(user_input: dict[str, Any] | None) -> dict[str, Any]:
-    return user_input or {}
+    return _normalize_selector_values(user_input or {})
+
+
+def _normalize_selector_value(value: Any) -> Any:
+    if isinstance(value, dict) and "entity_id" in value:
+        return value["entity_id"]
+    return value
+
+
+def _normalize_selector_values(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _normalize_selector_value(value)
+        for key, value in data.items()
+    }
 
 
 def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
@@ -417,6 +430,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
         planner_kind = self.context.get("planner_kind", DEFAULT_PLANNER_KIND)
 
         if user_input is not None:
+            user_input = _normalize_selector_values(user_input)
             data = {CONF_PLANNER_KIND: planner_kind, **user_input}
             title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(planner_kind))
             unique_anchor = (
@@ -455,6 +469,7 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
         planner_kind = merged.get(CONF_PLANNER_KIND, DEFAULT_PLANNER_KIND)
 
         if user_input is not None:
+            user_input = _normalize_selector_values(user_input)
             title = str(user_input.get(CONF_PLANNER_NAME) or self.config_entry.title)
             self.hass.config_entries.async_update_entry(self.config_entry, title=title)
             return self.async_create_entry(title="", data={CONF_PLANNER_KIND: planner_kind, **user_input})
