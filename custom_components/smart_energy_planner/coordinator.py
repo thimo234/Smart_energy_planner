@@ -1989,94 +1989,90 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if daily_target_kwh <= 0:
                 continue
 
-            cheapest_slot = min(
-                future_day_slots,
-                key=lambda item: (float(item["import_price"]), item["start"]),
-            )
-
-            solar_candidates: list[dict[str, Any]] = []
+            selected_solar_charge_by_start: dict[datetime, float] = {}
+            selected_grid_charge_by_start: dict[datetime, float] = {}
+            charge_candidates: list[dict[str, Any]] = []
             for slot in future_day_slots:
-                charge_kwh = min(
-                    max_charge_kw * float(slot["hours"]),
+                slot_capacity_kwh = max_charge_kw * float(slot["hours"])
+                solar_charge_kwh = min(
+                    slot_capacity_kwh,
                     max(0.0, float(slot["net_solar_kwh"])),
                 )
-                if charge_kwh <= 0:
-                    continue
-                distance_from_cheapest = abs((slot["start"] - cheapest_slot["start"]).total_seconds())
-                solar_candidates.append(
-                    {
-                        **slot,
-                        "charge_kwh": round(charge_kwh, 6),
-                        "distance_from_cheapest": distance_from_cheapest,
-                    }
-                )
+                if solar_charge_kwh > 0:
+                    charge_candidates.append(
+                        {
+                            "kind": "solar",
+                            "start": slot["start"],
+                            "end": slot["end"],
+                            "charge_kwh": round(solar_charge_kwh, 6),
+                            "effective_price": 0.0,
+                        }
+                    )
 
-            selected_solar_slots: list[dict[str, Any]] = []
-            block_charge_kwh = 0.0
-            for solar_slot in sorted(
-                solar_candidates,
-                key=lambda item: (float(item["distance_from_cheapest"]), item["start"]),
-            ):
-                if block_charge_kwh >= daily_target_kwh:
-                    break
-                usable_charge_kwh = min(float(solar_slot["charge_kwh"]), daily_target_kwh - block_charge_kwh)
-                if usable_charge_kwh <= 0:
-                    continue
-                selected_solar_slots.append({**solar_slot, "selected_charge_kwh": round(usable_charge_kwh, 6)})
-                block_charge_kwh += usable_charge_kwh
-
-            for block_slot in sorted(selected_solar_slots, key=lambda item: item["start"]):
-                charge_kwh = float(block_slot["selected_charge_kwh"])
-                if charge_kwh <= 0:
-                    continue
-                planned_solar_charge_windows.append(
-                    {
-                        "start": block_slot["start"].isoformat(),
-                        "end": block_slot["end"].isoformat(),
-                        "price": round(float(block_slot["export_price"]), 6),
-                        "usable_hours": round(charge_kwh / max_charge_kw, 3),
-                    }
-                )
-
-            missing_kwh = max(0.0, round(daily_target_kwh - block_charge_kwh, 3))
-            if missing_kwh <= 0:
-                continue
-
-            selected_solar_charge_by_start = {
-                block_slot["start"]: float(block_slot["selected_charge_kwh"])
-                for block_slot in selected_solar_slots
-            }
-            remaining_slots = [
-                slot
-                for slot in future_day_slots
                 if (
                     next_peak_price := self._calculate_next_battery_peak_price(
                         future_day_slots,
                         slot["end"],
                         price_key="import_price",
                     )
-                ) is not None
-                and next_peak_price - float(slot["import_price"]) >= battery_min_profit
-            ]
+                ) is None or next_peak_price - float(slot["import_price"]) < battery_min_profit:
+                    continue
 
-            prioritized_grid_slots = sorted(
-                remaining_slots,
-                key=lambda item: (
-                    0 if item["start"] == cheapest_slot["start"] else 1,
-                    float(item["import_price"]),
-                    abs((item["start"] - cheapest_slot["start"]).total_seconds()),
-                    item["start"],
-                ),
-            )
-            for slot in prioritized_grid_slots:
-                if missing_kwh <= 0:
-                    break
-                slot_headroom_kwh = max(
+                grid_charge_kwh = max(
                     0.0,
-                    (max_charge_kw * float(slot["hours"]))
-                    - float(selected_solar_charge_by_start.get(slot["start"], 0.0)),
+                    slot_capacity_kwh - solar_charge_kwh,
                 )
-                slot_charge_kwh = min(slot_headroom_kwh, missing_kwh)
+                if grid_charge_kwh <= 0:
+                    continue
+                charge_candidates.append(
+                    {
+                        "kind": "grid",
+                        "start": slot["start"],
+                        "end": slot["end"],
+                        "charge_kwh": round(grid_charge_kwh, 6),
+                        "effective_price": round(float(slot["import_price"]), 6),
+                    }
+                )
+
+            charged_kwh = 0.0
+            for candidate in sorted(
+                charge_candidates,
+                key=lambda item: (float(item["effective_price"]), item["start"], item["kind"]),
+            ):
+                if charged_kwh >= daily_target_kwh:
+                    break
+
+                usable_charge_kwh = min(float(candidate["charge_kwh"]), daily_target_kwh - charged_kwh)
+                if usable_charge_kwh <= 0:
+                    continue
+
+                if candidate["kind"] == "solar":
+                    selected_solar_charge_by_start[candidate["start"]] = round(
+                        selected_solar_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
+                        6,
+                    )
+                else:
+                    selected_grid_charge_by_start[candidate["start"]] = round(
+                        selected_grid_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
+                        6,
+                    )
+                charged_kwh += usable_charge_kwh
+
+            for slot in future_day_slots:
+                charge_kwh = float(selected_solar_charge_by_start.get(slot["start"], 0.0))
+                if charge_kwh <= 0:
+                    continue
+                planned_solar_charge_windows.append(
+                    {
+                        "start": slot["start"].isoformat(),
+                        "end": slot["end"].isoformat(),
+                        "price": round(float(slot["export_price"]), 6),
+                        "usable_hours": round(charge_kwh / max_charge_kw, 3),
+                    }
+                )
+
+            for slot in future_day_slots:
+                slot_charge_kwh = float(selected_grid_charge_by_start.get(slot["start"], 0.0))
                 if slot_charge_kwh <= 0:
                     continue
                 planned_grid_charge_windows.append(
@@ -2087,7 +2083,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "usable_hours": round(slot_charge_kwh / max_charge_kw, 3),
                     }
                 )
-                missing_kwh = max(0.0, round(missing_kwh - slot_charge_kwh, 3))
 
         return (
             self._merge_planned_windows(planned_solar_charge_windows),
