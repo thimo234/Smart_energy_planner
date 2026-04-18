@@ -2386,11 +2386,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_end_index += 1
 
             segment_slots = slots[slot_index:segment_end_index]
-            planned_discharge_kwh = self._plan_segment_discharge_kwh(
-                slots=segment_slots,
-                available_energy_kwh=sim_usable_energy_kwh,
-                max_discharge_kw=max_discharge_kw,
-            )
             next_charge_window = None
             if segment_end_index < len(slots):
                 next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
@@ -2407,6 +2402,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
+            )
+            discharge_budget_kwh = (
+                max(0.0, sim_usable_energy_kwh - target_end_energy_kwh)
+                if before_first_charge_phase
+                else sim_usable_energy_kwh
+            )
+            planned_discharge_kwh = self._plan_segment_discharge_kwh(
+                slots=segment_slots,
+                available_energy_kwh=discharge_budget_kwh,
+                max_discharge_kw=max_discharge_kw,
             )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
