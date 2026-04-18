@@ -1977,6 +1977,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for slot in slots:
             by_day.setdefault(slot["start"].date(), []).append(slot)
 
+        solar_charge_capacity_by_day: dict[date, float] = {}
+        for slot_day, day_slots in by_day.items():
+            solar_charge_capacity_by_day[slot_day] = round(
+                sum(
+                    min(
+                        max_charge_kw * float(slot["hours"]),
+                        max(0.0, float(slot["net_solar_kwh"])),
+                    )
+                    for slot in day_slots
+                    if slot["end"] > now
+                ),
+                6,
+            )
+
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
 
@@ -1993,6 +2007,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_solar_charge_by_start: dict[datetime, float] = {}
             selected_grid_charge_by_start: dict[datetime, float] = {}
             charge_candidates: list[dict[str, Any]] = []
+            future_solar_credit_kwh = (
+                sum(
+                    solar_charge_capacity_by_day.get(other_day, 0.0)
+                    for other_day in by_day
+                    if other_day > slot_day
+                )
+                if slot_day == now.date()
+                else 0.0
+            )
+            grid_charge_limit_kwh = max(0.0, round(daily_target_kwh - future_solar_credit_kwh, 6))
             for slot in future_day_slots:
                 slot_capacity_kwh = max_charge_kw * float(slot["hours"])
                 solar_charge_kwh = min(
@@ -2015,7 +2039,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         }
                     )
 
-                if (
+                if grid_charge_limit_kwh <= 0 or (
                     next_peak_price := self._calculate_next_battery_peak_price(
                         future_day_slots,
                         slot["end"],
@@ -2035,20 +2059,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "kind": "grid",
                         "start": slot["start"],
                         "end": slot["end"],
-                        "charge_kwh": round(grid_charge_kwh, 6),
+                        "charge_kwh": round(min(grid_charge_kwh, grid_charge_limit_kwh), 6),
                         "effective_price": round(float(slot["import_price"]), 6),
                     }
                 )
 
             charged_kwh = 0.0
+            charged_grid_kwh = 0.0
             for candidate in sorted(
                 charge_candidates,
-                key=lambda item: (float(item["effective_price"]), item["start"], item["kind"]),
+                key=lambda item: (
+                    float(item["effective_price"]),
+                    0 if item["kind"] == "solar" else 1,
+                    item["start"],
+                ),
             ):
                 if charged_kwh >= daily_target_kwh:
                     break
 
-                usable_charge_kwh = min(float(candidate["charge_kwh"]), daily_target_kwh - charged_kwh)
+                candidate_charge_kwh = float(candidate["charge_kwh"])
+                if candidate["kind"] == "grid":
+                    candidate_charge_kwh = min(
+                        candidate_charge_kwh,
+                        max(0.0, grid_charge_limit_kwh - charged_grid_kwh),
+                    )
+                usable_charge_kwh = min(candidate_charge_kwh, daily_target_kwh - charged_kwh)
                 if usable_charge_kwh <= 0:
                     continue
 
@@ -2062,6 +2097,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         selected_grid_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
                         6,
                     )
+                    charged_grid_kwh += usable_charge_kwh
                 charged_kwh += usable_charge_kwh
 
             for slot in future_day_slots:
