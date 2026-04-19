@@ -2463,7 +2463,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                prefer_higher_prices=discharge_start_threshold_price is not None,
+                prefer_higher_prices=True,
             )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
@@ -2701,6 +2701,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         remaining_energy_kwh = available_energy_kwh
         planned_discharge: dict[datetime, float] = {}
+        segment_slots_by_start = {
+            cast(datetime, slot["start"]): slot
+            for slot in slots
+        }
         slot_order = (
             sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"]))
             if prefer_higher_prices
@@ -2709,11 +2713,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for slot in slot_order:
             if remaining_energy_kwh <= 0:
                 break
+
+            slot_start = cast(datetime, slot["start"])
+            assigned_total_kwh = sum(float(value) for value in planned_discharge.values())
+            assigned_later_kwh = sum(
+                float(value)
+                for start, value in planned_discharge.items()
+                if start > slot_start
+            )
+            later_net_need_kwh = max(
+                0.0,
+                -sum(
+                    float(segment_slots_by_start[start]["net_solar_kwh"])
+                    for start in segment_slots_by_start
+                    if start > slot_start
+                ),
+            )
+            protected_later_kwh = max(0.0, later_net_need_kwh - assigned_later_kwh)
+            remaining_energy_kwh = max(
+                0.0,
+                float(available_energy_kwh) - assigned_total_kwh - protected_later_kwh,
+            )
             assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
             if assigned_kwh <= 0:
                 continue
-            planned_discharge[slot["start"]] = round(assigned_kwh, 6)
-            remaining_energy_kwh -= assigned_kwh
+            planned_discharge[slot_start] = round(assigned_kwh, 6)
 
         return planned_discharge
 
