@@ -1388,6 +1388,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
         )
+        solar_until_next_charge_kwh = round(
+            self._sum_remaining_solar_until(all_solar_windows, now, next_charge_opportunity),
+            3,
+        )
         discharge_to_grid_window_start = (
             max(now, next_charge_opportunity - timedelta(hours=8))
             if next_charge_opportunity is not None
@@ -1417,6 +1421,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(battery_energy_available_kwh - battery_reserved_energy_kwh, 3),
         )
+        battery_export_protected_energy_kwh = min(
+            battery_energy_available_kwh,
+            max(0.0, round(home_demand_until_next_charge_kwh - solar_until_next_charge_kwh, 3)),
+        )
         battery_room_needed_for_solar_kwh = max(
             0.0,
             round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
@@ -1441,6 +1449,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
             minimum_energy_before_next_charge_kwh=battery_reserved_energy_kwh,
+            minimum_energy_for_export_before_next_charge_kwh=battery_export_protected_energy_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
@@ -2316,6 +2325,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_grid_charge_windows: list[dict[str, str | float]],
         initial_usable_energy_kwh: float,
         minimum_energy_before_next_charge_kwh: float,
+        minimum_energy_for_export_before_next_charge_kwh: float,
         usable_capacity_kwh: float,
         average_price: float,
         average_export_price: float,
@@ -2425,6 +2435,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
             )
+            export_target_end_energy_kwh = (
+                max(target_end_energy_kwh, minimum_energy_for_export_before_next_charge_kwh)
+                if before_first_charge_phase
+                else target_end_energy_kwh
+            )
             precharge_export_window_start = (
                 now
                 if before_first_charge_phase and target_end_energy_kwh <= 0
@@ -2454,7 +2469,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=segment_slots,
                 planned_discharge_kwh=planned_discharge_kwh,
                 available_energy_kwh=sim_usable_energy_kwh,
-                target_end_energy_kwh=target_end_energy_kwh,
+                target_end_energy_kwh=export_target_end_energy_kwh,
                 export_window_start=precharge_export_window_start,
                 export_window_end=first_charge_phase_start if before_first_charge_phase else None,
                 max_discharge_kw=max_discharge_kw,
