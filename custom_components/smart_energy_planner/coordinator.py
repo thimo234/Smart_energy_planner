@@ -61,6 +61,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
+_CLEAR_PRICE_PEAK_MIN_DELTA = 0.02
+_THERMOSTAT_ECO_MERGE_GAP = timedelta(hours=1)
 
 
 @dataclass(slots=True)
@@ -1130,7 +1132,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
 
             previous = merged_windows[-1]
-            if window["start"] <= previous["end"]:
+            if window["start"] <= previous["end"] + _THERMOSTAT_ECO_MERGE_GAP:
                 previous["end"] = max(previous["end"], window["end"])
                 previous["peak_start"] = min(previous.get("peak_start", previous["start"]), window.get("peak_start", window["start"]))
                 previous["average_price"] = max(
@@ -2429,10 +2431,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if before_first_charge_phase
                 else sim_usable_energy_kwh
             )
+            discharge_start_threshold_price = (
+                self._calculate_battery_discharge_start_threshold(segment_slots)
+                if last_charge_mode != "accu_uit" and grid_charge_starts
+                else None
+            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
+                prefer_higher_prices=discharge_start_threshold_price is not None,
             )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
@@ -2442,11 +2450,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 export_window_start=precharge_export_window_start,
                 export_window_end=first_charge_phase_start if before_first_charge_phase else None,
                 max_discharge_kw=max_discharge_kw,
-            )
-            discharge_start_threshold_price = (
-                self._calculate_battery_discharge_start_threshold(segment_slots)
-                if last_charge_mode != "accu_uit" and grid_charge_starts
-                else None
             )
 
             for segment_slot in segment_slots:
@@ -2536,7 +2539,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         slots: list[dict[str, Any]],
     ) -> float | None:
-        if len(slots) < 2:
+        if len(slots) < 3:
             return None
 
         prices = [float(slot["price"]) for slot in slots]
@@ -2551,7 +2554,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             index += 1
             peak_max = max(peak_max, prices[index])
 
-        if peak_max <= valley_min:
+        if peak_max <= valley_min or index >= len(prices) - 1:
+            return None
+
+        post_peak_min = min(prices[index + 1 :], default=peak_max)
+        if (
+            peak_max - valley_min < _CLEAR_PRICE_PEAK_MIN_DELTA
+            or peak_max - post_peak_min < _CLEAR_PRICE_PEAK_MIN_DELTA
+        ):
             return None
 
         return (valley_min + peak_max) / 2.0
@@ -2635,6 +2645,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         slots: list[dict[str, Any]],
         available_energy_kwh: float,
         max_discharge_kw: float,
+        prefer_higher_prices: bool,
     ) -> dict[datetime, float]:
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
@@ -2667,7 +2678,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         remaining_energy_kwh = available_energy_kwh
         planned_discharge: dict[datetime, float] = {}
-        for slot in sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"])):
+        slot_order = (
+            sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"]))
+            if prefer_higher_prices
+            else sorted(deficit_slots, key=lambda item: item["start"])
+        )
+        for slot in slot_order:
             if remaining_energy_kwh <= 0:
                 break
             assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
