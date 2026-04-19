@@ -270,25 +270,29 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 export_windows,
             )
 
-            if not price_state and planner_kind == PLANNER_KIND_THERMOSTAT:
+            if not price_state:
                 source_status["price_sensor"] = "waiting_for_price_sensor"
-                windows = self._build_neutral_price_windows(current_price)
-            elif not price_state:
-                return self._build_pending_result(
-                    "waiting_for_price_sensor", planner_kind, source_status, source_errors
-                )
+                if planner_kind == PLANNER_KIND_THERMOSTAT:
+                    windows = self._build_neutral_price_windows(current_price)
+                else:
+                    neutral_windows = self._build_neutral_price_windows(current_price, hours=48)
+                    windows = list(neutral_windows)
+                    all_windows = list(neutral_windows)
+                    export_windows = list(neutral_windows)
+                    all_export_windows = list(neutral_windows)
+                    battery_switch_windows = list(neutral_windows)
 
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
                     windows = self._build_neutral_price_windows(current_price)
                 else:
-                    return self._build_pending_result(
-                        "waiting_for_nordpool_prices",
-                        planner_kind,
-                        source_status,
-                        self._collect_source_errors(source_status),
-                    )
+                    neutral_windows = self._build_neutral_price_windows(current_price, hours=48)
+                    windows = list(neutral_windows)
+                    all_windows = list(neutral_windows)
+                    export_windows = list(neutral_windows)
+                    all_export_windows = list(neutral_windows)
+                    battery_switch_windows = list(neutral_windows)
 
             solar_forecast = _coerce_float(
                 solar_state.attributes.get("estimate") if solar_state else None,
@@ -1417,14 +1421,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
         )
-        next_high_price_window = min(
-            (
-                window
-                for window in future_windows
-                if current_price is None or window.price >= current_price + battery_min_profit
-            ),
-            key=lambda item: item.start,
-            default=None,
+        next_high_price_window = (
+            min(
+                (
+                    window
+                    for window in future_windows
+                    if current_price is not None and window.price >= current_price + battery_min_profit
+                ),
+                key=lambda item: item.start,
+                default=None,
+            )
+            if price_signal_available
+            else None
         )
         full_planned_mode_windows, planned_current_mode = self._build_mode_windows_from_hourly_plan(
             slots=energy_balance_slots,
@@ -3109,15 +3117,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return 15
         return None
 
-    def _build_neutral_price_windows(self, current_price: float | None) -> list[PlannerWindow]:
-        """Build a single neutral window so thermostat control can continue without price data."""
+    def _build_neutral_price_windows(
+        self,
+        current_price: float | None,
+        *,
+        hours: int = 1,
+    ) -> list[PlannerWindow]:
+        """Build flat windows so planning can continue without price data."""
         now = dt_util.now()
+        neutral_price = current_price if current_price is not None else 0.0
+        window_count = max(1, hours)
         return [
             PlannerWindow(
-                start=now,
-                end=now + timedelta(hours=1),
-                price=current_price if current_price is not None else 0.0,
+                start=now + timedelta(hours=index),
+                end=now + timedelta(hours=index + 1),
+                price=neutral_price,
             )
+            for index in range(window_count)
         ]
 
     def _aggregate_price_windows_to_hourly(self, windows: list[PlannerWindow]) -> list[PlannerWindow]:
