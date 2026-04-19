@@ -2754,15 +2754,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         remaining_energy_kwh = available_energy_kwh
         planned_discharge: dict[datetime, float] = {}
-        segment_slots_by_start = {
-            cast(datetime, slot["start"]): slot
-            for slot in slots
-        }
         slot_order = (
             sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"]))
             if prefer_higher_prices
             else sorted(deficit_slots, key=lambda item: item["start"])
         )
+        if not prefer_higher_prices:
+            for slot in slot_order:
+                if remaining_energy_kwh <= 0:
+                    break
+                assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
+                if assigned_kwh <= 0:
+                    continue
+                planned_discharge[cast(datetime, slot["start"])] = round(assigned_kwh, 6)
+                remaining_energy_kwh -= assigned_kwh
+            return planned_discharge
+
+        segment_slots_by_start = {
+            cast(datetime, slot["start"]): slot
+            for slot in slots
+        }
         for slot in slot_order:
             if remaining_energy_kwh <= 0:
                 break
