@@ -2476,16 +2476,37 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if before_first_charge_phase
                 else sim_usable_energy_kwh
             )
+            current_segment_slot = next(
+                (
+                    candidate
+                    for candidate in segment_slots
+                    if cast(datetime, candidate["start"]) <= now < cast(datetime, candidate["end"])
+                ),
+                segment_slots[0] if segment_slots else None,
+            )
+            current_segment_price = (
+                float(current_segment_slot["price"])
+                if current_segment_slot is not None
+                else None
+            )
+            has_meaningful_later_peak = (
+                current_segment_price is not None
+                and any(
+                    cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
+                    and float(candidate["price"]) >= current_segment_price + battery_min_profit
+                    for candidate in segment_slots
+                )
+            )
             discharge_start_threshold_price = (
                 self._calculate_battery_discharge_start_threshold(segment_slots)
-                if last_charge_mode != "accu_uit" and grid_charge_starts
+                if has_meaningful_later_peak
                 else None
             )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                prefer_higher_prices=True,
+                prefer_higher_prices=discharge_start_threshold_price is not None,
             )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
