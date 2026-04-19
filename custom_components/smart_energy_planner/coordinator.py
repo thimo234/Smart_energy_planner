@@ -2551,6 +2551,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
                     if (
+                        not before_first_charge_phase
+                        and
                         exportable_kwh > 0
                         and float(segment_slot["net_solar_kwh"]) >= 0
                         and segment_end_index < len(slots)
