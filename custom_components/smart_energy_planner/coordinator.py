@@ -1818,6 +1818,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total += estimated_kwh * (overlap_hours / slot_hours)
         return total
 
+    def _remaining_day_solar_covers_demand(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        start: datetime,
+    ) -> bool:
+        day_end = (start + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        remaining_solar_kwh = 0.0
+        remaining_demand_kwh = 0.0
+
+        for slot in slots:
+            slot_start = cast(datetime, slot["start"])
+            slot_end = cast(datetime, slot["end"])
+            overlap_hours = self._overlap_hours(slot_start, slot_end, start, day_end)
+            if overlap_hours <= 0:
+                continue
+            slot_hours = max((slot_end - slot_start).total_seconds() / 3600, 0.0001)
+            remaining_solar_kwh += float(slot["solar_kwh"]) * (overlap_hours / slot_hours)
+            remaining_demand_kwh += float(slot["demand_kwh"]) * (overlap_hours / slot_hours)
+
+        return remaining_solar_kwh >= remaining_demand_kwh - 1e-6
+
     def _build_energy_balance_slots(
         self,
         *,
@@ -2495,13 +2517,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         for cluster in charge_phase_clusters
                     )
                 )
+                hold_solar_charge_mode = (
+                    last_charge_mode == "laden_met_zonne_energie"
+                    and sim_usable_energy_kwh > 0
+                    and self._remaining_day_solar_covers_demand(
+                        slots=slots,
+                        start=segment_slot_start,
+                    )
+                )
                 charge_phase_mode = self._resolve_charge_phase_mode(
                     last_charge_mode=last_charge_mode,
                     active_charge_phase_mode=active_charge_phase_mode,
                 )
 
                 mode = charge_phase_mode
-                if within_charge_phase:
+                if within_charge_phase or hold_solar_charge_mode:
                     mode = charge_phase_mode
                 elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
                     mode = "ontladen"
