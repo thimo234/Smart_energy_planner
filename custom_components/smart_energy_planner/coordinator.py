@@ -2168,7 +2168,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             lookup[parsed_start] = {
                 "end": parsed_end,
                 "usable_hours": usable_hours,
-                "charge_kwh": min(max_charge_kw, usable_hours * max_charge_kw),
+                "charge_kwh": round(max(0.0, usable_hours * max_charge_kw), 6),
             }
         return lookup
 
