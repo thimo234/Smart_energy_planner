@@ -132,7 +132,6 @@ class BatteryPlannerSensor(PlannerSensor):
             "battery_soc_percent": getattr(data, "battery_soc_percent", None),
             "battery_total_energy_kwh": getattr(data, "battery_total_energy_kwh", 0.0),
             "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),
-            "battery_usable_energy_kwh": getattr(data, "battery_usable_energy_kwh", 0.0),
             "battery_remaining_capacity_kwh": getattr(data, "battery_remaining_capacity_kwh", 0.0),
             "next_charge_opportunity_start": getattr(data, "next_charge_opportunity_start", None),
             "next_charge_window_start": getattr(data, "next_charge_window_start", None),

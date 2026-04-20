@@ -121,7 +121,6 @@ class PlannerResult:
     battery_min_soc_percent: float
     battery_total_energy_kwh: float
     battery_energy_available_kwh: float
-    battery_usable_energy_kwh: float
     battery_remaining_capacity_kwh: float
     next_charge_opportunity_start: str | None
     next_charge_window_start: str | None
@@ -368,6 +367,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 all_solar_windows.extend(fallback_tomorrow_windows)
             solar_windows = self._merge_solar_windows(solar_windows)
             all_solar_windows = self._merge_solar_windows(all_solar_windows)
+            if planner_kind == PLANNER_KIND_BATTERY:
+                battery_price_horizon_end = max(
+                    [window.end for window in [*all_windows, *all_solar_windows]],
+                    default=now + timedelta(days=1),
+                )
+                all_windows = self._extend_price_window_tail(
+                    windows=all_windows,
+                    horizon_end=battery_price_horizon_end,
+                    fallback_price=current_price,
+                )
+                all_export_windows = self._extend_price_window_tail(
+                    windows=all_export_windows,
+                    horizon_end=battery_price_horizon_end,
+                    fallback_price=export_current_price,
+                )
+                battery_switch_windows = self._extend_price_window_tail(
+                    windows=battery_switch_windows,
+                    horizon_end=battery_price_horizon_end,
+                    fallback_price=current_price,
+                )
             if solar_state and solar_forecast <= 0 and not solar_windows:
                 source_status["solcast_today_sensor"] = "no_solcast_forecast_data"
             elif solar_state and solar_forecast is None:
@@ -517,7 +536,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             battery_total_energy_kwh=0.0,
             battery_energy_available_kwh=0.0,
-            battery_usable_energy_kwh=0.0,
             battery_remaining_capacity_kwh=0.0,
             next_charge_opportunity_start=None,
             next_charge_window_start=None,
@@ -1691,7 +1709,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_soc_percent=battery_min_soc_percent,
             battery_total_energy_kwh=battery_total_energy_kwh,
             battery_energy_available_kwh=battery_energy_available_kwh,
-            battery_usable_energy_kwh=battery_energy_available_kwh,
             battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
             next_charge_opportunity_start=next_charge_opportunity.isoformat() if next_charge_opportunity else None,
             next_charge_window_start=cast(str | None, battery_cycle_summary["next_charge_window_start"]),
@@ -3548,6 +3565,39 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             for index in range(window_count)
         ]
+
+    def _extend_price_window_tail(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        horizon_end: datetime,
+        fallback_price: float | None,
+    ) -> list[PlannerWindow]:
+        if not windows:
+            return windows
+
+        extended_windows = sorted(windows, key=lambda item: item.start)
+        last_window = extended_windows[-1]
+        if last_window.end >= horizon_end:
+            return extended_windows
+
+        interval = last_window.end - last_window.start
+        if interval <= timedelta(0):
+            interval = timedelta(hours=1)
+        fill_price = last_window.price if last_window.price is not None else (fallback_price or 0.0)
+        tail_start = last_window.end
+        while tail_start < horizon_end:
+            tail_end = min(tail_start + interval, horizon_end)
+            extended_windows.append(
+                PlannerWindow(
+                    start=tail_start,
+                    end=tail_end,
+                    price=fill_price,
+                )
+            )
+            tail_start = tail_end
+
+        return extended_windows
 
     def _aggregate_price_windows_to_hourly(self, windows: list[PlannerWindow]) -> list[PlannerWindow]:
         if not windows:
