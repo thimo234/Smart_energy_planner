@@ -998,7 +998,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # Floor heating cools down much slower than the old generic fallback
         # assumed. Use a more conservative base model and start blending in the
         # learned factor as soon as any completed eco session exists.
-        fallback_rate = max(0.03, delta_temp * _THERMOSTAT_FALLBACK_COOLDING_FACTOR)
+        fallback_rate = max(0.03, delta_temp * _THERMOSTAT_FALLBACK_COOLING_FACTOR)
         fallback_hours = min(
             _THERMOSTAT_MAX_COOLDOWN_HOURS,
             max(_THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS, cooldown_delta_c / fallback_rate),
