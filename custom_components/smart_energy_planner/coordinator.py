@@ -436,38 +436,63 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
 
-            result = self._build_plan(
-                planner_kind=planner_kind,
-                windows=windows,
-                all_windows=all_windows,
-                export_windows=export_windows,
-                all_export_windows=all_export_windows,
-                battery_switch_windows=battery_switch_windows,
-                price_average=price_average,
-                export_price_average=export_price_average,
-                current_price=current_price,
-                solar_forecast_kwh=solar_forecast,
-                solar_windows=solar_windows,
-                all_solar_windows=all_solar_windows,
-                solcast_confidence=solcast_confidence,
-                heating_estimate_kwh=heating_estimate,
-                lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
-                total_energy_daily_average_kwh=total_energy_daily_average,
-                non_heating_daily_average_kwh=non_heating_daily_average,
-                historical_hourly_usage=historical_hourly_usage,
-                room_temperature_c=room_temperature,
-                thermostat_setpoint_c=thermostat_setpoint,
-                thermostat_cool_setpoint_c=thermostat_cool_setpoint,
-                thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
-                thermostat_eco_setpoint_c=thermostat_eco_setpoint,
-                room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
-                room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
-                cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
-                battery_soc_percent=battery_soc_percent,
-                price_resolution=price_resolution,
-                source_status=source_status,
-                source_errors=self._collect_source_errors(source_status),
-            )
+            try:
+                result = self._build_plan(
+                    planner_kind=planner_kind,
+                    windows=windows,
+                    all_windows=all_windows,
+                    export_windows=export_windows,
+                    all_export_windows=all_export_windows,
+                    battery_switch_windows=battery_switch_windows,
+                    price_average=price_average,
+                    export_price_average=export_price_average,
+                    current_price=current_price,
+                    solar_forecast_kwh=solar_forecast,
+                    solar_windows=solar_windows,
+                    all_solar_windows=all_solar_windows,
+                    solcast_confidence=solcast_confidence,
+                    heating_estimate_kwh=heating_estimate,
+                    lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
+                    total_energy_daily_average_kwh=total_energy_daily_average,
+                    non_heating_daily_average_kwh=non_heating_daily_average,
+                    historical_hourly_usage=historical_hourly_usage,
+                    room_temperature_c=room_temperature,
+                    thermostat_setpoint_c=thermostat_setpoint,
+                    thermostat_cool_setpoint_c=thermostat_cool_setpoint,
+                    thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
+                    thermostat_eco_setpoint_c=thermostat_eco_setpoint,
+                    room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
+                    room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
+                    cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
+                    battery_soc_percent=battery_soc_percent,
+                    price_resolution=price_resolution,
+                    source_status=source_status,
+                    source_errors=self._collect_source_errors(source_status),
+                )
+            except Exception as err:
+                if planner_kind != PLANNER_KIND_THERMOSTAT:
+                    raise
+                _LOGGER.exception("Thermostat planner failed; falling back to normal mode")
+                fallback_errors = self._collect_source_errors(source_status)
+                fallback_error = f"thermostat_planning_error: {err!s}"
+                if fallback_error not in fallback_errors:
+                    fallback_errors.append(fallback_error)
+                result = self._build_pending_result(
+                    "ready_with_warnings",
+                    planner_kind,
+                    source_status,
+                    fallback_errors,
+                )
+                result.current_price = current_price
+                result.room_temperature_c = room_temperature
+                result.thermostat_setpoint_c = thermostat_setpoint
+                result.thermostat_cool_setpoint_c = thermostat_cool_setpoint
+                result.thermostat_preheat_setpoint_c = thermostat_preheat_setpoint
+                result.thermostat_eco_setpoint_c = thermostat_eco_setpoint
+                result.room_cooling_hours_to_eco = cooling_profile["hours_to_eco"]
+                result.room_cooling_rate_c_per_hour = cooling_profile["cooling_rate_c_per_hour"]
+                result.cooling_reference_outdoor_temp_c = cooling_profile["reference_outdoor_temp_c"]
+                result.rationale = "thermostat planning degraded after runtime error; using normal mode"
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
@@ -1249,6 +1274,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         source_status: dict[str, str],
         source_errors: list[str],
     ) -> PlannerResult:
+        now = dt_util.now()
+        if not windows:
+            fallback_price = current_price if current_price is not None else 0.0
+            fallback_window = PlannerWindow(
+                start=now,
+                end=now + timedelta(hours=1),
+                price=fallback_price,
+            )
+            windows = [fallback_window]
+        if not all_windows:
+            all_windows = list(windows)
+        if not export_windows:
+            export_windows = list(windows)
+        if not all_export_windows:
+            all_export_windows = list(export_windows)
+        if not battery_switch_windows:
+            battery_switch_windows = list(all_windows)
+
         sorted_by_price = sorted(windows, key=lambda item: item.price)
         cheapest = sorted_by_price[0]
         most_expensive = sorted_by_price[-1]
@@ -1263,7 +1306,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and len(windows) > 1
             and price_spread > 0
         )
-        now = dt_util.now()
         today_solar_windows = [window for window in solar_windows if window.start.date() == now.date()]
         future_solar_windows = [window for window in solar_windows if window.start.date() > now.date()]
         best_solar_window = self._select_best_solar_window(today_solar_windows or solar_windows)
@@ -2898,14 +2940,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 max_discharge_kw=max_discharge_kw,
                 prefer_higher_prices=discharge_start_threshold_price is not None,
             )
-            forced_export_kwh = self._plan_segment_export_kwh(
-                slots=segment_slots,
-                planned_discharge_kwh=planned_discharge_kwh,
-                available_energy_kwh=sim_usable_energy_kwh,
-                target_end_energy_kwh=export_target_end_energy_kwh,
-                export_window_start=precharge_export_window_start,
-                export_window_end=first_charge_phase_start if before_first_charge_phase else None,
-                max_discharge_kw=max_discharge_kw,
+            forced_export_kwh = (
+                {}
+                if before_first_charge_phase
+                else self._plan_segment_export_kwh(
+                    slots=segment_slots,
+                    planned_discharge_kwh=planned_discharge_kwh,
+                    available_energy_kwh=sim_usable_energy_kwh,
+                    target_end_energy_kwh=export_target_end_energy_kwh,
+                    export_window_start=precharge_export_window_start,
+                    export_window_end=first_charge_phase_start if before_first_charge_phase else None,
+                    max_discharge_kw=max_discharge_kw,
+                )
             )
 
             for segment_slot in segment_slots:
