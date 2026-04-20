@@ -1028,7 +1028,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if cooldown_hours <= 0:
             return []
 
-        future_windows = [window for window in windows if window.end > now]
+        planning_start = now - timedelta(hours=cooldown_hours)
+        planning_windows = [window for window in windows if window.end > planning_start]
+        future_windows = [window for window in planning_windows if window.end > now]
         if not future_windows:
             return []
 
@@ -1056,15 +1058,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         eco_windows: list[dict[str, datetime | float]] = []
         for group in grouped_windows:
             peak_window = max(group, key=lambda item: item.price)
-            peak_index = future_windows.index(peak_window)
+            peak_index = planning_windows.index(peak_window)
             selected_indices = {peak_index}
             total_hours = max((peak_window.end - max(peak_window.start, now)).total_seconds() / 3600, 0.0)
             left_index = peak_index - 1
             right_index = peak_index + 1
 
             while total_hours < cooldown_hours:
-                left_window = future_windows[left_index] if left_index >= 0 else None
-                right_window = future_windows[right_index] if right_index < len(future_windows) else None
+                left_window = planning_windows[left_index] if left_index >= 0 else None
+                right_window = planning_windows[right_index] if right_index < len(planning_windows) else None
                 if left_window is None and right_window is None:
                     break
 
@@ -1075,7 +1077,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     choose_left = True
 
                 chosen_index = left_index if choose_left else right_index
-                chosen_window = future_windows[chosen_index]
+                chosen_window = planning_windows[chosen_index]
                 selected_indices.add(chosen_index)
                 total_hours += max((chosen_window.end - max(chosen_window.start, now)).total_seconds() / 3600, 0.0)
                 if choose_left:
@@ -1083,13 +1085,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 else:
                     right_index += 1
 
-            selected_windows = [future_windows[index] for index in sorted(selected_indices)]
-            eco_start = max(selected_windows[0].start, now)
+            selected_windows = [planning_windows[index] for index in sorted(selected_indices)]
+            eco_start = selected_windows[0].start
             eco_end = selected_windows[-1].end
             below_average_at = next(
                 (
                     window.start
-                    for window in future_windows
+                    for window in planning_windows
                     if window.start >= peak_window.end and window.price < average_price
                 ),
                 None,
@@ -1105,7 +1107,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             weighted_price = 0.0
             total_hours = 0.0
-            for window in future_windows:
+            for window in planning_windows:
                 overlap_start = max(window.start, eco_start)
                 overlap_end = min(window.end, eco_end)
                 overlap_hours = (overlap_end - overlap_start).total_seconds() / 3600
@@ -1310,6 +1312,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             }
             for window in eco_windows
             if preheat_minutes > 0
+        ]
+        preheat_windows = [
+            window
+            for window in preheat_windows
+            if window["end"] > now
         ]
         preheat_window = next(
             (
