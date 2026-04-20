@@ -3030,15 +3030,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             if not has_meaningful_later_peak:
                 discharge_start_threshold_price = None
-            needs_solar_room = (
-                before_first_charge_phase
-                and battery_room_needed_for_solar_kwh > battery_remaining_capacity_kwh
-            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                prefer_higher_prices=discharge_start_threshold_price is not None and not needs_solar_room,
+                prefer_higher_prices=discharge_start_threshold_price is not None and not before_first_charge_phase,
             )
             forced_export_kwh = (
                 {}
