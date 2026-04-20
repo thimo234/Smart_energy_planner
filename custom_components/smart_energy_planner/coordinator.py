@@ -1580,6 +1580,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             max_charge_kw=max_charge,
             max_discharge_kw=max_discharge,
         )
+        if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is None:
+            full_planned_mode_windows = []
+            planned_current_mode = "accu_uit"
+
         full_planned_discharge_windows = [
             window
             for window in full_planned_mode_windows
