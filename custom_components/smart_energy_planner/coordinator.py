@@ -63,6 +63,9 @@ _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
 _CLEAR_PRICE_PEAK_MIN_DELTA = 0.02
 _THERMOSTAT_ECO_MERGE_GAP = timedelta(hours=1)
+_THERMOSTAT_FALLBACK_COOLING_FACTOR = 0.04
+_THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS = 2.0
+_THERMOSTAT_MAX_COOLDOWN_HOURS = 18.0
 
 
 @dataclass(slots=True)
@@ -894,10 +897,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "reference_outdoor_temp_c": outdoor_temperature_c,
             }
 
-        cooldown_delta = max(room_temperature_c - thermostat_eco_setpoint_c, 0.1)
+        cooldown_reference_temperature = max(room_temperature_c, thermostat_setpoint_c)
+        cooldown_delta = max(cooldown_reference_temperature - thermostat_eco_setpoint_c, 0.3)
         estimated_rate, hours_to_eco = self._estimate_cooling_profile_from_model(
             outdoor_temperature_c=outdoor_temperature_c,
-            room_temperature_c=room_temperature_c,
+            room_temperature_c=cooldown_reference_temperature,
             cooldown_delta_c=cooldown_delta,
         )
         reference_outdoor = outdoor_temperature_c
@@ -919,20 +923,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cooling_model = runtime_state.get("cooling_model", {})
         learned_factor = _coerce_float(cooling_model.get("rolling_cooling_factor"))
         learned_samples = int(_coerce_float(cooling_model.get("eco_sample_count"), default=0.0) or 0)
+        last_eco_duration_hours = _coerce_float(cooling_model.get("last_eco_duration_hours"))
         delta_temp = max(room_temperature_c - outdoor_temperature_c, 1.0)
 
-        # Fallback to a simple linear cooling-rate model until enough complete
-        # eco sessions have been learned. Lower outdoor temperature increases
-        # the cooling rate, while a lower eco target increases the required
-        # cooldown duration.
-        fallback_rate = max(0.05, delta_temp * 0.1)
-        fallback_hours = min(12.0, max(1.0, cooldown_delta_c / fallback_rate))
+        # Floor heating cools down much slower than the old generic fallback
+        # assumed. Use a more conservative base model and start blending in the
+        # learned factor as soon as any completed eco session exists.
+        fallback_rate = max(0.03, delta_temp * _THERMOSTAT_FALLBACK_COOLDING_FACTOR)
+        fallback_hours = min(
+            _THERMOSTAT_MAX_COOLDOWN_HOURS,
+            max(_THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS, cooldown_delta_c / fallback_rate),
+        )
 
-        if learned_factor is not None and learned_samples >= 3:
+        if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            learned_rate = max(0.05, learned_factor * delta_temp)
-            learned_hours = min(12.0, max(1.0, cooldown_delta_c / learned_rate))
-            return learned_rate, learned_hours
+            learned_rate = max(0.03, learned_factor * delta_temp)
+            blend = min(1.0, learned_samples / 3.0)
+            estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
+            estimated_hours = min(
+                _THERMOSTAT_MAX_COOLDOWN_HOURS,
+                max(1.0, cooldown_delta_c / max(estimated_rate, 0.03)),
+            )
+            if last_eco_duration_hours is not None:
+                estimated_hours = max(estimated_hours, min(_THERMOSTAT_MAX_COOLDOWN_HOURS, last_eco_duration_hours))
+            return estimated_rate, estimated_hours
 
         return fallback_rate, fallback_hours
 
