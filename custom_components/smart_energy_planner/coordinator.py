@@ -2158,6 +2158,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
+        productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
+            slots=future_slots,
+            max_charge_kw=max_charge_kw,
+            minimum_slots=2,
+        )
         total_future_solar_capacity_kwh = round(
             sum(
                 min(
@@ -2179,7 +2184,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_capacity_kwh,
                 max(0.0, float(slot["net_solar_kwh"])),
             )
-            if solar_charge_kwh > 0:
+            if solar_charge_kwh > 0 and slot["start"] in productive_solar_slot_starts:
                 charge_candidates.append(
                     {
                         "kind": "solar",
@@ -2286,6 +2291,51 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._merge_planned_windows(planned_solar_charge_windows),
             self._merge_planned_windows(planned_grid_charge_windows),
         )
+
+    def _select_contiguous_productive_solar_slot_starts(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        max_charge_kw: float,
+        minimum_slots: int,
+    ) -> set[datetime]:
+        if minimum_slots <= 1:
+            return {
+                cast(datetime, slot["start"])
+                for slot in slots
+                if min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"]))) > 0
+            }
+
+        productive_starts: set[datetime] = set()
+        current_run: list[dict[str, Any]] = []
+        previous_end: datetime | None = None
+
+        for slot in slots:
+            charge_potential_kwh = min(
+                max_charge_kw * float(slot["hours"]),
+                max(0.0, float(slot["net_solar_kwh"])),
+            )
+            slot_start = cast(datetime, slot["start"])
+            slot_end = cast(datetime, slot["end"])
+            if charge_potential_kwh <= 0:
+                if len(current_run) >= minimum_slots:
+                    productive_starts.update(cast(datetime, run_slot["start"]) for run_slot in current_run)
+                current_run = []
+                previous_end = None
+                continue
+
+            if previous_end is not None and slot_start != previous_end:
+                if len(current_run) >= minimum_slots:
+                    productive_starts.update(cast(datetime, run_slot["start"]) for run_slot in current_run)
+                current_run = []
+
+            current_run.append(slot)
+            previous_end = slot_end
+
+        if len(current_run) >= minimum_slots:
+            productive_starts.update(cast(datetime, run_slot["start"]) for run_slot in current_run)
+
+        return productive_starts
 
     def _calculate_next_battery_peak_price(
         self,
