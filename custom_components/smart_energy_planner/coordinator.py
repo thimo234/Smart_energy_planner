@@ -3024,6 +3024,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and any(
                     cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
                     and float(candidate["price"]) > current_segment_price
+                    and float(candidate["net_solar_kwh"]) < 0
                     for candidate in segment_slots
                 )
             )
