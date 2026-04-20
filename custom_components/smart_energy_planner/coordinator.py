@@ -194,6 +194,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     async def _async_update_data(self) -> PlannerResult:
         """Fetch data and calculate planner output."""
         try:
+            now = dt_util.now()
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             price_sensor = self._config_entity_id(CONF_PRICE_SENSOR) or str(self._config[CONF_PRICE_SENSOR])
             export_price_sensor = self._config_entity_id(CONF_EXPORT_PRICE_SENSOR)
