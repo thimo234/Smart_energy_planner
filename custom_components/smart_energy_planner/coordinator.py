@@ -126,6 +126,9 @@ class PlannerResult:
     next_charge_window_start: str | None
     next_charge_window_end: str | None
     next_charge_window_hours: float
+    following_charge_window_start: str | None
+    following_charge_window_end: str | None
+    following_charge_window_hours: float
     next_discharge_window_start: str | None
     next_discharge_window_end: str | None
     next_discharge_window_hours: float
@@ -586,6 +589,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_charge_window_start=None,
             next_charge_window_end=None,
             next_charge_window_hours=0.0,
+            following_charge_window_start=None,
+            following_charge_window_end=None,
+            following_charge_window_hours=0.0,
             next_discharge_window_start=None,
             next_discharge_window_end=None,
             next_discharge_window_hours=0.0,
@@ -1791,6 +1797,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_charge_window_start=cast(str | None, battery_cycle_summary["next_charge_window_start"]),
             next_charge_window_end=cast(str | None, battery_cycle_summary["next_charge_window_end"]),
             next_charge_window_hours=float(battery_cycle_summary["next_charge_window_hours"]),
+            following_charge_window_start=cast(str | None, battery_cycle_summary["following_charge_window_start"]),
+            following_charge_window_end=cast(str | None, battery_cycle_summary["following_charge_window_end"]),
+            following_charge_window_hours=float(battery_cycle_summary["following_charge_window_hours"]),
             next_discharge_window_start=cast(str | None, battery_cycle_summary["next_discharge_window_start"]),
             next_discharge_window_end=cast(str | None, battery_cycle_summary["next_discharge_window_end"]),
             next_discharge_window_hours=float(battery_cycle_summary["next_discharge_window_hours"]),
@@ -2609,6 +2618,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cycle_windows = self._build_battery_cycle_windows(full_planned_mode_windows)
         relevant_cycle = self._select_relevant_battery_cycle(cycle_windows=cycle_windows, now=now)
         next_charge_cycle = self._find_battery_cycle(cycle_windows=cycle_windows, now=now, family="laden")
+        following_charge_cycle = next(
+            (
+                cycle
+                for cycle in cycle_windows
+                if str(cycle["family"]) == "laden"
+                and next_charge_cycle is not None
+                and cast(datetime, cycle["start"]) >= cast(datetime, next_charge_cycle["end"])
+            ),
+            None,
+        )
         next_discharge_cycle = self._find_battery_cycle(cycle_windows=cycle_windows, now=now, family="ontladen")
         next_idle_start = self._find_next_idle_start(cycle_windows=cycle_windows, now=now)
 
@@ -2649,6 +2668,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             "next_charge_window_hours": (
                 round(float(next_charge_cycle.get("usable_hours", 0.0)), 3) if next_charge_cycle is not None else 0.0
+            ),
+            "following_charge_window_start": (
+                cast(datetime, following_charge_cycle["start"]).isoformat()
+                if following_charge_cycle is not None
+                else None
+            ),
+            "following_charge_window_end": (
+                cast(datetime, following_charge_cycle["end"]).isoformat()
+                if following_charge_cycle is not None
+                else None
+            ),
+            "following_charge_window_hours": (
+                round(float(following_charge_cycle.get("usable_hours", 0.0)), 3)
+                if following_charge_cycle is not None
+                else 0.0
             ),
             "next_discharge_window_start": (
                 cast(datetime, next_discharge_cycle["start"]).isoformat()
