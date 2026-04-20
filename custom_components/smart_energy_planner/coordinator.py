@@ -508,6 +508,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         except Exception as err:
             _LOGGER.exception("Planner update failed")
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
+            if planner_kind == PLANNER_KIND_THERMOSTAT:
+                fallback_status = self._unknown_source_status(planner_kind)
+                fallback_errors = [f"thermostat_planning_error: {err!s}"]
+                result = self._build_pending_result(
+                    "ready_with_warnings",
+                    planner_kind,
+                    fallback_status,
+                    fallback_errors,
+                )
+                thermostat_setpoint = self._get_manual_thermostat_setpoint()
+                thermostat_cool_setpoint = self._get_manual_cool_temperature()
+                thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
+                thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
+                result.thermostat_setpoint_c = thermostat_setpoint
+                result.thermostat_cool_setpoint_c = thermostat_cool_setpoint
+                result.thermostat_preheat_setpoint_c = thermostat_preheat_setpoint
+                result.thermostat_eco_setpoint_c = thermostat_eco_setpoint
+                result.rationale = "thermostat planning degraded after runtime error; using normal mode"
+                return result
             return self._build_pending_result(
                 "planner_runtime_error",
                 planner_kind,
