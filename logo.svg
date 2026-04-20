@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 240" role="img" aria-label="Smart Energy Planner logo">
+  <defs>
+    <linearGradient id="panel" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#102a43"/>
+      <stop offset="100%" stop-color="#1f7a8c"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffd166"/>
+      <stop offset="100%" stop-color="#f4a261"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff3b0"/>
+      <stop offset="100%" stop-color="#ffb703"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="820" height="240" rx="40" fill="#0b1118"/>
+  <rect x="24" y="24" width="192" height="192" rx="44" fill="url(#panel)"/>
+  <circle cx="172" cy="76" r="24" fill="url(#sun)"/>
+  <path d="M172 39v12M172 101v12M135 76h12M197 76h12M146 50l9 9M189 93l9 9M146 102l9-9M189 59l9-9"
+        stroke="#ffd166" stroke-width="7" stroke-linecap="round" opacity="0.9"/>
+  <path d="M58 118 119 72l61 46v54a18 18 0 0 1-18 18H76a18 18 0 0 1-18-18z" fill="#f7fafc"/>
+  <path d="M88 178v-42c0-9 7-16 16-16h30c9 0 16 7 16 16v42" fill="#d9e2ec"/>
+  <rect x="114" y="102" width="64" height="42" rx="10" fill="#2bb673"/>
+  <rect x="120" y="108" width="44" height="30" rx="6" fill="#f0fff4"/>
+  <rect x="168" y="118" width="7" height="14" rx="3.5" fill="#2bb673"/>
+  <path d="M127 127h12v-8l10 11h-12v8z" fill="#2bb673"/>
+  <path d="M95 96h20l-10 23h14l-28 35 8-24H86z" fill="url(#bolt)"/>
+  <text x="252" y="100" fill="#f8fafc" font-family="Segoe UI, Arial, sans-serif" font-size="48" font-weight="700">
+    Smart Energy Planner
+  </text>
+  <text x="252" y="144" fill="#9fb3c8" font-family="Segoe UI, Arial, sans-serif" font-size="24">
+    Dynamic battery and thermostat planning for Home Assistant
+  </text>
+</svg>

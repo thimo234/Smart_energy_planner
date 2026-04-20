@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Smart Energy Planner icon">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#102a43"/>
+      <stop offset="100%" stop-color="#1f7a8c"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffd166"/>
+      <stop offset="100%" stop-color="#f4a261"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff3b0"/>
+      <stop offset="100%" stop-color="#ffb703"/>
+    </linearGradient>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="56" fill="url(#bg)"/>
+  <circle cx="186" cy="74" r="28" fill="url(#sun)"/>
+  <path d="M185 29v14M185 105v14M140 74h14M216 74h14M153 42l10 10M207 96l10 10M153 106l10-10M207 52l10-10"
+        stroke="#ffd166" stroke-width="8" stroke-linecap="round" opacity="0.85"/>
+  <path d="M55 123 128 66l73 57v65a20 20 0 0 1-20 20H75a20 20 0 0 1-20-20z" fill="#f7fafc" opacity="0.96"/>
+  <path d="M92 195v-51c0-10 8-18 18-18h36c10 0 18 8 18 18v51" fill="#d9e2ec"/>
+  <rect x="120" y="103" width="76" height="50" rx="12" fill="#2bb673"/>
+  <rect x="126" y="109" width="52" height="38" rx="8" fill="#f0fff4"/>
+  <rect x="182" y="120" width="8" height="16" rx="4" fill="#2bb673"/>
+  <path d="M136 133h14v-10l12 14h-14v10z" fill="#2bb673"/>
+  <path d="M106 98h24l-12 27h17l-33 41 10-29H95z" fill="url(#bolt)"/>
+</svg>

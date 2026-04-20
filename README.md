@@ -1,3 +1,5 @@
+![Smart Energy Planner](./logo.svg)
+
 # Smart Energy Planner
 
 Smart Energy Planner is a Home Assistant custom integration for:
