@@ -66,6 +66,15 @@ _THERMOSTAT_ECO_MERGE_GAP = timedelta(hours=1)
 _THERMOSTAT_FALLBACK_COOLING_FACTOR = 0.04
 _THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS = 2.0
 _THERMOSTAT_MAX_COOLDOWN_HOURS = 18.0
+# Number of completed eco sessions after which the learned cooling factor is
+# fully trusted. Below this number the planner blends the learned rate with a
+# conservative fallback.
+_THERMOSTAT_COOLING_LEARN_SAMPLES = 3
+# Minimum absolute change (kWh) in the tracked battery energy before the profit
+# tracker updates the cost basis. Changes below this are treated as sensor
+# noise, but the baseline is still persisted so we don't lose precision across
+# Home Assistant restarts.
+_BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
 
 
 @dataclass(slots=True)
@@ -736,9 +745,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return
 
         delta_kwh = round(current_battery_energy_kwh - last_energy, 3)
-        if abs(delta_kwh) < 0.01:
+        if abs(delta_kwh) < _BATTERY_PROFIT_NOISE_FLOOR_KWH:
             runtime_state["battery_profit_last_energy_kwh"] = round(current_battery_energy_kwh, 3)
             runtime_state["battery_profit_last_updated"] = now
+            # Persist the updated baseline so a restart cannot lose precision
+            # by comparing a fresh SoC reading against a stale disk baseline.
+            await self._async_persist_runtime_state(runtime_state)
             return
 
         if delta_kwh > 0 and current_mode == "laden_van_net" and import_price is not None:
@@ -1007,7 +1019,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
             learned_rate = max(0.03, learned_factor * delta_temp)
-            blend = min(1.0, learned_samples / 3.0)
+            blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
             estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
             estimated_hours = min(
                 _THERMOSTAT_MAX_COOLDOWN_HOURS,
@@ -1173,7 +1185,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         eco_windows: list[dict[str, datetime | float]] = []
         for group in grouped_windows:
             peak_window = max(group, key=lambda item: item.price)
-            peak_index = planning_windows.index(peak_window)
+            # Use identity lookup so two windows with coincidentally identical
+            # start/end/price (e.g. neutral fallback windows) cannot return the
+            # wrong index from list.index's equality comparison.
+            peak_index = next(
+                (index for index, window in enumerate(planning_windows) if window is peak_window),
+                -1,
+            )
+            if peak_index < 0:
+                # Fallback: find by timestamp if identity lookup fails for some reason.
+                peak_index = next(
+                    (
+                        index
+                        for index, window in enumerate(planning_windows)
+                        if window.start == peak_window.start and window.end == peak_window.end
+                    ),
+                    -1,
+                )
+            if peak_index < 0:
+                continue
             selected_indices = {peak_index}
             total_hours = max((peak_window.end - max(peak_window.start, now)).total_seconds() / 3600, 0.0)
             left_index = peak_index - 1
@@ -2239,6 +2269,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
         future_slots = [slot for slot in slots if slot["end"] > now]
+        # `current_remaining_capacity_kwh` is the amount of empty space left in
+        # the usable battery capacity (so it is already <= usable_capacity_kwh).
+        # Clamp defensively in case the caller ever passes a larger value.
         target_charge_kwh = max(0.0, min(usable_capacity_kwh, current_remaining_capacity_kwh))
         if not future_slots or target_charge_kwh <= 0:
             return planned_solar_charge_windows, planned_grid_charge_windows
@@ -2756,9 +2789,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         charge_end = cast(datetime, charge_window["end"])
         charge_kwh = float(charge_window["charge_kwh"])
         usable_hours = float(charge_window["usable_hours"])
-        sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
         # After a planned charge window, follow-on discharge planning should assume
         # the battery is effectively full instead of carrying a partial estimate.
+        # `charge_kwh` is intentionally unused in the simulated SOC update because we
+        # optimistically treat the battery as full after the entire charge phase.
+        _ = charge_kwh
         sim_usable_energy_kwh = usable_capacity_kwh
         if slot["start"] <= now < charge_end:
             current_mode = mode

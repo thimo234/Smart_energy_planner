@@ -280,6 +280,10 @@ async def _async_apply_heating_switch_control(
     hot_tolerance = float(merged.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE))
     min_cycle_minutes = int(merged.get(CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES))
 
+    # Hysteresis around the active target. When heating, turn the switch on
+    # once the room falls below (target - cold_tolerance) and off once it
+    # rises above (target + hot_tolerance). When cooling, the same tolerances
+    # are applied but inverted: turn on when too warm, off when cooled down.
     if cooling_active:
         should_turn_on = current_temperature >= active_target + hot_tolerance
         should_turn_off = current_temperature <= active_target - cold_tolerance
