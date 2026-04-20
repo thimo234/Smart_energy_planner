@@ -3086,7 +3086,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 mode = charge_phase_mode
                 if within_charge_phase or hold_solar_charge_mode:
                     mode = charge_phase_mode
-                elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
+                elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
