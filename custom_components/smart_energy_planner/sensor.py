@@ -132,14 +132,36 @@ class BatteryPlannerSensor(PlannerSensor):
             "battery_soc_percent": getattr(data, "battery_soc_percent", None),
             "battery_total_energy_kwh": getattr(data, "battery_total_energy_kwh", 0.0),
             "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),
+            "battery_usable_energy_kwh": getattr(data, "battery_usable_energy_kwh", 0.0),
             "battery_remaining_capacity_kwh": getattr(data, "battery_remaining_capacity_kwh", 0.0),
             "next_charge_opportunity_start": getattr(data, "next_charge_opportunity_start", None),
+            "next_charge_window_start": getattr(data, "next_charge_window_start", None),
+            "next_charge_window_end": getattr(data, "next_charge_window_end", None),
+            "next_charge_window_hours": getattr(data, "next_charge_window_hours", 0.0),
+            "next_discharge_window_start": getattr(data, "next_discharge_window_start", None),
+            "next_discharge_window_end": getattr(data, "next_discharge_window_end", None),
+            "next_discharge_window_hours": getattr(data, "next_discharge_window_hours", 0.0),
+            "next_idle_window_start": getattr(data, "next_idle_window_start", None),
+            "current_relevant_battery_window_start": getattr(
+                data, "current_relevant_battery_window_start", None
+            ),
+            "current_relevant_battery_window_end": getattr(data, "current_relevant_battery_window_end", None),
+            "current_relevant_battery_window_mode": getattr(data, "current_relevant_battery_window_mode", None),
+            "current_relevant_battery_window_expected_demand_kwh": getattr(
+                data, "current_relevant_battery_window_expected_demand_kwh", 0.0
+            ),
+            "current_relevant_battery_window_expected_solar_kwh": getattr(
+                data, "current_relevant_battery_window_expected_solar_kwh", 0.0
+            ),
             "home_demand_until_next_charge_kwh": getattr(data, "home_demand_until_next_charge_kwh", 0.0),
             "battery_reserved_energy_kwh": getattr(data, "battery_reserved_energy_kwh", 0.0),
             "battery_energy_available_for_discharge_kwh": getattr(
                 data, "battery_energy_available_for_discharge_kwh", 0.0
             ),
+            "battery_exportable_energy_kwh": getattr(data, "battery_exportable_energy_kwh", 0.0),
             "battery_room_needed_for_solar_kwh": getattr(data, "battery_room_needed_for_solar_kwh", 0.0),
+            "battery_charge_hours_needed_total": getattr(data, "battery_charge_hours_needed_total", 0.0),
+            "battery_full_discharge_hours": getattr(data, "battery_full_discharge_hours", 0.0),
             "next_high_price_window_start": getattr(data, "next_high_price_window_start", None),
             "next_high_price_window_price": getattr(data, "next_high_price_window_price", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,

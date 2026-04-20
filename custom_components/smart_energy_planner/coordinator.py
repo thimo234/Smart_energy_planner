@@ -118,12 +118,28 @@ class PlannerResult:
     battery_min_soc_percent: float
     battery_total_energy_kwh: float
     battery_energy_available_kwh: float
+    battery_usable_energy_kwh: float
     battery_remaining_capacity_kwh: float
     next_charge_opportunity_start: str | None
+    next_charge_window_start: str | None
+    next_charge_window_end: str | None
+    next_charge_window_hours: float
+    next_discharge_window_start: str | None
+    next_discharge_window_end: str | None
+    next_discharge_window_hours: float
+    next_idle_window_start: str | None
+    current_relevant_battery_window_start: str | None
+    current_relevant_battery_window_end: str | None
+    current_relevant_battery_window_mode: str | None
+    current_relevant_battery_window_expected_demand_kwh: float
+    current_relevant_battery_window_expected_solar_kwh: float
     home_demand_until_next_charge_kwh: float
     battery_reserved_energy_kwh: float
     battery_energy_available_for_discharge_kwh: float
+    battery_exportable_energy_kwh: float
     battery_room_needed_for_solar_kwh: float
+    battery_charge_hours_needed_total: float
+    battery_full_discharge_hours: float
     next_high_price_window_start: str | None
     next_high_price_window_price: float | None
     room_temperature_c: float | None
@@ -498,12 +514,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             battery_total_energy_kwh=0.0,
             battery_energy_available_kwh=0.0,
+            battery_usable_energy_kwh=0.0,
             battery_remaining_capacity_kwh=0.0,
             next_charge_opportunity_start=None,
+            next_charge_window_start=None,
+            next_charge_window_end=None,
+            next_charge_window_hours=0.0,
+            next_discharge_window_start=None,
+            next_discharge_window_end=None,
+            next_discharge_window_hours=0.0,
+            next_idle_window_start=None,
+            current_relevant_battery_window_start=None,
+            current_relevant_battery_window_end=None,
+            current_relevant_battery_window_mode=None,
+            current_relevant_battery_window_expected_demand_kwh=0.0,
+            current_relevant_battery_window_expected_solar_kwh=0.0,
             home_demand_until_next_charge_kwh=0.0,
             battery_reserved_energy_kwh=0.0,
             battery_energy_available_for_discharge_kwh=0.0,
+            battery_exportable_energy_kwh=0.0,
             battery_room_needed_for_solar_kwh=0.0,
+            battery_charge_hours_needed_total=0.0,
+            battery_full_discharge_hours=0.0,
             next_high_price_window_start=None,
             next_high_price_window_price=None,
             room_temperature_c=None,
@@ -1432,19 +1464,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_energy_available_kwh,
             max(0.0, round(home_demand_until_next_charge_kwh - solar_until_next_charge_kwh, 3)),
         )
+        battery_exportable_energy_kwh = max(
+            0.0,
+            round(battery_energy_available_kwh - battery_export_protected_energy_kwh, 3),
+        )
         battery_room_needed_for_solar_kwh = max(
             0.0,
             round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
         )
         next_high_price_window = (
-            min(
-                (
-                    window
-                    for window in future_windows
-                    if current_price is not None and window.price >= current_price + battery_min_profit
-                ),
-                key=lambda item: item.start,
-                default=None,
+            self._find_next_high_price_window(
+                future_windows=future_windows,
+                average_price=average_price,
             )
             if price_signal_available
             else None
@@ -1460,7 +1491,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
-            battery_min_profit=battery_min_profit,
             max_charge_kw=max_charge,
             max_discharge_kw=max_discharge,
         )
@@ -1476,6 +1506,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         battery_charge_hours_needed_until_sunset = round(
             sum(float(window.get("usable_hours", 0.0)) for window in planned_grid_charge_windows),
             3,
+        )
+        battery_charge_hours_needed_total = round(
+            sum(float(window.get("usable_hours", 0.0)) for window in [*planned_solar_charge_windows, *planned_grid_charge_windows]),
+            3,
+        )
+        battery_full_discharge_hours = round(
+            battery_energy_available_kwh / max_discharge,
+            3,
+        ) if max_discharge > 0 else 0.0
+        battery_cycle_summary = self._summarize_battery_cycles(
+            full_planned_mode_windows=full_planned_mode_windows,
+            energy_balance_slots=energy_balance_slots,
+            now=now,
+        )
+        _LOGGER.debug(
+            "Battery summary: relevant=%s %s->%s charge=%s->%s discharge=%s->%s exportable=%.3f usable=%.3f",
+            battery_cycle_summary["current_relevant_battery_window_mode"],
+            battery_cycle_summary["current_relevant_battery_window_start"],
+            battery_cycle_summary["current_relevant_battery_window_end"],
+            battery_cycle_summary["next_charge_window_start"],
+            battery_cycle_summary["next_charge_window_end"],
+            battery_cycle_summary["next_discharge_window_start"],
+            battery_cycle_summary["next_discharge_window_end"],
+            battery_exportable_energy_kwh,
+            battery_energy_available_kwh,
         )
 
         score = 50
@@ -1622,12 +1677,38 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_soc_percent=battery_min_soc_percent,
             battery_total_energy_kwh=battery_total_energy_kwh,
             battery_energy_available_kwh=battery_energy_available_kwh,
+            battery_usable_energy_kwh=battery_energy_available_kwh,
             battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
             next_charge_opportunity_start=next_charge_opportunity.isoformat() if next_charge_opportunity else None,
+            next_charge_window_start=cast(str | None, battery_cycle_summary["next_charge_window_start"]),
+            next_charge_window_end=cast(str | None, battery_cycle_summary["next_charge_window_end"]),
+            next_charge_window_hours=float(battery_cycle_summary["next_charge_window_hours"]),
+            next_discharge_window_start=cast(str | None, battery_cycle_summary["next_discharge_window_start"]),
+            next_discharge_window_end=cast(str | None, battery_cycle_summary["next_discharge_window_end"]),
+            next_discharge_window_hours=float(battery_cycle_summary["next_discharge_window_hours"]),
+            next_idle_window_start=cast(str | None, battery_cycle_summary["next_idle_window_start"]),
+            current_relevant_battery_window_start=cast(
+                str | None, battery_cycle_summary["current_relevant_battery_window_start"]
+            ),
+            current_relevant_battery_window_end=cast(
+                str | None, battery_cycle_summary["current_relevant_battery_window_end"]
+            ),
+            current_relevant_battery_window_mode=cast(
+                str | None, battery_cycle_summary["current_relevant_battery_window_mode"]
+            ),
+            current_relevant_battery_window_expected_demand_kwh=float(
+                battery_cycle_summary["current_relevant_battery_window_expected_demand_kwh"]
+            ),
+            current_relevant_battery_window_expected_solar_kwh=float(
+                battery_cycle_summary["current_relevant_battery_window_expected_solar_kwh"]
+            ),
             home_demand_until_next_charge_kwh=home_demand_until_next_charge_kwh,
             battery_reserved_energy_kwh=battery_reserved_energy_kwh,
             battery_energy_available_for_discharge_kwh=battery_energy_available_for_discharge_kwh,
+            battery_exportable_energy_kwh=battery_exportable_energy_kwh,
             battery_room_needed_for_solar_kwh=battery_room_needed_for_solar_kwh,
+            battery_charge_hours_needed_total=battery_charge_hours_needed_total,
+            battery_full_discharge_hours=battery_full_discharge_hours,
             next_high_price_window_start=next_high_price_window.start.isoformat() if next_high_price_window else None,
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
@@ -2218,6 +2299,217 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             }
         return lookup
 
+    def _find_next_high_price_window(
+        self,
+        *,
+        future_windows: list[PlannerWindow],
+        average_price: float,
+    ) -> PlannerWindow | None:
+        if not future_windows:
+            return None
+
+        highest_future_price = max((window.price for window in future_windows), default=None)
+        if highest_future_price is None or highest_future_price <= average_price:
+            return None
+
+        return min(
+            (window for window in future_windows if window.price >= highest_future_price - 1e-9),
+            key=lambda window: window.start,
+            default=None,
+        )
+
+    def _battery_mode_family(self, mode: str) -> str:
+        if mode in ("laden_met_zonne_energie", "laden_van_net"):
+            return "laden"
+        if mode in ("ontladen", "ontladen_naar_net"):
+            return "ontladen"
+        return "accu_uit"
+
+    def _build_battery_cycle_windows(
+        self,
+        windows: list[dict[str, str | float]],
+    ) -> list[dict[str, str | datetime | float]]:
+        cycles: list[dict[str, str | datetime | float]] = []
+        for window in sorted(windows, key=lambda item: str(item["start"])):
+            start = dt_util.parse_datetime(str(window["start"]))
+            end = dt_util.parse_datetime(str(window["end"]))
+            if start is None or end is None:
+                continue
+
+            family = self._battery_mode_family(str(window.get("mode", "accu_uit")))
+            if (
+                cycles
+                and cast(datetime, cycles[-1]["end"]) == start
+                and str(cycles[-1]["family"]) == family
+            ):
+                cycles[-1]["end"] = end
+                cycles[-1]["usable_hours"] = round(
+                    float(cycles[-1].get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
+                    3,
+                )
+                continue
+
+            cycles.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "family": family,
+                    "usable_hours": round(float(window.get("usable_hours", 0.0)), 3),
+                }
+            )
+
+        return cycles
+
+    def _sum_slot_metric_in_window(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        start: datetime,
+        end: datetime,
+        metric_key: str,
+    ) -> float:
+        total = 0.0
+        for slot in slots:
+            slot_start = cast(datetime, slot["start"])
+            slot_end = cast(datetime, slot["end"])
+            overlap_hours = self._overlap_hours(slot_start, slot_end, start, end)
+            if overlap_hours <= 0:
+                continue
+            slot_hours = max((slot_end - slot_start).total_seconds() / 3600, 0.0001)
+            total += float(slot.get(metric_key, 0.0)) * (overlap_hours / slot_hours)
+        return round(total, 3)
+
+    def _select_relevant_battery_cycle(
+        self,
+        *,
+        cycle_windows: list[dict[str, str | datetime | float]],
+        now: datetime,
+    ) -> dict[str, str | datetime | float] | None:
+        current_cycle = next(
+            (
+                cycle
+                for cycle in cycle_windows
+                if cast(datetime, cycle["start"]) <= now < cast(datetime, cycle["end"])
+            ),
+            None,
+        )
+        if current_cycle is not None and str(current_cycle["family"]) != "accu_uit":
+            return current_cycle
+
+        next_relevant_cycle = next(
+            (
+                cycle
+                for cycle in cycle_windows
+                if cast(datetime, cycle["start"]) > now and str(cycle["family"]) != "accu_uit"
+            ),
+            None,
+        )
+        return next_relevant_cycle or current_cycle
+
+    def _find_battery_cycle(
+        self,
+        *,
+        cycle_windows: list[dict[str, str | datetime | float]],
+        now: datetime,
+        family: str,
+    ) -> dict[str, str | datetime | float] | None:
+        return next(
+            (
+                cycle
+                for cycle in cycle_windows
+                if str(cycle["family"]) == family
+                and cast(datetime, cycle["end"]) > now
+            ),
+            None,
+        )
+
+    def _find_next_idle_start(
+        self,
+        *,
+        cycle_windows: list[dict[str, str | datetime | float]],
+        now: datetime,
+    ) -> datetime | None:
+        next_idle_cycle = next(
+            (
+                cycle
+                for cycle in cycle_windows
+                if str(cycle["family"]) == "accu_uit" and cast(datetime, cycle["start"]) > now
+            ),
+            None,
+        )
+        if next_idle_cycle is None:
+            return None
+        return cast(datetime, next_idle_cycle["start"])
+
+    def _summarize_battery_cycles(
+        self,
+        *,
+        full_planned_mode_windows: list[dict[str, str | float]],
+        energy_balance_slots: list[dict[str, Any]],
+        now: datetime,
+    ) -> dict[str, str | float | None]:
+        cycle_windows = self._build_battery_cycle_windows(full_planned_mode_windows)
+        relevant_cycle = self._select_relevant_battery_cycle(cycle_windows=cycle_windows, now=now)
+        next_charge_cycle = self._find_battery_cycle(cycle_windows=cycle_windows, now=now, family="laden")
+        next_discharge_cycle = self._find_battery_cycle(cycle_windows=cycle_windows, now=now, family="ontladen")
+        next_idle_start = self._find_next_idle_start(cycle_windows=cycle_windows, now=now)
+
+        relevant_start = cast(datetime, relevant_cycle["start"]) if relevant_cycle is not None else None
+        relevant_end = cast(datetime, relevant_cycle["end"]) if relevant_cycle is not None else None
+
+        return {
+            "current_relevant_battery_window_start": relevant_start.isoformat() if relevant_start else None,
+            "current_relevant_battery_window_end": relevant_end.isoformat() if relevant_end else None,
+            "current_relevant_battery_window_mode": (
+                str(relevant_cycle["family"]) if relevant_cycle is not None else None
+            ),
+            "current_relevant_battery_window_expected_demand_kwh": (
+                self._sum_slot_metric_in_window(
+                    slots=energy_balance_slots,
+                    start=relevant_start,
+                    end=relevant_end,
+                    metric_key="demand_kwh",
+                )
+                if relevant_start is not None and relevant_end is not None
+                else 0.0
+            ),
+            "current_relevant_battery_window_expected_solar_kwh": (
+                self._sum_slot_metric_in_window(
+                    slots=energy_balance_slots,
+                    start=relevant_start,
+                    end=relevant_end,
+                    metric_key="solar_kwh",
+                )
+                if relevant_start is not None and relevant_end is not None
+                else 0.0
+            ),
+            "next_charge_window_start": (
+                cast(datetime, next_charge_cycle["start"]).isoformat() if next_charge_cycle is not None else None
+            ),
+            "next_charge_window_end": (
+                cast(datetime, next_charge_cycle["end"]).isoformat() if next_charge_cycle is not None else None
+            ),
+            "next_charge_window_hours": (
+                round(float(next_charge_cycle.get("usable_hours", 0.0)), 3) if next_charge_cycle is not None else 0.0
+            ),
+            "next_discharge_window_start": (
+                cast(datetime, next_discharge_cycle["start"]).isoformat()
+                if next_discharge_cycle is not None
+                else None
+            ),
+            "next_discharge_window_end": (
+                cast(datetime, next_discharge_cycle["end"]).isoformat()
+                if next_discharge_cycle is not None
+                else None
+            ),
+            "next_discharge_window_hours": (
+                round(float(next_discharge_cycle.get("usable_hours", 0.0)), 3)
+                if next_discharge_cycle is not None
+                else 0.0
+            ),
+            "next_idle_window_start": next_idle_start.isoformat() if next_idle_start is not None else None,
+        }
+
     def _resolve_charge_phase_bounds(
         self,
         *,
@@ -2358,7 +2650,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         average_price: float,
         average_export_price: float,
-        battery_min_profit: float,
         max_charge_kw: float,
         max_discharge_kw: float,
     ) -> tuple[list[dict[str, str | float]], str]:
@@ -2496,19 +2787,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if current_segment_slot is not None
                 else None
             )
+            discharge_start_threshold_price = self._calculate_battery_discharge_start_threshold(segment_slots)
             has_meaningful_later_peak = (
                 current_segment_price is not None
+                and discharge_start_threshold_price is not None
                 and any(
                     cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
-                    and float(candidate["price"]) >= current_segment_price + battery_min_profit
+                    and float(candidate["price"]) > current_segment_price
                     for candidate in segment_slots
                 )
             )
-            discharge_start_threshold_price = (
-                self._calculate_battery_discharge_start_threshold(segment_slots)
-                if has_meaningful_later_peak
-                else None
-            )
+            if not has_meaningful_later_peak:
+                discharge_start_threshold_price = None
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
@@ -2584,7 +2874,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         exportable_kwh > 0
                         and float(segment_slot["net_solar_kwh"]) >= 0
                         and segment_end_index < len(slots)
-                        and float(segment_slot["export_price"]) >= average_export_price + battery_min_profit
+                        and float(segment_slot["export_price"]) >= average_export_price
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
@@ -3045,7 +3335,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         now: datetime,
         after: datetime | None,
         average_price: float,
-        battery_min_profit: float,
     ) -> list[dict[str, str | float]]:
         if after is None:
             return []
@@ -3061,7 +3350,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for window in windows
             if window.end > now
             and window.start >= after
-            and window.price >= max(average_price, average_price + (battery_min_profit / 2))
+            and window.price >= average_price
         ]
         return self._merge_planned_windows(discharge_windows)
 
