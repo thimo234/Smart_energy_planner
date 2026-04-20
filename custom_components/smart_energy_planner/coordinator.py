@@ -2704,6 +2704,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         charge_kwh = float(charge_window["charge_kwh"])
         usable_hours = float(charge_window["usable_hours"])
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
+        # After a planned charge window, follow-on discharge planning should assume
+        # the battery is effectively full instead of carrying a partial estimate.
+        sim_usable_energy_kwh = usable_capacity_kwh
         if slot["start"] <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
