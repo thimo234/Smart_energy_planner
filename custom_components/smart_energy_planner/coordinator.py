@@ -1338,22 +1338,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             mid_price_threshold if planner_kind == PLANNER_KIND_THERMOSTAT else expensive_threshold
         )
         eco_windows = []
+        thermostat_planning_error: str | None = None
         if price_signal_available:
-            if planner_kind == PLANNER_KIND_THERMOSTAT:
-                eco_windows = self._select_thermostat_peak_eco_windows(
-                    windows=windows,
-                    now=now,
-                    cooldown_hours=eco_duration_hours,
-                    average_price=average_price,
-                    expensive_threshold=expensive_threshold,
-                )
-            else:
-                eco_windows = self._select_expensive_peak_blocks(
-                    windows=windows,
-                    now=now,
-                    duration_hours=eco_duration_hours,
-                    expensive_threshold=eco_expensive_threshold,
-                )
+            try:
+                if planner_kind == PLANNER_KIND_THERMOSTAT:
+                    eco_windows = self._select_thermostat_peak_eco_windows(
+                        windows=windows,
+                        now=now,
+                        cooldown_hours=eco_duration_hours,
+                        average_price=average_price,
+                        expensive_threshold=expensive_threshold,
+                    )
+                else:
+                    eco_windows = self._select_expensive_peak_blocks(
+                        windows=windows,
+                        now=now,
+                        duration_hours=eco_duration_hours,
+                        expensive_threshold=eco_expensive_threshold,
+                    )
+            except Exception as err:
+                if planner_kind == PLANNER_KIND_THERMOSTAT:
+                    thermostat_planning_error = f"thermostat_planning_error: {err!s}"
+                    _LOGGER.exception("Thermostat peak planning failed")
+                    eco_windows = []
+                else:
+                    raise
+        if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
+            source_errors = [*source_errors, thermostat_planning_error]
         eco_window = next(
             (
                 window
