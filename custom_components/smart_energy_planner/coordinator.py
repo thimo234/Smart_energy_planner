@@ -2317,7 +2317,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # the usable battery capacity (so it is already <= usable_capacity_kwh).
         # Clamp defensively in case the caller ever passes a larger value.
         target_charge_kwh = max(0.0, min(usable_capacity_kwh, current_remaining_capacity_kwh))
-        if not future_slots or target_charge_kwh <= 0:
+        # Skip planning for trivial remaining capacity (< 100 Wh).  A tiny rounding
+        # remainder would otherwise produce a charge window that hold_solar_charge_mode
+        # then stretches over the full 4-hour solar block even though the battery is
+        # effectively full.
+        if not future_slots or target_charge_kwh < 0.1:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
@@ -3083,6 +3087,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             if not has_meaningful_later_peak:
                 discharge_start_threshold_price = None
+            # Outside the pre-charge drain phase, fall back to the average import price
+            # as the minimum price required to discharge.  This prevents cheap morning
+            # slots (e.g. 06:00–08:00 at €0.10 right after an overnight grid charge)
+            # from triggering ontladen mode just because the segment is too short to
+            # compute a proper peak-based threshold.
+            if discharge_start_threshold_price is None and not before_first_charge_phase:
+                discharge_start_threshold_price = average_price
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
@@ -3142,7 +3153,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 mode = charge_phase_mode
                 if within_charge_phase or hold_solar_charge_mode:
                     mode = charge_phase_mode
-                elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0:
+                elif (
+                    segment_discharge_kwh > 0
+                    and sim_usable_energy_kwh > 0
+                    and (discharge_threshold_reached or before_first_charge_phase)
+                ):
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
