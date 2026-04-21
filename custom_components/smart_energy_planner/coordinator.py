@@ -1462,15 +1462,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     raise
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
-        eco_window = next(
-            (
-                window
-                for window in eco_windows
-                if window["start"] <= now < window["end"]
-            ),
-            next((window for window in eco_windows if window["start"] > now), None),
+        eco_temp_reached = (
+            room_temperature_c is not None
+            and thermostat_eco_setpoint_c is not None
+            and room_temperature_c <= thermostat_eco_setpoint_c
         )
-        eco_active_now = any(window["start"] <= now < window["end"] for window in eco_windows)
+        active_eco_window = next(
+            (window for window in eco_windows if window["start"] <= now < window["end"]),
+            None,
+        )
+        # Exit eco once the eco temperature has been reached — no point staying in eco if already cold enough
+        eco_active_now = active_eco_window is not None and not eco_temp_reached
+        eco_window = (
+            active_eco_window
+            if eco_active_now
+            else next((window for window in eco_windows if window["start"] > now), None)
+        )
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
@@ -1491,6 +1498,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for window in preheat_windows
             if window["end"] > now
         ]
+        # When eco temp is reached early inside an active eco window, immediately start
+        # preheating for the next eco window so enough heat is stored before the next peak
+        if eco_temp_reached and active_eco_window is not None:
+            next_eco_window = next(
+                (w for w in eco_windows if w["start"] >= active_eco_window["end"]),
+                None,
+            )
+            if next_eco_window is not None:
+                preheat_windows = [
+                    w for w in preheat_windows if w["end"] != next_eco_window["start"]
+                ]
+                preheat_windows = [
+                    {
+                        "start": now,
+                        "end": next_eco_window["start"],
+                        "average_price": next_eco_window["average_price"],
+                    },
+                    *preheat_windows,
+                ]
         preheat_window = next(
             (
                 window
