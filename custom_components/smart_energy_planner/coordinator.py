@@ -1462,10 +1462,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     raise
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
+        # Only relevant for thermostat planners; battery planners have no room sensor
         eco_temp_reached = (
-            room_temperature_c is not None
+            planner_kind == PLANNER_KIND_THERMOSTAT
+            and room_temperature_c is not None
             and thermostat_eco_setpoint_c is not None
-            and room_temperature_c <= thermostat_eco_setpoint_c
+            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1  # 0.1 °C hysteresis against sensor noise
         )
         active_eco_window = next(
             (window for window in eco_windows if window["start"] <= now < window["end"]),
@@ -1505,9 +1507,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 (w for w in eco_windows if w["start"] >= active_eco_window["end"]),
                 None,
             )
-            if next_eco_window is not None:
+            if next_eco_window is not None and next_eco_window["start"] > now:
+                expected_preheat_start = max(
+                    next_eco_window["start"] - timedelta(minutes=preheat_minutes),
+                    now.replace(hour=0, minute=0, second=0, microsecond=0),
+                )
                 preheat_windows = [
-                    w for w in preheat_windows if w["end"] != next_eco_window["start"]
+                    w for w in preheat_windows
+                    if not (w["end"] == next_eco_window["start"] and w["start"] == expected_preheat_start)
                 ]
                 preheat_windows = [
                     {
