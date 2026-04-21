@@ -3146,6 +3146,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                             0.0,
                             sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
                         )
+                    elif (
+                        before_first_charge_phase
+                        and exportable_kwh > 0
+                        and float(segment_slot["export_price"]) >= average_export_price
+                    ):
+                        mode = "ontladen_naar_net"
+                        last_charge_mode = "accu_uit"
+                        sim_usable_energy_kwh = max(
+                            0.0,
+                            sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
+                        )
 
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
