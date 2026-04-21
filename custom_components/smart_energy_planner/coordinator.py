@@ -193,6 +193,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
+        self._eco_early_exit_until: datetime | None = None
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -1475,8 +1476,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        # Exit eco once the eco temperature has been reached — no point staying in eco if already cold enough
-        eco_active_now = active_eco_window is not None and not eco_temp_reached
+        # Clear the early-exit latch when the window it was set for has ended.
+        if self._eco_early_exit_until is not None and now >= self._eco_early_exit_until:
+            self._eco_early_exit_until = None
+        # When the room has already reached eco temperature inside an active eco window,
+        # latch the early exit until the window ends.  Without this latch the coordinator
+        # would flip between eco (temp > setpoint) and normal (temp ≤ setpoint) every
+        # update cycle, causing the thermostat to oscillate rapidly.
+        if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
+            self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
+        eco_active_now = (
+            active_eco_window is not None
+            and not eco_temp_reached
+            and self._eco_early_exit_until is None
+        )
         eco_window = (
             active_eco_window
             if eco_active_now
@@ -3107,19 +3120,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # compute a proper peak-based threshold.
             if discharge_start_threshold_price is None and not before_first_charge_phase:
                 discharge_start_threshold_price = average_price
-            prefer_higher_prices_flag = discharge_start_threshold_price is not None and not before_first_charge_phase
-            _LOGGER.warning(
-                "SEP_DBG seg=%s first_charge=%s before=%s sim=%.3f budget=%.3f prefer=%s threshold=%s has_peak=%s slots=%d",
-                segment_slots[0]["start"].isoformat() if segment_slots else "empty",
-                first_charge_phase_start,
-                before_first_charge_phase,
-                sim_usable_energy_kwh,
-                discharge_budget_kwh,
-                prefer_higher_prices_flag,
-                discharge_start_threshold_price,
-                has_meaningful_later_peak,
-                len(segment_slots),
-            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
@@ -3127,7 +3127,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # Pre-charge: always chronological so the battery drains continuously
                 # without gaps, staying in ontladen until empty before the charge window.
                 # Post-charge: prefer expensive slots for arbitrage profit.
-                prefer_higher_prices=prefer_higher_prices_flag,
+                prefer_higher_prices=discharge_start_threshold_price is not None and not before_first_charge_phase,
             )
             forced_export_kwh = (
                 {}
