@@ -2804,7 +2804,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode = "accu_uit"
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
-        if active_charge_phase_end is not None and active_charge_phase_end > now:
+        if (
+            active_charge_phase_end is not None
+            and active_charge_phase_end > now
+            and any(w["start"] <= now < w["end"] for w in normalized_windows)
+        ):
             normalized_windows.append({"start": now, "end": active_charge_phase_end})
             normalized_windows.sort(key=lambda window: window["start"])
 
