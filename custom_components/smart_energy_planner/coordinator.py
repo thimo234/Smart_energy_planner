@@ -2811,6 +2811,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         ):
             normalized_windows.append({"start": now, "end": active_charge_phase_end})
             normalized_windows.sort(key=lambda window: window["start"])
+        else:
+            # Stale persisted window is not relevant; discard its mode so it cannot
+            # bleed into charge_phase_mode and label future slots (e.g. night grid
+            # charge windows) with the wrong mode (e.g. laden_met_zonne_energie).
+            active_charge_phase_mode = "accu_uit"
 
         clusters: list[dict[str, datetime]] = []
         for window in normalized_windows:
