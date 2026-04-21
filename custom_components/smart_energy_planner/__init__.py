@@ -437,7 +437,7 @@ async def _async_update_cooling_model(
 
     elapsed_hours = (now - start_time).total_seconds() / 3600
     cooling_drop = start_room_temp - current_temperature
-    if elapsed_hours <= 0 or cooling_drop < 0.5:
+    if elapsed_hours < 0.25 or cooling_drop < 0.5:  # require at least 15 min session
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 

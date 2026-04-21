@@ -154,6 +154,7 @@ class PlannerResult:
     battery_room_needed_for_solar_kwh: float
     battery_charge_hours_needed_total: float
     battery_full_discharge_hours: float
+    battery_simulated_remaining_kwh_after_discharge: float
     next_high_price_window_start: str | None
     next_high_price_window_price: float | None
     room_temperature_c: float | None
@@ -617,6 +618,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_room_needed_for_solar_kwh=0.0,
             battery_charge_hours_needed_total=0.0,
             battery_full_discharge_hours=0.0,
+            battery_simulated_remaining_kwh_after_discharge=0.0,
             next_high_price_window_start=None,
             next_high_price_window_price=None,
             room_temperature_c=None,
@@ -1018,7 +1020,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            learned_rate = max(0.03, learned_factor * delta_temp)
+            learned_rate = max(0.03, min(2.0, learned_factor * delta_temp))
             blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
             estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
             estimated_hours = min(
@@ -1462,15 +1464,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     raise
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
-        eco_window = next(
-            (
-                window
-                for window in eco_windows
-                if window["start"] <= now < window["end"]
-            ),
-            next((window for window in eco_windows if window["start"] > now), None),
+        # Only relevant for thermostat planners; battery planners have no room sensor
+        eco_temp_reached = (
+            planner_kind == PLANNER_KIND_THERMOSTAT
+            and room_temperature_c is not None
+            and thermostat_eco_setpoint_c is not None
+            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1  # 0.1 °C hysteresis against sensor noise
         )
-        eco_active_now = any(window["start"] <= now < window["end"] for window in eco_windows)
+        active_eco_window = next(
+            (window for window in eco_windows if window["start"] <= now < window["end"]),
+            None,
+        )
+        # Exit eco once the eco temperature has been reached — no point staying in eco if already cold enough
+        eco_active_now = active_eco_window is not None and not eco_temp_reached
+        eco_window = (
+            active_eco_window
+            if eco_active_now
+            else next((window for window in eco_windows if window["start"] > now), None)
+        )
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
@@ -1491,6 +1502,41 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for window in preheat_windows
             if window["end"] > now
         ]
+        # When eco temp is reached early inside an active eco window, immediately start
+        # preheating for the next eco window so enough heat is stored before the next peak
+        if eco_temp_reached and active_eco_window is not None:
+            next_eco_window = next(
+                (w for w in eco_windows if w["start"] >= active_eco_window["end"]),
+                None,
+            )
+            if next_eco_window is not None and next_eco_window["start"] > now:
+                expected_preheat_start = max(
+                    next_eco_window["start"] - timedelta(minutes=preheat_minutes),
+                    now.replace(hour=0, minute=0, second=0, microsecond=0),
+                )
+                preheat_windows = [
+                    w for w in preheat_windows
+                    if not (w["end"] == next_eco_window["start"] and w["start"] == expected_preheat_start)
+                ]
+                preheat_windows = [
+                    {
+                        "start": now,
+                        "end": next_eco_window["start"],
+                        "average_price": next_eco_window["average_price"],
+                    },
+                    *preheat_windows,
+                ]
+            elif preheat_minutes > 0:
+                # No upcoming eco window — inject a short preheat so the heater can warm
+                # the room back up to normal setpoint after eco cooling completed
+                preheat_windows = [
+                    {
+                        "start": now,
+                        "end": now + timedelta(minutes=preheat_minutes),
+                        "average_price": float(active_eco_window.get("average_price", 0.0)),
+                    },
+                    *preheat_windows,
+                ]
         preheat_window = next(
             (
                 window
@@ -1664,6 +1710,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             full_planned_mode_windows=full_planned_mode_windows,
             energy_balance_slots=energy_balance_slots,
             now=now,
+        )
+        battery_simulated_remaining_kwh_after_discharge = round(
+            max(
+                0.0,
+                battery_energy_available_kwh
+                - float(battery_cycle_summary.get("current_relevant_battery_window_expected_demand_kwh", 0.0)),
+            ),
+            3,
         )
         _LOGGER.debug(
             "Battery summary: relevant=%s %s->%s charge=%s->%s discharge=%s->%s exportable=%.3f usable=%.3f",
@@ -1856,6 +1910,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_room_needed_for_solar_kwh=battery_room_needed_for_solar_kwh,
             battery_charge_hours_needed_total=battery_charge_hours_needed_total,
             battery_full_discharge_hours=battery_full_discharge_hours,
+            battery_simulated_remaining_kwh_after_discharge=battery_simulated_remaining_kwh_after_discharge,
             next_high_price_window_start=next_high_price_window.start.isoformat() if next_high_price_window else None,
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
@@ -2273,7 +2328,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # the usable battery capacity (so it is already <= usable_capacity_kwh).
         # Clamp defensively in case the caller ever passes a larger value.
         target_charge_kwh = max(0.0, min(usable_capacity_kwh, current_remaining_capacity_kwh))
-        if not future_slots or target_charge_kwh <= 0:
+        # Skip planning for trivial remaining capacity (< 100 Wh).  A tiny rounding
+        # remainder would otherwise produce a charge window that hold_solar_charge_mode
+        # then stretches over the full 4-hour solar block even though the battery is
+        # effectively full.
+        if not future_slots or target_charge_kwh < 0.1:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
@@ -2760,9 +2819,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode = "accu_uit"
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
-        if active_charge_phase_end is not None and active_charge_phase_end > now:
+        if (
+            active_charge_phase_end is not None
+            and active_charge_phase_end > now
+            and any(w["start"] <= now < w["end"] for w in normalized_windows)
+        ):
             normalized_windows.append({"start": now, "end": active_charge_phase_end})
             normalized_windows.sort(key=lambda window: window["start"])
+        else:
+            # Stale persisted window is not relevant; discard its mode so it cannot
+            # bleed into charge_phase_mode and label future slots (e.g. night grid
+            # charge windows) with the wrong mode (e.g. laden_met_zonne_energie).
+            active_charge_phase_mode = "accu_uit"
 
         clusters: list[dict[str, datetime]] = []
         for window in normalized_windows:
@@ -2977,9 +3045,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if segment_end_index < len(slots):
                 next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
             before_first_charge_phase = (
-                first_charge_phase_start is not None
-                and bool(segment_slots)
-                and segment_slots[0]["start"] < first_charge_phase_start
+                first_charge_phase_start is None  # no charge windows → drain freely, no price gating
+                or (
+                    bool(segment_slots)
+                    and segment_slots[0]["start"] < first_charge_phase_start
+                )
             )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
@@ -3024,16 +3094,40 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and any(
                     cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
                     and float(candidate["price"]) > current_segment_price
+                    and float(candidate["net_solar_kwh"]) < 0
                     for candidate in segment_slots
                 )
             )
             if not has_meaningful_later_peak:
                 discharge_start_threshold_price = None
+            # Outside the pre-charge drain phase, fall back to the average import price
+            # as the minimum price required to discharge.  This prevents cheap morning
+            # slots (e.g. 06:00–08:00 at €0.10 right after an overnight grid charge)
+            # from triggering ontladen mode just because the segment is too short to
+            # compute a proper peak-based threshold.
+            if discharge_start_threshold_price is None and not before_first_charge_phase:
+                discharge_start_threshold_price = average_price
+            prefer_higher_prices_flag = discharge_start_threshold_price is not None and not before_first_charge_phase
+            _LOGGER.warning(
+                "SEP_DBG seg=%s first_charge=%s before=%s sim=%.3f budget=%.3f prefer=%s threshold=%s has_peak=%s slots=%d",
+                segment_slots[0]["start"].isoformat() if segment_slots else "empty",
+                first_charge_phase_start,
+                before_first_charge_phase,
+                sim_usable_energy_kwh,
+                discharge_budget_kwh,
+                prefer_higher_prices_flag,
+                discharge_start_threshold_price,
+                has_meaningful_later_peak,
+                len(segment_slots),
+            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                prefer_higher_prices=discharge_start_threshold_price is not None,
+                # Pre-charge: always chronological so the battery drains continuously
+                # without gaps, staying in ontladen until empty before the charge window.
+                # Post-charge: prefer expensive slots for arbitrage profit.
+                prefer_higher_prices=prefer_higher_prices_flag,
             )
             forced_export_kwh = (
                 {}
@@ -3085,7 +3179,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 mode = charge_phase_mode
                 if within_charge_phase or hold_solar_charge_mode:
                     mode = charge_phase_mode
-                elif segment_discharge_kwh > 0 and sim_usable_energy_kwh > 0 and discharge_threshold_reached:
+                elif (
+                    segment_discharge_kwh > 0
+                    and sim_usable_energy_kwh > 0
+                    and (discharge_threshold_reached or before_first_charge_phase)
+                ):
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(
@@ -3108,6 +3206,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         exportable_kwh > 0
                         and float(segment_slot["net_solar_kwh"]) >= 0
                         and segment_end_index < len(slots)
+                        and float(segment_slot["export_price"]) >= average_export_price
+                    ):
+                        mode = "ontladen_naar_net"
+                        last_charge_mode = "accu_uit"
+                        sim_usable_energy_kwh = max(
+                            0.0,
+                            sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
+                        )
+                    elif (
+                        before_first_charge_phase
+                        and exportable_kwh > 0
                         and float(segment_slot["export_price"]) >= average_export_price
                     ):
                         mode = "ontladen_naar_net"
