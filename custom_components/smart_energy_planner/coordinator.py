@@ -3034,8 +3034,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                prefer_higher_prices=discharge_start_threshold_price is not None and not before_first_charge_phase,
+                prefer_higher_prices=discharge_start_threshold_price is not None,
             )
+            if before_first_charge_phase:
+                remaining_budget_kwh = discharge_budget_kwh - sum(planned_discharge_kwh.values())
+                if remaining_budget_kwh > 0:
+                    drain_kwh = self._plan_segment_discharge_kwh(
+                        slots=[s for s in segment_slots if s["start"] not in planned_discharge_kwh],
+                        available_energy_kwh=remaining_budget_kwh,
+                        max_discharge_kw=max_discharge_kw,
+                        prefer_higher_prices=False,
+                    )
+                    planned_discharge_kwh = {**planned_discharge_kwh, **drain_kwh}
             forced_export_kwh = (
                 {}
                 if before_first_charge_phase
