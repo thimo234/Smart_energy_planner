@@ -1018,7 +1018,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            learned_rate = max(0.03, learned_factor * delta_temp)
+            learned_rate = max(0.03, min(2.0, learned_factor * delta_temp))
             blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
             estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
             estimated_hours = min(
@@ -1521,6 +1521,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "start": now,
                         "end": next_eco_window["start"],
                         "average_price": next_eco_window["average_price"],
+                    },
+                    *preheat_windows,
+                ]
+            elif preheat_minutes > 0:
+                # No upcoming eco window — inject a short preheat so the heater can warm
+                # the room back up to normal setpoint after eco cooling completed
+                preheat_windows = [
+                    {
+                        "start": now,
+                        "end": now + timedelta(minutes=preheat_minutes),
+                        "average_price": float(active_eco_window.get("average_price", 0.0)),
                     },
                     *preheat_windows,
                 ]
