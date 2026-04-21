@@ -3051,6 +3051,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slots[0]["start"] < first_charge_phase_start
                 )
             )
+            _LOGGER.debug(
+                "Segment %s: first_charge_phase_start=%s before_first_charge_phase=%s sim_energy=%.3f slots=%d",
+                segment_slots[0]["start"] if segment_slots else "empty",
+                first_charge_phase_start,
+                before_first_charge_phase,
+                sim_usable_energy_kwh,
+                len(segment_slots),
+            )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
