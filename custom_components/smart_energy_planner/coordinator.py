@@ -3045,9 +3045,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if segment_end_index < len(slots):
                 next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
             before_first_charge_phase = (
-                first_charge_phase_start is not None
-                and bool(segment_slots)
-                and segment_slots[0]["start"] < first_charge_phase_start
+                first_charge_phase_start is None  # no charge windows → drain freely, no price gating
+                or (
+                    bool(segment_slots)
+                    and segment_slots[0]["start"] < first_charge_phase_start
+                )
             )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
