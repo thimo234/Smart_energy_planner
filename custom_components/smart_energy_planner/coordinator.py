@@ -154,6 +154,7 @@ class PlannerResult:
     battery_room_needed_for_solar_kwh: float
     battery_charge_hours_needed_total: float
     battery_full_discharge_hours: float
+    battery_simulated_remaining_kwh_after_discharge: float
     next_high_price_window_start: str | None
     next_high_price_window_price: float | None
     room_temperature_c: float | None
@@ -617,6 +618,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_room_needed_for_solar_kwh=0.0,
             battery_charge_hours_needed_total=0.0,
             battery_full_discharge_hours=0.0,
+            battery_simulated_remaining_kwh_after_discharge=0.0,
             next_high_price_window_start=None,
             next_high_price_window_price=None,
             room_temperature_c=None,
@@ -1709,6 +1711,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             energy_balance_slots=energy_balance_slots,
             now=now,
         )
+        battery_simulated_remaining_kwh_after_discharge = round(
+            max(
+                0.0,
+                battery_energy_available_kwh
+                - float(battery_cycle_summary.get("current_relevant_battery_window_expected_demand_kwh", 0.0)),
+            ),
+            3,
+        )
         _LOGGER.debug(
             "Battery summary: relevant=%s %s->%s charge=%s->%s discharge=%s->%s exportable=%.3f usable=%.3f",
             battery_cycle_summary["current_relevant_battery_window_mode"],
@@ -1900,6 +1910,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_room_needed_for_solar_kwh=battery_room_needed_for_solar_kwh,
             battery_charge_hours_needed_total=battery_charge_hours_needed_total,
             battery_full_discharge_hours=battery_full_discharge_hours,
+            battery_simulated_remaining_kwh_after_discharge=battery_simulated_remaining_kwh_after_discharge,
             next_high_price_window_start=next_high_price_window.start.isoformat() if next_high_price_window else None,
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
             room_temperature_c=room_temperature_c,
