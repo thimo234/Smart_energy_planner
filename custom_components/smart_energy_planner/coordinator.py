@@ -3051,14 +3051,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slots[0]["start"] < first_charge_phase_start
                 )
             )
-            _LOGGER.debug(
-                "Segment %s: first_charge_phase_start=%s before_first_charge_phase=%s sim_energy=%.3f slots=%d",
-                segment_slots[0]["start"] if segment_slots else "empty",
-                first_charge_phase_start,
-                before_first_charge_phase,
-                sim_usable_energy_kwh,
-                len(segment_slots),
-            )
             target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
                 0.0,
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
@@ -3115,6 +3107,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # compute a proper peak-based threshold.
             if discharge_start_threshold_price is None and not before_first_charge_phase:
                 discharge_start_threshold_price = average_price
+            prefer_higher_prices_flag = discharge_start_threshold_price is not None and not before_first_charge_phase
+            _LOGGER.warning(
+                "SEP_DBG seg=%s first_charge=%s before=%s sim=%.3f budget=%.3f prefer=%s threshold=%s has_peak=%s slots=%d",
+                segment_slots[0]["start"].isoformat() if segment_slots else "empty",
+                first_charge_phase_start,
+                before_first_charge_phase,
+                sim_usable_energy_kwh,
+                discharge_budget_kwh,
+                prefer_higher_prices_flag,
+                discharge_start_threshold_price,
+                has_meaningful_later_peak,
+                len(segment_slots),
+            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
@@ -3122,7 +3127,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # Pre-charge: always chronological so the battery drains continuously
                 # without gaps, staying in ontladen until empty before the charge window.
                 # Post-charge: prefer expensive slots for arbitrage profit.
-                prefer_higher_prices=discharge_start_threshold_price is not None and not before_first_charge_phase,
+                prefer_higher_prices=prefer_higher_prices_flag,
             )
             forced_export_kwh = (
                 {}
