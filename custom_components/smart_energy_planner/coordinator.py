@@ -1631,34 +1631,44 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_solar_until(all_solar_windows, now, next_charge_opportunity),
             3,
         )
-        # When the battery is full, no charge windows are planned (target_charge_kwh < 0.1),
-        # so next_charge_opportunity is None and reserve would be 0.  Fall back to the
-        # first future solar window so we still keep energy for the pre-solar morning gap.
+        # Reserve only the demand for the 2 hours immediately before the next solar or
+        # charge start.  When the battery is full, no charge windows are planned, so
+        # next_charge_opportunity is None; fall back to the first future solar window.
+        # The window is fixed (not clamped to now) so the reserve stays small (~0.8 kWh)
+        # regardless of how many hours away solar start is.
         next_solar_window_start = min(
             (window.start for window in all_solar_windows if window.start > now and window.forecast_kwh > 0),
             default=None,
         )
         effective_next_charge_opportunity = next_charge_opportunity or next_solar_window_start
-        reserve_window_start = (
-            max(now, effective_next_charge_opportunity - timedelta(hours=8))
+        morning_reserve_start = (
+            effective_next_charge_opportunity - timedelta(hours=2)
             if effective_next_charge_opportunity is not None
             else None
         )
-        home_demand_before_next_charge_window_kwh = round(
-            self._sum_remaining_home_demand_until(
-                estimated_hourly_home_demand,
-                reserve_window_start or now,
-                effective_next_charge_opportunity,
-            ),
-            3,
+        home_demand_before_next_charge_window_kwh = (
+            round(
+                self._sum_remaining_home_demand_until(
+                    estimated_hourly_home_demand,
+                    morning_reserve_start,
+                    effective_next_charge_opportunity,
+                ),
+                3,
+            )
+            if morning_reserve_start is not None
+            else 0.0
         )
-        solar_before_next_charge_window_kwh = round(
-            self._sum_remaining_solar_until(
-                all_solar_windows,
-                reserve_window_start or now,
-                effective_next_charge_opportunity,
-            ),
-            3,
+        solar_before_next_charge_window_kwh = (
+            round(
+                self._sum_remaining_solar_until(
+                    all_solar_windows,
+                    morning_reserve_start,
+                    effective_next_charge_opportunity,
+                ),
+                3,
+            )
+            if morning_reserve_start is not None
+            else 0.0
         )
         battery_reserved_energy_kwh = min(
             battery_energy_available_kwh,
