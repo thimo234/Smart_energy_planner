@@ -1631,44 +1631,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_solar_until(all_solar_windows, now, next_charge_opportunity),
             3,
         )
-        # Reserve only the demand for the 2 hours immediately before the next solar or
-        # charge start.  When the battery is full, no charge windows are planned, so
-        # next_charge_opportunity is None; fall back to the first future solar window.
-        # The window is fixed (not clamped to now) so the reserve stays small (~0.8 kWh)
-        # regardless of how many hours away solar start is.
-        next_solar_window_start = min(
-            (window.start for window in all_solar_windows if window.start > now and window.forecast_kwh > 0),
-            default=None,
-        )
-        effective_next_charge_opportunity = next_charge_opportunity or next_solar_window_start
-        morning_reserve_start = (
-            effective_next_charge_opportunity - timedelta(hours=2)
-            if effective_next_charge_opportunity is not None
+        discharge_to_grid_window_start = (
+            max(now, next_charge_opportunity - timedelta(hours=8))
+            if next_charge_opportunity is not None
             else None
         )
-        home_demand_before_next_charge_window_kwh = (
-            round(
-                self._sum_remaining_home_demand_until(
-                    estimated_hourly_home_demand,
-                    morning_reserve_start,
-                    effective_next_charge_opportunity,
-                ),
-                3,
-            )
-            if morning_reserve_start is not None
-            else 0.0
+        home_demand_before_next_charge_window_kwh = round(
+            self._sum_remaining_home_demand_until(
+                estimated_hourly_home_demand,
+                discharge_to_grid_window_start or now,
+                next_charge_opportunity,
+            ),
+            3,
         )
-        solar_before_next_charge_window_kwh = (
-            round(
-                self._sum_remaining_solar_until(
-                    all_solar_windows,
-                    morning_reserve_start,
-                    effective_next_charge_opportunity,
-                ),
-                3,
-            )
-            if morning_reserve_start is not None
-            else 0.0
+        solar_before_next_charge_window_kwh = round(
+            self._sum_remaining_solar_until(
+                all_solar_windows,
+                discharge_to_grid_window_start or now,
+                next_charge_opportunity,
+            ),
+            3,
         )
         battery_reserved_energy_kwh = min(
             battery_energy_available_kwh,
@@ -3142,10 +3124,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                # Pre-charge: always chronological so the battery drains continuously
-                # without gaps, staying in ontladen until empty before the charge window.
-                # Post-charge: prefer expensive slots for arbitrage profit.
-                prefer_higher_prices=discharge_start_threshold_price is not None and not before_first_charge_phase,
+                # Pre-charge: sort by price (most expensive first), simple greedy —
+                # battery is distributed over the most expensive demand hours until empty.
+                # Post-charge: price-ordered with later-demand protection for arbitrage.
+                prefer_higher_prices=before_first_charge_phase or (discharge_start_threshold_price is not None and not before_first_charge_phase),
+                protect_later_demand=not before_first_charge_phase,
             )
             forced_export_kwh = (
                 {}
@@ -3380,6 +3363,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         available_energy_kwh: float,
         max_discharge_kw: float,
         prefer_higher_prices: bool,
+        protect_later_demand: bool = True,
     ) -> dict[datetime, float]:
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
@@ -3417,7 +3401,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if prefer_higher_prices
             else sorted(deficit_slots, key=lambda item: item["start"])
         )
-        if not prefer_higher_prices:
+        # Simple greedy: fill slots in order (price-desc or chronological) until budget runs out.
+        # Used for pre-charge discharge (prefer_higher_prices=True, protect_later_demand=False)
+        # as well as for the plain chronological case.
+        if not prefer_higher_prices or not protect_later_demand:
             for slot in slot_order:
                 if remaining_energy_kwh <= 0:
                     break
