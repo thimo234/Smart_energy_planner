@@ -2337,16 +2337,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
         future_slots = [slot for slot in slots if slot["end"] > now]
+        if not future_slots:
+            return planned_solar_charge_windows, planned_grid_charge_windows
+
         # `current_remaining_capacity_kwh` is the amount of empty space left in
         # the usable battery capacity (so it is already <= usable_capacity_kwh).
         # Clamp defensively in case the caller ever passes a larger value.
         target_charge_kwh = max(0.0, min(usable_capacity_kwh, current_remaining_capacity_kwh))
-        # Skip planning for trivial remaining capacity (< 100 Wh).  A tiny rounding
-        # remainder would otherwise produce a charge window that hold_solar_charge_mode
-        # then stretches over the full 4-hour solar block even though the battery is
-        # effectively full.
-        if not future_slots or target_charge_kwh < 0.1:
-            return planned_solar_charge_windows, planned_grid_charge_windows
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
@@ -2354,6 +2351,36 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             max_charge_kw=max_charge_kw,
             minimum_slots=2,
         )
+
+        # Increase the charge target to account for energy that will be discharged
+        # between now and the first productive solar slot.  Without this a battery
+        # at 96 % would plan only a 12-minute solar window even though overnight
+        # discharge will leave it nearly empty by morning.
+        first_productive_solar_start = (
+            min(productive_solar_slot_starts) if productive_solar_slot_starts else None
+        )
+        if first_productive_solar_start is not None:
+            current_available_kwh = usable_capacity_kwh - current_remaining_capacity_kwh
+            pre_solar_discharge_kwh = 0.0
+            for slot in future_slots:
+                if slot["start"] >= first_productive_solar_start:
+                    break
+                net_solar = float(slot.get("net_solar_kwh", 0.0))
+                if net_solar < 0:
+                    deficit = min(-net_solar, current_available_kwh - pre_solar_discharge_kwh)
+                    if deficit > 0:
+                        pre_solar_discharge_kwh += deficit
+            target_charge_kwh = min(
+                usable_capacity_kwh,
+                current_remaining_capacity_kwh + pre_solar_discharge_kwh,
+            )
+
+        # Skip planning for trivial remaining capacity (< 100 Wh).  A tiny rounding
+        # remainder would otherwise produce a charge window that hold_solar_charge_mode
+        # then stretches over the full 4-hour solar block even though the battery is
+        # effectively full.
+        if target_charge_kwh < 0.1:
+            return planned_solar_charge_windows, planned_grid_charge_windows
         total_future_solar_capacity_kwh = round(
             sum(
                 min(
