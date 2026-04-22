@@ -3235,8 +3235,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         before_first_charge_phase
                         and exportable_kwh > 0
                         and float(segment_slot["export_price"]) >= average_export_price
-                        and first_charge_phase_start is not None
-                        and segment_slot_start >= first_charge_phase_start - timedelta(hours=8)
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
