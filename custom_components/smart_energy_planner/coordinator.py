@@ -2364,7 +2364,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             6,
         )
-        grid_charge_limit_kwh = max(0.0, round(target_charge_kwh - total_future_solar_capacity_kwh, 6))
+        # Grid charging should be limited to what solar cannot deliver BEFORE the first
+        # significant discharge window.  Comparing against all future solar is wrong
+        # when discharge comes before the solar: the battery needs to be full for
+        # tonight's discharge even if tomorrow's solar would eventually fill the gap.
+        first_discharge_slot_start = next(
+            (slot["start"] for slot in future_slots if float(slot.get("net_solar_kwh", 0)) < -0.05),
+            None,
+        )
+        solar_before_discharge_kwh = round(
+            sum(
+                min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
+                for slot in future_slots
+                if first_discharge_slot_start is None or slot["start"] < first_discharge_slot_start
+            ),
+            6,
+        )
+        grid_charge_limit_kwh = max(0.0, round(target_charge_kwh - solar_before_discharge_kwh, 6))
         selected_solar_charge_by_start: dict[datetime, float] = {}
         selected_grid_charge_by_start: dict[datetime, float] = {}
         charge_candidates: list[dict[str, Any]] = []
@@ -3164,13 +3180,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         for cluster in charge_phase_clusters
                     )
                 )
+                # After a solar charge, hold in laden_met_zonne_energie until a
+                # planned discharge slot starts — so the inverter doesn't flip to
+                # accu_uit (or export) between the charge end and discharge window.
                 hold_solar_charge_mode = (
                     last_charge_mode == "laden_met_zonne_energie"
                     and sim_usable_energy_kwh > 0
-                    and self._remaining_day_solar_covers_demand(
-                        slots=slots,
-                        start=segment_slot_start,
-                    )
+                    and segment_discharge_kwh <= 0
                 )
                 charge_phase_mode = self._resolve_charge_phase_mode(
                     last_charge_mode=last_charge_mode,
