@@ -3089,15 +3089,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if before_first_charge_phase
                 else target_end_energy_kwh
             )
-            precharge_export_window_start = (
-                now
-                if before_first_charge_phase and target_end_energy_kwh <= 0
-                else (
-                    max(now, first_charge_phase_start - timedelta(hours=8))
-                    if before_first_charge_phase and first_charge_phase_start is not None
-                    else None
-                )
-            )
             discharge_budget_kwh = (
                 max(0.0, sim_usable_energy_kwh - target_end_energy_kwh)
                 if before_first_charge_phase
@@ -3146,18 +3137,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 prefer_higher_prices=before_first_charge_phase or (discharge_start_threshold_price is not None and not before_first_charge_phase),
                 protect_later_demand=not before_first_charge_phase,
             )
-            forced_export_kwh = (
-                {}
-                if before_first_charge_phase
-                else self._plan_segment_export_kwh(
-                    slots=segment_slots,
-                    planned_discharge_kwh=planned_discharge_kwh,
-                    available_energy_kwh=sim_usable_energy_kwh,
-                    target_end_energy_kwh=export_target_end_energy_kwh,
-                    export_window_start=precharge_export_window_start,
-                    export_window_end=first_charge_phase_start if before_first_charge_phase else None,
-                    max_discharge_kw=max_discharge_kw,
-                )
+            forced_export_kwh = self._plan_segment_export_kwh(
+                slots=segment_slots,
+                planned_discharge_kwh=planned_discharge_kwh,
+                available_energy_kwh=sim_usable_energy_kwh,
+                target_end_energy_kwh=export_target_end_energy_kwh,
+                export_window_start=None,
+                export_window_end=None,
+                max_discharge_kw=max_discharge_kw,
             )
 
             for segment_slot in segment_slots:
@@ -3223,17 +3210,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         exportable_kwh > 0
                         and float(segment_slot["net_solar_kwh"]) >= 0
                         and segment_end_index < len(slots)
-                        and float(segment_slot["export_price"]) >= average_export_price
-                    ):
-                        mode = "ontladen_naar_net"
-                        last_charge_mode = "accu_uit"
-                        sim_usable_energy_kwh = max(
-                            0.0,
-                            sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
-                        )
-                    elif (
-                        before_first_charge_phase
-                        and exportable_kwh > 0
                         and float(segment_slot["export_price"]) >= average_export_price
                     ):
                         mode = "ontladen_naar_net"
