@@ -407,10 +407,13 @@ async def _async_update_cooling_model(
                 "start_timestamp": now.isoformat(),
                 "start_room_temperature_c": round(current_temperature, 3),
                 "start_outdoor_temperature_c": round(outdoor_temp, 3),
-                "heating_was_on": heating_is_on,
             }
-        else:
-            session["heating_was_on"] = bool(session.get("heating_was_on")) or heating_is_on
+        elif heating_is_on and session.get("first_heating_timestamp") is None:
+            # Record when heating first fires — this marks the moment the room
+            # reached the eco setpoint and is the true end of the cooling phase.
+            session["first_heating_timestamp"] = now.isoformat()
+            session["first_heating_room_temperature_c"] = round(current_temperature, 3)
+            session["first_heating_outdoor_temperature_c"] = round(outdoor_temp, 3)
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
@@ -419,9 +422,6 @@ async def _async_update_cooling_model(
         return
 
     runtime_state["eco_cooling_session"] = None
-    if bool(session.get("heating_was_on")) or heating_is_on:
-        await _async_save_runtime_state(hass, entry_id, runtime_state)
-        return
 
     try:
         start_time = dt_util.parse_datetime(session["start_timestamp"])
@@ -435,14 +435,34 @@ async def _async_update_cooling_model(
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    elapsed_hours = (now - start_time).total_seconds() / 3600
-    cooling_drop = start_room_temp - current_temperature
-    if elapsed_hours < 0.25 or cooling_drop < 0.5:  # require at least 15 min session
+    # Use the moment heating first turned on (eco temp reached) as the end of the
+    # cooling phase.  If heating never fired, the room coasted through without
+    # reaching eco temp so the full elapsed time is the observed cooling duration.
+    first_heating_ts_raw = session.get("first_heating_timestamp")
+    first_heating_ts = dt_util.parse_datetime(first_heating_ts_raw) if first_heating_ts_raw else None
+    if first_heating_ts is not None:
+        end_time = first_heating_ts
+        end_room_temp = float(session.get("first_heating_room_temperature_c", current_temperature))
+        end_outdoor_temp = float(session.get("first_heating_outdoor_temperature_c", outdoor_temp))
+    else:
+        # Heating was never needed — room stayed warm the whole eco window.
+        # Only count sessions where the room actually dropped enough to learn from.
+        if heating_is_on:
+            # Heating came on right when eco ended; can't determine cooling duration.
+            await _async_save_runtime_state(hass, entry_id, runtime_state)
+            return
+        end_time = now
+        end_room_temp = current_temperature
+        end_outdoor_temp = outdoor_temp
+
+    elapsed_hours = (end_time - start_time).total_seconds() / 3600
+    cooling_drop = start_room_temp - end_room_temp
+    if elapsed_hours < 0.25 or cooling_drop < 0.3:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    average_room_temp = (start_room_temp + current_temperature) / 2
-    average_outdoor_temp = (start_outdoor_temp + outdoor_temp) / 2
+    average_room_temp = (start_room_temp + end_room_temp) / 2
+    average_outdoor_temp = (start_outdoor_temp + end_outdoor_temp) / 2
     average_delta_temp = max(average_room_temp - average_outdoor_temp, 0.5)
     cooling_rate = cooling_drop / elapsed_hours
     normalized_cooling_rate = cooling_rate / average_delta_temp
@@ -463,5 +483,5 @@ async def _async_update_cooling_model(
     cooling_model["last_observed_drop_c_per_hour"] = round(cooling_rate, 4)
     cooling_model["last_eco_duration_hours"] = round(elapsed_hours, 3)
     cooling_model["last_eco_start_temp_c"] = round(start_room_temp, 3)
-    cooling_model["last_eco_end_temp_c"] = round(current_temperature, 3)
+    cooling_model["last_eco_end_temp_c"] = round(end_room_temp, 3)
     await _async_save_runtime_state(hass, entry_id, runtime_state)
