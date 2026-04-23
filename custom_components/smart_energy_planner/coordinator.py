@@ -1491,23 +1491,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # rapid oscillation between eco and normal every update cycle.
         if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
             self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
-        # Eco is only active when:
-        # - inside an active eco window
-        # - the current price slot is expensive (≥ average) — eco is off during
-        #   cheap "dal" periods within a wide eco window
-        # - the room has not yet reached the eco setpoint (no latch set)
-        eco_active_now = (
-            active_eco_window is not None
-            and current_price is not None
-            and current_price >= average_price
-            and not eco_temp_reached
-            and self._eco_early_exit_until is None
-        )
-        eco_window = (
-            active_eco_window
-            if eco_active_now
-            else next((window for window in eco_windows if window["start"] > now), None)
-        )
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
@@ -1541,6 +1524,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
+
+        # Eco is only active when:
+        # - inside an active eco window
+        # - the current price slot is expensive (≥ average, with a small tolerance to
+        #   prevent oscillation when the price is right on the boundary)
+        # - the room has not yet reached the eco setpoint (no latch set)
+        # - preheat is not active (preheat takes priority so the floor stores heat
+        #   before eco begins, even when the price is already above average)
+        eco_active_now = (
+            active_eco_window is not None
+            and current_price is not None
+            and current_price >= average_price - 0.01
+            and not eco_temp_reached
+            and self._eco_early_exit_until is None
+            and not preheat_active_now
+        )
+        eco_window = (
+            active_eco_window
+            if eco_active_now
+            else next((window for window in eco_windows if window["start"] > now), None)
+        )
 
         battery_enabled = bool(self._config.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED))
         battery_capacity = float(
