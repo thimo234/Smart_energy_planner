@@ -3287,26 +3287,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
                     slot_solar_kwh = float(segment_slot.get("net_solar_kwh", 0))
                     if (
-                        before_first_charge_phase
-                        and slot_solar_kwh > 0
-                        and sim_usable_energy_kwh < usable_capacity_kwh
-                    ):
-                        # Opportunistically top up from end-of-day solar while waiting
-                        # for discharge — fills the remaining battery room rather than
-                        # going idle when selected peak solar slots have already ended.
-                        mode = "laden_met_zonne_energie"
-                        solar_charge_kwh = min(
-                            max_charge_kw * float(segment_slot["hours"]),
-                            slot_solar_kwh,
-                            usable_capacity_kwh - sim_usable_energy_kwh,
-                        )
-                        sim_usable_energy_kwh = min(
-                            usable_capacity_kwh, sim_usable_energy_kwh + solar_charge_kwh
-                        )
-                    elif (
                         not before_first_charge_phase
-                        and
-                        exportable_kwh > 0
+                        and exportable_kwh > 0
                         and slot_solar_kwh >= 0
                         and segment_end_index < len(slots)
                         and float(segment_slot["export_price"]) >= average_export_price
