@@ -3094,7 +3094,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
             )
             export_target_end_energy_kwh = (
-                max(target_end_energy_kwh, minimum_energy_for_export_before_next_charge_kwh)
+                max(
+                    target_end_energy_kwh,
+                    minimum_energy_for_export_before_next_charge_kwh,
+                    # Only export genuine surplus: energy above what solar will need to
+                    # recharge.  If the battery is at 28 % the remaining 7.2 kWh capacity
+                    # means there is nothing left to export without immediately re-charging
+                    # it from solar.  At 96 % the 0.4 kWh remaining capacity is tiny so
+                    # most of the available energy is genuine surplus.
+                    usable_capacity_kwh - sim_usable_energy_kwh,
+                )
                 if before_first_charge_phase
                 else target_end_energy_kwh
             )
