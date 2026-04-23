@@ -1154,30 +1154,36 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         average_price: float,
         expensive_threshold: float,
     ) -> list[dict[str, datetime | float]]:
-        """Plan eco windows by expanding around the local peak price."""
+        """Plan an eco window per price peak: the most expensive contiguous block of
+        cooldown_hours within each peak.
+
+        The block is computed from the peak's own start (not clipped to now) so it
+        stays stable across planning ticks and doesn't reset the eco-early-exit latch.
+        Windows that started up to cooldown_hours ago are included so an ongoing block
+        is detected correctly when we are already partway through it.
+        """
         if cooldown_hours <= 0:
             return []
 
-        planning_start = now - timedelta(hours=cooldown_hours)
-        planning_windows = [window for window in windows if window.end > planning_start]
-        future_windows = [window for window in planning_windows if window.end > now]
-        if not future_windows:
-            return []
-
-        expensive_windows = [
-            window for window in future_windows if window.price >= expensive_threshold
+        # Look back up to cooldown_hours so an eco block that started before now is
+        # still detected while we are inside it.
+        lookback_start = now - timedelta(hours=cooldown_hours)
+        eligible_windows = [
+            window
+            for window in windows
+            if window.end > lookback_start and window.price >= expensive_threshold
         ]
-        if not expensive_windows:
+        if not eligible_windows:
             return []
 
+        # Group consecutive expensive windows into distinct price peaks.
         grouped_windows: list[list[PlannerWindow]] = []
         current_group: list[PlannerWindow] = []
-        for window in expensive_windows:
+        for window in eligible_windows:
             if not current_group:
                 current_group = [window]
                 continue
-            previous = current_group[-1]
-            if window.start <= previous.end:
+            if window.start <= current_group[-1].end:
                 current_group.append(window)
             else:
                 grouped_windows.append(current_group)
@@ -1187,93 +1193,68 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         eco_windows: list[dict[str, datetime | float]] = []
         for group in grouped_windows:
-            peak_window = max(group, key=lambda item: item.price)
-            # Use identity lookup so two windows with coincidentally identical
-            # start/end/price (e.g. neutral fallback windows) cannot return the
-            # wrong index from list.index's equality comparison.
-            peak_index = next(
-                (index for index, window in enumerate(planning_windows) if window is peak_window),
-                -1,
-            )
-            if peak_index < 0:
-                # Fallback: find by timestamp if identity lookup fails for some reason.
-                peak_index = next(
-                    (
-                        index
-                        for index, window in enumerate(planning_windows)
-                        if window.start == peak_window.start and window.end == peak_window.end
-                    ),
-                    -1,
-                )
-            if peak_index < 0:
-                continue
-            selected_indices = {peak_index}
-            total_hours = max((peak_window.end - max(peak_window.start, now)).total_seconds() / 3600, 0.0)
-            left_index = peak_index - 1
-            right_index = peak_index + 1
-
-            while total_hours < cooldown_hours:
-                left_window = planning_windows[left_index] if left_index >= 0 else None
-                right_window = planning_windows[right_index] if right_index < len(planning_windows) else None
-                if left_window is None and right_window is None:
-                    break
-
-                choose_left = False
-                if left_window is not None and right_window is not None:
-                    choose_left = float(left_window.price) >= float(right_window.price)
-                elif left_window is not None:
-                    choose_left = True
-
-                chosen_index = left_index if choose_left else right_index
-                chosen_window = planning_windows[chosen_index]
-                selected_indices.add(chosen_index)
-                total_hours += max((chosen_window.end - max(chosen_window.start, now)).total_seconds() / 3600, 0.0)
-                if choose_left:
-                    left_index -= 1
-                else:
-                    right_index += 1
-
-            selected_windows = [planning_windows[index] for index in sorted(selected_indices)]
-            eco_start = selected_windows[0].start
-            eco_end = selected_windows[-1].end
-            below_average_at = next(
-                (
-                    window.start
-                    for window in planning_windows
-                    if window.start >= peak_window.end and window.price < average_price
-                ),
-                None,
-            )
-            if below_average_at is not None:
-                eco_end = min(eco_end, below_average_at)
-            if eco_end <= eco_start:
+            group_start = group[0].start
+            group_end = group[-1].end
+            if group_end <= now:
                 continue
 
-            span_hours = (eco_end - eco_start).total_seconds() / 3600
-            if span_hours <= 0:
+            group_hours = (group_end - group_start).total_seconds() / 3600
+            if group_hours <= 0:
                 continue
 
-            weighted_price = 0.0
-            total_hours = 0.0
-            for window in planning_windows:
-                overlap_start = max(window.start, eco_start)
-                overlap_end = min(window.end, eco_end)
-                overlap_hours = (overlap_end - overlap_start).total_seconds() / 3600
-                if overlap_hours <= 0:
+            if group_hours > cooldown_hours:
+                # Sliding-window search: find the contiguous block of exactly
+                # cooldown_hours with the highest average price.  Block start is
+                # taken from the window's own timestamp (not clipped to now) so the
+                # result is the same on every planning tick while we are inside it.
+                best_block: dict[str, datetime | float] | None = None
+                for start_index, start_window in enumerate(group):
+                    block_start = start_window.start
+                    accumulated_hours = 0.0
+                    weighted_price = 0.0
+                    block_end = block_start
+                    for window in group[start_index:]:
+                        usable_start = max(window.start, block_end)
+                        usable_hours = (window.end - usable_start).total_seconds() / 3600
+                        if usable_hours <= 0:
+                            continue
+                        take_hours = min(usable_hours, cooldown_hours - accumulated_hours)
+                        weighted_price += window.price * take_hours
+                        accumulated_hours += take_hours
+                        block_end = usable_start + timedelta(hours=take_hours)
+                        if accumulated_hours >= cooldown_hours:
+                            avg_p = weighted_price / accumulated_hours
+                            if best_block is None or avg_p > float(best_block["average_price"]):
+                                best_block = {
+                                    "start": block_start,
+                                    "end": block_end,
+                                    "average_price": avg_p,
+                                }
+                            break
+                if best_block is None:
                     continue
-                weighted_price += window.price * overlap_hours
-                total_hours += overlap_hours
+                eco_start = cast(datetime, best_block["start"])
+                eco_end = cast(datetime, best_block["end"])
+                avg_price_val = float(best_block["average_price"])
+            else:
+                # Short peak — use the whole group.
+                weighted_price = 0.0
+                total_hours = 0.0
+                for window in group:
+                    wh = (window.end - window.start).total_seconds() / 3600
+                    weighted_price += window.price * wh
+                    total_hours += wh
+                if total_hours <= 0:
+                    continue
+                eco_start = group_start
+                eco_end = group_end
+                avg_price_val = weighted_price / total_hours
 
-            average_window_price = (
-                weighted_price / total_hours if total_hours > 0 else peak_window.price
-            )
+            if eco_end <= now:
+                continue
+
             eco_windows.append(
-                {
-                    "start": eco_start,
-                    "peak_start": peak_window.start,
-                    "end": eco_end,
-                    "average_price": average_window_price,
-                }
+                {"start": eco_start, "end": eco_end, "average_price": avg_price_val}
             )
 
         if not eco_windows:
@@ -1284,11 +1265,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if not merged_windows:
                 merged_windows.append(window)
                 continue
-
             previous = merged_windows[-1]
             if window["start"] <= previous["end"] + _THERMOSTAT_ECO_MERGE_GAP:
                 previous["end"] = max(previous["end"], window["end"])
-                previous["peak_start"] = min(previous.get("peak_start", previous["start"]), window.get("peak_start", window["start"]))
                 previous["average_price"] = max(
                     float(previous["average_price"]),
                     float(window["average_price"]),
