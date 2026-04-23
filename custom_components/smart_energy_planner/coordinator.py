@@ -193,7 +193,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
-        self._eco_early_exit_until: datetime | None = None
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -1466,30 +1465,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
         # Only relevant for thermostat planners; battery planners have no room sensor
-        eco_temp_reached = (
-            planner_kind == PLANNER_KIND_THERMOSTAT
-            and room_temperature_c is not None
-            and thermostat_eco_setpoint_c is not None
-            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1  # 0.1 °C hysteresis against sensor noise
-        )
         active_eco_window = next(
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        # Clear the early-exit latch when the window it was set for has ended.
-        if self._eco_early_exit_until is not None and now >= self._eco_early_exit_until:
-            self._eco_early_exit_until = None
-        # When the room has already reached eco temperature inside an active eco window,
-        # latch the early exit until the window ends.  Without this latch the coordinator
-        # would flip between eco (temp > setpoint) and normal (temp ≤ setpoint) every
-        # update cycle, causing the thermostat to oscillate rapidly.
-        if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
-            self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
-        eco_active_now = (
-            active_eco_window is not None
-            and not eco_temp_reached
-            and self._eco_early_exit_until is None
-        )
+        eco_active_now = active_eco_window is not None
         eco_window = (
             active_eco_window
             if eco_active_now
@@ -1515,41 +1495,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for window in preheat_windows
             if window["end"] > now
         ]
-        # When eco temp is reached early inside an active eco window, immediately start
-        # preheating for the next eco window so enough heat is stored before the next peak
-        if eco_temp_reached and active_eco_window is not None:
-            next_eco_window = next(
-                (w for w in eco_windows if w["start"] >= active_eco_window["end"]),
-                None,
-            )
-            if next_eco_window is not None and next_eco_window["start"] > now:
-                expected_preheat_start = max(
-                    next_eco_window["start"] - timedelta(minutes=preheat_minutes),
-                    now.replace(hour=0, minute=0, second=0, microsecond=0),
-                )
-                preheat_windows = [
-                    w for w in preheat_windows
-                    if not (w["end"] == next_eco_window["start"] and w["start"] == expected_preheat_start)
-                ]
-                preheat_windows = [
-                    {
-                        "start": now,
-                        "end": next_eco_window["start"],
-                        "average_price": next_eco_window["average_price"],
-                    },
-                    *preheat_windows,
-                ]
-            elif preheat_minutes > 0:
-                # No upcoming eco window — inject a short preheat so the heater can warm
-                # the room back up to normal setpoint after eco cooling completed
-                preheat_windows = [
-                    {
-                        "start": now,
-                        "end": now + timedelta(minutes=preheat_minutes),
-                        "average_price": float(active_eco_window.get("average_price", 0.0)),
-                    },
-                    *preheat_windows,
-                ]
         preheat_window = next(
             (
                 window
