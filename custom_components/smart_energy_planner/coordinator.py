@@ -2415,6 +2415,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         ),
                     }
                 )
+                # Solar slots are never grid-charged — skip grid candidate for this slot.
+                continue
 
             if grid_charge_limit_kwh <= 0 or (
                 next_peak_price := self._calculate_next_battery_peak_price(
@@ -2425,10 +2427,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ) is None or next_peak_price - float(slot["import_price"]) < battery_min_profit:
                 continue
 
-            grid_charge_kwh = max(
-                0.0,
-                slot_capacity_kwh - solar_charge_kwh,
-            )
+            grid_charge_kwh = slot_capacity_kwh
             if grid_charge_kwh <= 0:
                 continue
             charge_candidates.append(
