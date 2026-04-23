@@ -2448,6 +2448,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             key=lambda item: (
                 float(item["effective_price"]),
                 0 if item["kind"] == "solar" else 1,
+                # For solar: prefer high-yield (midday) slots before low-yield morning
+                # slots with similar prices.  For grid: prefer earlier slots.
+                -float(item["charge_kwh"]) if item["kind"] == "solar" else 0,
                 item["start"],
             ),
         ):
