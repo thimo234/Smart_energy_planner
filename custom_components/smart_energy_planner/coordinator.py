@@ -2495,10 +2495,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # Extend the solar charge window to cover until the first discharge slot so
-        # the battery stays in laden mode rather than going idle between the planned
-        # peak charge window and the start of the evening discharge.
-        if planned_solar_charge_windows and first_discharge_slot_start is not None:
+        # Extend the solar charge window to cover until the first discharge slot that
+        # comes AFTER the last selected solar slot, so the battery stays in laden mode
+        # rather than going idle between the planned peak charge window and the start
+        # of the evening discharge.  The global first_discharge_slot_start may be
+        # today's evening (before tomorrow's solar), so we compute the cutoff relative
+        # to last_selected_solar_end instead.
+        if planned_solar_charge_windows:
             last_selected_solar_end = max(
                 (
                     slot["end"]
@@ -2508,32 +2511,43 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 default=None,
             )
             if last_selected_solar_end is not None:
-                for slot in future_slots:
-                    if slot["start"] < last_selected_solar_end:
-                        continue
-                    if slot["start"] >= first_discharge_slot_start:
-                        break
-                    if slot["start"] not in productive_solar_slot_starts:
-                        continue
-                    extension_charge_kwh = min(
-                        max_charge_kw * float(slot["hours"]),
-                        max(0.0, float(slot["net_solar_kwh"])),
-                    )
-                    if extension_charge_kwh <= 0:
-                        continue
-                    planned_solar_charge_windows.append(
-                        {
-                            "start": slot["start"].isoformat(),
-                            "end": slot["end"].isoformat(),
-                            "price": round(
-                                float(slot["export_price"])
-                                if has_export_price_sensor
-                                else float(slot["import_price"]) - 0.15,
-                                6,
-                            ),
-                            "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
-                        }
-                    )
+                # First slot after the selected window where solar goes negative (evening).
+                post_solar_discharge_start = next(
+                    (
+                        slot["start"]
+                        for slot in future_slots
+                        if slot["start"] >= last_selected_solar_end
+                        and float(slot.get("net_solar_kwh", 0)) < -0.05
+                    ),
+                    None,
+                )
+                if post_solar_discharge_start is not None:
+                    for slot in future_slots:
+                        if slot["start"] < last_selected_solar_end:
+                            continue
+                        if slot["start"] >= post_solar_discharge_start:
+                            break
+                        if slot["start"] not in productive_solar_slot_starts:
+                            continue
+                        extension_charge_kwh = min(
+                            max_charge_kw * float(slot["hours"]),
+                            max(0.0, float(slot["net_solar_kwh"])),
+                        )
+                        if extension_charge_kwh <= 0:
+                            continue
+                        planned_solar_charge_windows.append(
+                            {
+                                "start": slot["start"].isoformat(),
+                                "end": slot["end"].isoformat(),
+                                "price": round(
+                                    float(slot["export_price"])
+                                    if has_export_price_sensor
+                                    else float(slot["import_price"]) - 0.15,
+                                    6,
+                                ),
+                                "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
+                            }
+                        )
 
         for slot in future_slots:
             slot_charge_kwh = float(selected_grid_charge_by_start.get(slot["start"], 0.0))
