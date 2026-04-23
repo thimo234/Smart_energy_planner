@@ -435,25 +435,21 @@ async def _async_update_cooling_model(
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    # Use the moment heating first turned on (eco temp reached) as the end of the
-    # cooling phase.  If heating never fired, the room coasted through without
-    # reaching eco temp so the full elapsed time is the observed cooling duration.
+    # Only learn from sessions where the room demonstrably cooled to eco setpoint:
+    # first_heating_timestamp marks the moment the HVAC fired because the room
+    # reached eco temperature — definitive proof of passive cooling completion.
+    # If heating never fired the room may have been kept warm by solar gain or the
+    # eco window was simply too short; skip those sessions to avoid polluting the
+    # model with misleading data.
     first_heating_ts_raw = session.get("first_heating_timestamp")
     first_heating_ts = dt_util.parse_datetime(first_heating_ts_raw) if first_heating_ts_raw else None
-    if first_heating_ts is not None:
-        end_time = first_heating_ts
-        end_room_temp = float(session.get("first_heating_room_temperature_c", current_temperature))
-        end_outdoor_temp = float(session.get("first_heating_outdoor_temperature_c", outdoor_temp))
-    else:
-        # Heating was never needed — room stayed warm the whole eco window.
-        # Only count sessions where the room actually dropped enough to learn from.
-        if heating_is_on:
-            # Heating came on right when eco ended; can't determine cooling duration.
-            await _async_save_runtime_state(hass, entry_id, runtime_state)
-            return
-        end_time = now
-        end_room_temp = current_temperature
-        end_outdoor_temp = outdoor_temp
+    if first_heating_ts is None:
+        await _async_save_runtime_state(hass, entry_id, runtime_state)
+        return
+
+    end_time = first_heating_ts
+    end_room_temp = float(session.get("first_heating_room_temperature_c", current_temperature))
+    end_outdoor_temp = float(session.get("first_heating_outdoor_temperature_c", outdoor_temp))
 
     elapsed_hours = (end_time - start_time).total_seconds() / 3600
     cooling_drop = start_room_temp - end_room_temp
