@@ -2407,6 +2407,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "start": slot["start"],
                         "end": slot["end"],
                         "charge_kwh": round(solar_charge_kwh, 6),
+                        "net_solar_kwh": round(float(slot["net_solar_kwh"]), 6),
                         "effective_price": round(
                             float(slot["export_price"])
                             if has_export_price_sensor
@@ -2445,11 +2446,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for candidate in sorted(
             charge_candidates,
             key=lambda item: (
-                float(item["effective_price"]),
+                # Solar always before grid; within each group sort independently.
                 0 if item["kind"] == "solar" else 1,
-                # For solar: prefer high-yield (midday) slots before low-yield morning
-                # slots with similar prices.  For grid: prefer earlier slots.
-                -float(item["charge_kwh"]) if item["kind"] == "solar" else 0,
+                # Solar: highest raw production (net_solar_kwh) first — picks solar noon
+                # before low-yield morning/evening slots, even when prices differ.
+                # Grid: cheapest slot first.
+                -float(item.get("net_solar_kwh", item["charge_kwh"])) if item["kind"] == "solar"
+                else float(item["effective_price"]),
                 item["start"],
             ),
         ):
