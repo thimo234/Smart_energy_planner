@@ -1513,13 +1513,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         # Preheat is timed before peak_start (the expensive part of the eco window),
         # not before the eco window's start which may be hours earlier in cheap slots.
+        # Battery eco_windows (from _select_expensive_peak_blocks) have no peak_start;
+        # fall back to window["start"] so the battery planner doesn't crash.
         preheat_windows = [
             {
                 "start": max(
-                    cast(datetime, window["peak_start"]) - timedelta(minutes=preheat_minutes),
+                    cast(datetime, window.get("peak_start", window["start"])) - timedelta(minutes=preheat_minutes),
                     now.replace(hour=0, minute=0, second=0, microsecond=0),
                 ),
-                "end": cast(datetime, window["peak_start"]),
+                "end": cast(datetime, window.get("peak_start", window["start"])),
                 "average_price": window["average_price"],
             }
             for window in eco_windows
