@@ -1494,17 +1494,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
-        # Preheat is timed before peak_start (the expensive part of the eco window),
-        # not before the eco window's start which may be hours earlier in cheap slots.
-        # Battery eco_windows (from _select_expensive_peak_blocks) have no peak_start;
-        # fall back to window["start"] so the battery planner doesn't crash.
+        # Preheat ends exactly when the eco window begins (window["start"]), so the
+        # room warms up before eco drops the setpoint — not during it.
         preheat_windows = [
             {
                 "start": max(
-                    cast(datetime, window.get("peak_start", window["start"])) - timedelta(minutes=preheat_minutes),
+                    cast(datetime, window["start"]) - timedelta(minutes=preheat_minutes),
                     now.replace(hour=0, minute=0, second=0, microsecond=0),
                 ),
-                "end": cast(datetime, window.get("peak_start", window["start"])),
+                "end": cast(datetime, window["start"]),
                 "average_price": window["average_price"],
             }
             for window in eco_windows
