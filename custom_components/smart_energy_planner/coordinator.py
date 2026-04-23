@@ -193,6 +193,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
+        self._eco_early_exit_until: datetime | None = None
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -1465,11 +1466,43 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
         # Only relevant for thermostat planners; battery planners have no room sensor
+        eco_temp_reached = (
+            planner_kind == PLANNER_KIND_THERMOSTAT
+            and room_temperature_c is not None
+            and thermostat_eco_setpoint_c is not None
+            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1
+        )
         active_eco_window = next(
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        eco_active_now = active_eco_window is not None
+        # Clear the early-exit latch when:
+        # (a) the window it was set for has ended, or
+        # (b) the planner is now in a different eco window (new planning cycle produced
+        #     a window with a different end time — fresh window deserves a fresh start).
+        if self._eco_early_exit_until is not None:
+            if now >= self._eco_early_exit_until:
+                self._eco_early_exit_until = None
+            elif active_eco_window is not None and active_eco_window["end"] != self._eco_early_exit_until:
+                self._eco_early_exit_until = None
+        # Once the room reaches the eco setpoint inside an active eco window, latch
+        # eco off for the rest of that window.  The room has used its stored floor
+        # heat; normal heating resumes to maintain comfort.  The latch prevents
+        # rapid oscillation between eco and normal every update cycle.
+        if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
+            self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
+        # Eco is only active when:
+        # - inside an active eco window
+        # - the current price slot is expensive (≥ average) — eco is off during
+        #   cheap "dal" periods within a wide eco window
+        # - the room has not yet reached the eco setpoint (no latch set)
+        eco_active_now = (
+            active_eco_window is not None
+            and current_price is not None
+            and current_price >= average_price
+            and not eco_temp_reached
+            and self._eco_early_exit_until is None
+        )
         eco_window = (
             active_eco_window
             if eco_active_now
@@ -1478,13 +1511,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
+        # Preheat is timed before peak_start (the expensive part of the eco window),
+        # not before the eco window's start which may be hours earlier in cheap slots.
         preheat_windows = [
             {
                 "start": max(
-                    window["start"] - timedelta(minutes=preheat_minutes),
+                    cast(datetime, window["peak_start"]) - timedelta(minutes=preheat_minutes),
                     now.replace(hour=0, minute=0, second=0, microsecond=0),
                 ),
-                "end": window["start"],
+                "end": cast(datetime, window["peak_start"]),
                 "average_price": window["average_price"],
             }
             for window in eco_windows
