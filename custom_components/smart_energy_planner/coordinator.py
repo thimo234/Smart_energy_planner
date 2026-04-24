@@ -1560,7 +1560,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh=usable_battery_capacity_kwh,
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
-            max_discharge_kw=max_discharge,
             battery_min_profit=battery_min_profit,
         )
         next_planned_solar_charge_start = min(
@@ -1595,47 +1594,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_solar_until(all_solar_windows, now, next_charge_opportunity),
             3,
         )
-        discharge_to_grid_window_start = (
-            max(now, next_charge_opportunity - timedelta(hours=8))
-            if next_charge_opportunity is not None
-            else None
-        )
-        home_demand_before_next_charge_window_kwh = round(
-            self._sum_remaining_home_demand_until(
-                estimated_hourly_home_demand,
-                discharge_to_grid_window_start or now,
-                next_charge_opportunity,
-            ),
-            3,
-        )
-        solar_before_next_charge_window_kwh = round(
-            self._sum_remaining_solar_until(
-                all_solar_windows,
-                discharge_to_grid_window_start or now,
-                next_charge_opportunity,
-            ),
-            3,
-        )
-        battery_reserved_energy_kwh = min(
-            battery_energy_available_kwh,
-            max(0.0, round(home_demand_before_next_charge_window_kwh - solar_before_next_charge_window_kwh, 3)),
-        )
-        battery_energy_available_for_discharge_kwh = max(
-            0.0,
-            round(battery_energy_available_kwh - battery_reserved_energy_kwh, 3),
-        )
-        battery_export_protected_energy_kwh = min(
-            battery_energy_available_kwh,
-            max(0.0, round(home_demand_until_next_charge_kwh - solar_until_next_charge_kwh, 3)),
-        )
-        battery_exportable_energy_kwh = max(
-            0.0,
-            round(battery_energy_available_kwh - battery_export_protected_energy_kwh, 3),
-        )
-        battery_room_needed_for_solar_kwh = max(
-            0.0,
-            round(battery_total_energy_kwh + projected_solar_surplus_until_sunset - battery_capacity, 3),
-        )
+        # No energy reservation: the battery drains to empty at the end of every
+        # discharge window and fills to full at the end of every charge window.
+        battery_reserved_energy_kwh = 0.0
+        battery_energy_available_for_discharge_kwh = battery_energy_available_kwh
+        battery_exportable_energy_kwh = battery_energy_available_kwh
+        battery_room_needed_for_solar_kwh = 0.0
         next_high_price_window = (
             self._find_next_high_price_window(
                 future_windows=future_windows,
@@ -1650,8 +1614,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
-            minimum_energy_before_next_charge_kwh=battery_reserved_energy_kwh,
-            minimum_energy_for_export_before_next_charge_kwh=battery_export_protected_energy_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
@@ -2296,7 +2258,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
-        max_discharge_kw: float,
         battery_min_profit: float,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
@@ -2305,10 +2266,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
-        # `current_remaining_capacity_kwh` is the amount of empty space left in
-        # the usable battery capacity (so it is already <= usable_capacity_kwh).
-        # Clamp defensively in case the caller ever passes a larger value.
-        target_charge_kwh = max(0.0, min(usable_capacity_kwh, current_remaining_capacity_kwh))
+        # Target: fill the battery completely.  The battery is expected to be
+        # empty at the start of each charge window (drained by the preceding
+        # discharge window), so the full usable capacity is available to fill.
+        current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        target_charge_kwh = usable_capacity_kwh
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
@@ -2317,115 +2279,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             minimum_slots=2,
         )
 
-        # Increase the charge target to account for energy that will be discharged
-        # between now and the first productive solar slot.  Without this a battery
-        # at 96 % would plan only a 12-minute solar window even though overnight
-        # discharge will leave it nearly empty by morning.
-        first_productive_solar_start = (
-            min(productive_solar_slot_starts) if productive_solar_slot_starts else None
-        )
-        if first_productive_solar_start is not None:
-            current_available_kwh = usable_capacity_kwh - current_remaining_capacity_kwh
-            pre_solar_discharge_kwh = 0.0
-            for slot in future_slots:
-                if slot["start"] >= first_productive_solar_start:
-                    break
-                net_solar = float(slot.get("net_solar_kwh", 0.0))
-                if net_solar < 0:
-                    deficit = min(-net_solar, current_available_kwh - pre_solar_discharge_kwh)
-                    if deficit > 0:
-                        pre_solar_discharge_kwh += deficit
-            target_charge_kwh = min(
-                usable_capacity_kwh,
-                current_remaining_capacity_kwh + pre_solar_discharge_kwh,
-            )
-
-        # Skip planning for trivial remaining capacity (< 100 Wh).  A tiny rounding
-        # remainder would otherwise produce a charge window that hold_solar_charge_mode
-        # then stretches over the full 4-hour solar block even though the battery is
-        # effectively full.
-        if target_charge_kwh < 0.1:
+        # Nothing to plan if the battery is already effectively full.
+        if current_remaining_capacity_kwh < 0.1:
             return planned_solar_charge_windows, planned_grid_charge_windows
-        total_future_solar_capacity_kwh = round(
-            sum(
-                min(
-                    max_charge_kw * float(slot["hours"]),
-                    max(0.0, float(slot["net_solar_kwh"])),
-                )
-                for slot in future_slots
-            ),
-            6,
-        )
-        # Grid charging should be limited to what solar cannot deliver before the
-        # discharge window that FOLLOWS the next solar production peak.  Using the
-        # very first discharge slot as the cutoff is wrong when that discharge
-        # happens tonight and tomorrow's solar comes after it: solar_before_discharge
-        # would be near zero, the grid would charge almost everything overnight, and
-        # tomorrow's solar would find a full battery with no room to contribute.
-        #
-        # Strategy: if there are productive solar slots in the future, use the first
-        # discharge slot that starts AFTER the last productive solar slot as the
-        # cutoff.  This ensures tomorrow's solar is fully credited against the grid
-        # limit, so overnight grid charging only covers the residual that solar
-        # cannot provide.  Fall back to the first discharge slot when no solar is
-        # expected (winter / cloudy forecast).
-        first_discharge_slot_start = next(
-            (slot["start"] for slot in future_slots if float(slot.get("net_solar_kwh", 0)) < -0.05),
-            None,
-        )
-        if productive_solar_slot_starts:
-            last_productive_solar_start = max(productive_solar_slot_starts)
-            post_solar_discharge_start = next(
-                (
-                    slot["start"]
-                    for slot in future_slots
-                    if slot["start"] > last_productive_solar_start
-                    and float(slot.get("net_solar_kwh", 0)) < -0.05
-                ),
-                first_discharge_slot_start,
-            )
-        else:
-            post_solar_discharge_start = first_discharge_slot_start
-        solar_before_discharge_kwh = round(
+
+        # Total productive solar the battery can absorb across the entire horizon.
+        total_productive_solar_kwh = round(
             sum(
                 min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
                 for slot in future_slots
-                if post_solar_discharge_start is None or slot["start"] < post_solar_discharge_start
+                if slot["start"] in productive_solar_slot_starts
             ),
             6,
         )
-        # Grid charging is a last resort: only charge from the grid when the current
-        # battery charge plus expected solar genuinely cannot cover the planned
-        # discharge demands.  During cheap hours the battery should simply be idle
-        # (accu_uit) and save its charge for expensive hours — not top itself up from
-        # the grid just because the price spread is attractive.
-        #
-        # planned_discharge_kwh = total energy the battery must supply before
-        # post_solar_discharge_start (sum of consumption-deficit slots).
-        # current_usable_kwh   = energy already in the battery right now.
-        # solar_before_discharge_kwh = solar that will top the battery up first.
-        #
-        # Grid limit = max(0, deficit) where deficit = discharge − battery − solar.
-        # If battery + solar already covers everything, grid_limit = 0.
-        planned_discharge_before_cutoff_kwh = round(
-            sum(
-                min(
-                    max_discharge_kw * float(slot["hours"]),
-                    max(0.0, -float(slot["net_solar_kwh"])),
-                )
-                for slot in future_slots
-                if float(slot.get("net_solar_kwh", 0)) < -0.05
-                and (post_solar_discharge_start is None or slot["start"] < post_solar_discharge_start)
-            ),
-            6,
-        )
-        current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+
+        # Grid tops up only the gap that solar cannot cover (last resort).
         grid_charge_limit_kwh = max(
             0.0,
-            round(
-                planned_discharge_before_cutoff_kwh - current_usable_kwh - solar_before_discharge_kwh,
-                6,
-            ),
+            round(usable_capacity_kwh - current_usable_kwh - total_productive_solar_kwh, 6),
         )
         selected_solar_charge_by_start: dict[datetime, float] = {}
         selected_grid_charge_by_start: dict[datetime, float] = {}
@@ -3079,8 +2950,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planned_solar_charge_windows: list[dict[str, str | float]],
         planned_grid_charge_windows: list[dict[str, str | float]],
         initial_usable_energy_kwh: float,
-        minimum_energy_before_next_charge_kwh: float,
-        minimum_energy_for_export_before_next_charge_kwh: float,
         usable_capacity_kwh: float,
         average_price: float,
         average_export_price: float,
@@ -3177,9 +3046,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_end_index += 1
 
             segment_slots = slots[slot_index:segment_end_index]
-            next_charge_window = None
-            if segment_end_index < len(slots):
-                next_charge_window = charge_starts.get(slots[segment_end_index]["start"])
             before_first_charge_phase = (
                 first_charge_phase_start is None  # no charge windows → drain freely, no price gating
                 or (
@@ -3187,29 +3053,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slots[0]["start"] < first_charge_phase_start
                 )
             )
-            target_end_energy_kwh = minimum_energy_before_next_charge_kwh if before_first_charge_phase else max(
-                0.0,
-                usable_capacity_kwh - (float(next_charge_window["charge_kwh"]) if next_charge_window else 0.0),
-            )
-            export_target_end_energy_kwh = (
-                max(
-                    target_end_energy_kwh,
-                    minimum_energy_for_export_before_next_charge_kwh,
-                    # Only export genuine surplus: energy above what solar will need to
-                    # recharge.  If the battery is at 28 % the remaining 7.2 kWh capacity
-                    # means there is nothing left to export without immediately re-charging
-                    # it from solar.  At 96 % the 0.4 kWh remaining capacity is tiny so
-                    # most of the available energy is genuine surplus.
-                    usable_capacity_kwh - sim_usable_energy_kwh,
-                )
-                if before_first_charge_phase
-                else target_end_energy_kwh
-            )
-            discharge_budget_kwh = (
-                max(0.0, sim_usable_energy_kwh - target_end_energy_kwh)
-                if before_first_charge_phase
-                else sim_usable_energy_kwh
-            )
+            # Drain to flat: no energy is reserved between segments.  Every
+            # discharge window empties the battery completely; surplus above
+            # home demand is exported at the most expensive remaining hours.
+            target_end_energy_kwh = 0.0
+            export_target_end_energy_kwh = 0.0
+            discharge_budget_kwh = sim_usable_energy_kwh
             current_segment_slot = next(
                 (
                     candidate
