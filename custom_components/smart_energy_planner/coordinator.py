@@ -3057,12 +3057,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 prefer_higher_prices=True,
                 protect_later_demand=not before_first_charge_phase,
             )
+            total_segment_demand_kwh = sum(
+                float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
+            )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
-                planned_discharge_kwh=planned_discharge_kwh,
                 available_energy_kwh=sim_usable_energy_kwh,
+                total_segment_demand_kwh=total_segment_demand_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
+            has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
@@ -3135,6 +3139,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     slot_solar_kwh = float(segment_slot.get("net_solar_kwh", 0))
                     if (
                         not before_first_charge_phase
+                        and has_export_surplus
                         and exportable_kwh > 0
                         and slot_solar_kwh >= 0
                         and segment_end_index < len(slots)
@@ -3204,15 +3209,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         *,
         slots: list[dict[str, Any]],
-        planned_discharge_kwh: dict[datetime, float],
         available_energy_kwh: float,
+        total_segment_demand_kwh: float,
         max_discharge_kw: float,
     ) -> dict[datetime, float]:
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
 
-        total_planned_discharge_kwh = sum(float(value) for value in planned_discharge_kwh.values())
-        required_export_kwh = max(0.0, available_energy_kwh - total_planned_discharge_kwh)
+        # Only export if the battery holds more energy than the total home demand
+        # in this segment.  When demand ≥ battery, all energy goes to own use and
+        # the solar merely displaces grid draw — no genuine surplus exists.
+        required_export_kwh = max(0.0, available_energy_kwh - total_segment_demand_kwh)
         if required_export_kwh <= 0:
             return {}
 
