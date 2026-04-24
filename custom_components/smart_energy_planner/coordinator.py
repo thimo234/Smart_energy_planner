@@ -2262,7 +2262,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
             max_charge_kw=max_charge_kw,
-            minimum_slots=2,
+            minimum_slots=1,
         )
 
         # Nothing to plan if the battery is already effectively full.
