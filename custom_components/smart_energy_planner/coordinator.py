@@ -3294,10 +3294,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     active_charge_phase_mode=active_charge_phase_mode,
                 )
 
-                mode = charge_phase_mode
-                if within_charge_phase or hold_solar_charge_mode:
-                    mode = charge_phase_mode
-                elif (
+                # Discharge always takes priority over charging.  A planned discharge
+                # window must never be overridden by a charge-phase cluster that
+                # happens to overlap the same slot (e.g. solar extension running
+                # to 17:00 while the evening discharge also starts at 17:00, or a
+                # grid charge cluster whose boundary touches a morning peak slot).
+                if (
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
                     and (discharge_threshold_reached or before_first_charge_phase)
@@ -3315,6 +3317,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         0.0,
                         sim_usable_energy_kwh - min(segment_export_kwh, sim_usable_energy_kwh),
                     )
+                elif within_charge_phase or hold_solar_charge_mode:
+                    mode = charge_phase_mode
                 else:
                     exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
