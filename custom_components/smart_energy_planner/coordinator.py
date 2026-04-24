@@ -2356,13 +2356,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             key=lambda item: (
                 # Solar always before grid; within each group sort independently.
                 0 if item["kind"] == "solar" else 1,
-                # Solar: chronological — absorb today's remaining solar before
-                # tomorrow's, even when tomorrow has higher peak production.
-                # Skipping today's lower-yield afternoon in favour of tomorrow's
-                # noon means the battery stays at partial SOC all afternoon for
-                # no benefit (the capacity is available now, not tomorrow).
-                # Grid: cheapest slot first.
-                item["start"] if item["kind"] == "solar"
+                # Solar: today's slots before tomorrow's (absorb available solar
+                # before planning tomorrow's cycle), then within each calendar
+                # day pick the cheapest-opportunity-cost hour first so the
+                # battery does not start charging at 07:00 when cheap midday
+                # hours can fill the same capacity at lower cost.
+                # Grid: cheapest import price first.
+                (item["start"].date(), float(item["effective_price"]), item["start"])
+                if item["kind"] == "solar"
                 else float(item["effective_price"]),
             ),
         ):
