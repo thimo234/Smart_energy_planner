@@ -2485,12 +2485,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             key=lambda item: (
                 # Solar always before grid; within each group sort independently.
                 0 if item["kind"] == "solar" else 1,
-                # Solar: highest raw production (net_solar_kwh) first — picks solar noon
-                # before low-yield morning/evening slots, even when prices differ.
+                # Solar: chronological — absorb today's remaining solar before
+                # tomorrow's, even when tomorrow has higher peak production.
+                # Skipping today's lower-yield afternoon in favour of tomorrow's
+                # noon means the battery stays at partial SOC all afternoon for
+                # no benefit (the capacity is available now, not tomorrow).
                 # Grid: cheapest slot first.
-                -float(item.get("net_solar_kwh", item["charge_kwh"])) if item["kind"] == "solar"
+                item["start"] if item["kind"] == "solar"
                 else float(item["effective_price"]),
-                item["start"],
             ),
         ):
             if charged_kwh >= target_charge_kwh:
@@ -3311,6 +3313,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         0.0,
                         sim_usable_energy_kwh - min(segment_discharge_kwh, sim_usable_energy_kwh),
                     )
+                elif within_charge_phase or hold_solar_charge_mode:
+                    # A charge window always beats a plain export slot.  Export
+                    # that is a forced part of a segment is handled separately
+                    # through segment_discharge_kwh; segment_export_kwh must
+                    # never override a planned charge phase.
+                    mode = charge_phase_mode
                 elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"
@@ -3318,8 +3326,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         0.0,
                         sim_usable_energy_kwh - min(segment_export_kwh, sim_usable_energy_kwh),
                     )
-                elif within_charge_phase or hold_solar_charge_mode:
-                    mode = charge_phase_mode
                 else:
                     exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
