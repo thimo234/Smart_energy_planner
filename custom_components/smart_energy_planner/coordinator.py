@@ -1411,7 +1411,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if current_price is not None and future_max_price is not None
             else None
         )
-        future_solar_charge_window = False
         eco_duration_hours = room_cooling_hours_to_eco or 0.0
         eco_expensive_threshold = (
             mid_price_threshold if planner_kind == PLANNER_KIND_THERMOSTAT else expensive_threshold
@@ -1590,10 +1589,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
         )
-        solar_until_next_charge_kwh = round(
-            self._sum_remaining_solar_until(all_solar_windows, now, next_charge_opportunity),
-            3,
-        )
         # No energy reservation: the battery drains to empty at the end of every
         # discharge window and fills to full at the end of every charge window.
         battery_reserved_energy_kwh = 0.0
@@ -1624,11 +1619,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             full_planned_mode_windows = []
             planned_current_mode = "accu_uit"
 
-        full_planned_discharge_windows = [
-            window
-            for window in full_planned_mode_windows
-            if str(window.get("mode")) in ("ontladen", "ontladen_naar_net")
-        ]
         grid_charge_needed_until_sunset = round(
             sum(float(window.get("usable_hours", 0.0)) * max_charge for window in planned_grid_charge_windows),
             3,
@@ -2975,40 +2965,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         while slot_index < len(slots):
             slot = slots[slot_index]
             slot_start = slot["start"]
-            if slot_start in solar_charge_starts:
-                mode = "laden_met_zonne_energie"
+            charge_window_handled = False
+            for charge_lookup, charge_mode, price_key in (
+                (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
+                (grid_charge_starts,  "laden_van_net",           "import_price"),
+            ):
+                if slot_start not in charge_lookup:
+                    continue
                 current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
                     hourly_modes=hourly_modes,
                     slot=slot,
-                    charge_window=solar_charge_starts[slot_start],
-                    mode=mode,
-                    price_key="export_price",
+                    charge_window=charge_lookup[slot_start],
+                    mode=charge_mode,
+                    price_key=price_key,
                     now=now,
                     current_mode=current_mode,
                     sim_usable_energy_kwh=sim_usable_energy_kwh,
                     usable_capacity_kwh=usable_capacity_kwh,
                 )
-                last_charge_mode = mode
+                last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
                     slot_index += 1
-                continue
-
-            if slot_start in grid_charge_starts:
-                mode = "laden_van_net"
-                current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
-                    hourly_modes=hourly_modes,
-                    slot=slot,
-                    charge_window=grid_charge_starts[slot_start],
-                    mode=mode,
-                    price_key="import_price",
-                    now=now,
-                    current_mode=current_mode,
-                    sim_usable_energy_kwh=sim_usable_energy_kwh,
-                    usable_capacity_kwh=usable_capacity_kwh,
-                )
-                last_charge_mode = mode
-                while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
-                    slot_index += 1
+                charge_window_handled = True
+                break
+            if charge_window_handled:
                 continue
 
             segment_end_index = slot_index
@@ -3130,10 +3110,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ):
                     mode = "ontladen"
                     last_charge_mode = "accu_uit"
-                    sim_usable_energy_kwh = max(
-                        0.0,
-                        sim_usable_energy_kwh - min(segment_discharge_kwh, sim_usable_energy_kwh),
-                    )
+                    sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_discharge_kwh)
                 elif within_charge_phase or hold_solar_charge_mode:
                     # A charge window always beats a plain export slot.  Export
                     # that is a forced part of a segment is handled separately
@@ -3143,10 +3120,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"
-                    sim_usable_energy_kwh = max(
-                        0.0,
-                        sim_usable_energy_kwh - min(segment_export_kwh, sim_usable_energy_kwh),
-                    )
+                    sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_export_kwh)
                 else:
                     exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
@@ -3160,10 +3134,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
-                        sim_usable_energy_kwh = max(
-                            0.0,
-                            sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh),
-                        )
+                        sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh))
 
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
@@ -3285,21 +3256,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
 
-        deficit_slots: list[dict[str, Any]] = []
-        for slot in slots:
-            deficit_kwh = min(
-                max_discharge_kw * float(slot["hours"]),
-                max(0.0, abs(float(slot["net_solar_kwh"]))) if float(slot["net_solar_kwh"]) < 0 else 0.0,
-            )
-            if deficit_kwh <= 0:
-                continue
-            deficit_slots.append(
-                {
-                    "start": slot["start"],
-                    "price": float(slot["import_price"]),
-                    "required_kwh": deficit_kwh,
-                }
-            )
+        deficit_slots = [
+            {
+                "start": slot["start"],
+                "price": float(slot["import_price"]),
+                "required_kwh": min(
+                    max_discharge_kw * float(slot["hours"]),
+                    -float(slot["net_solar_kwh"]),
+                ),
+            }
+            for slot in slots
+            if float(slot["net_solar_kwh"]) < 0
+            and min(max_discharge_kw * float(slot["hours"]), -float(slot["net_solar_kwh"])) > 0
+        ]
 
         if not deficit_slots:
             return {}
