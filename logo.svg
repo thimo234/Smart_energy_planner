@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 240" role="img" aria-label="Smart Energy Planner logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 240" role="img" aria-label="Smart Energy Planner logo">
   <defs>
     <linearGradient id="panel" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#102a43"/>
@@ -13,7 +13,7 @@
       <stop offset="100%" stop-color="#ffb703"/>
     </linearGradient>
   </defs>
-  <rect x="0" y="0" width="820" height="240" rx="40" fill="#0b1118"/>
+  <rect x="0" y="0" width="1060" height="240" rx="40" fill="#0b1118"/>
   <rect x="24" y="24" width="192" height="192" rx="44" fill="url(#panel)"/>
   <circle cx="172" cy="76" r="24" fill="url(#sun)"/>
   <path d="M172 39v12M172 101v12M135 76h12M197 76h12M146 50l9 9M189 93l9 9M146 102l9-9M189 59l9-9"
