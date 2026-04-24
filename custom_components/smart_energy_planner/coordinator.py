@@ -3068,15 +3068,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
+            # Precompute suffix discharge sums: remaining_planned_discharge[s] =
+            # total planned discharge for all segment slots that start AFTER s.
+            suffix_discharge_kwh: dict[datetime, float] = {}
+            running_suffix = 0.0
+            for _slot in reversed(segment_slots):
+                suffix_discharge_kwh[_slot["start"]] = running_suffix
+                running_suffix += float(planned_discharge_kwh.get(_slot["start"], 0.0))
+
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
-                remaining_planned_discharge_kwh = sum(
-                    float(planned_discharge_kwh.get(other["start"], 0.0))
-                    for other in segment_slots
-                    if other["start"] > segment_slot_start
-                )
+                remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
                 discharge_threshold_reached = (
                     discharge_start_threshold_price is None
@@ -3316,25 +3320,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cast(datetime, slot["start"]): slot
             for slot in slots
         }
+        # Precompute suffix sums of net_solar_kwh so later_net_need_kwh is O(1)
+        # per slot instead of O(n).  suffix_net_solar[s] = sum of net_solar_kwh
+        # for ALL segment slots with start > s.
+        sorted_slot_starts = sorted(segment_slots_by_start.keys())
+        suffix_net_solar: dict[datetime, float] = {}
+        _running = 0.0
+        for _start in reversed(sorted_slot_starts):
+            suffix_net_solar[_start] = _running
+            _running += float(segment_slots_by_start[_start]["net_solar_kwh"])
+
+        assigned_total_kwh = 0.0
         for slot in slot_order:
             if remaining_energy_kwh <= 0:
                 break
 
             slot_start = cast(datetime, slot["start"])
-            assigned_total_kwh = sum(float(value) for value in planned_discharge.values())
+            # assigned_later_kwh: how much has already been committed to slots
+            # chronologically after this one (typically few entries in practice).
             assigned_later_kwh = sum(
                 float(value)
                 for start, value in planned_discharge.items()
                 if start > slot_start
             )
-            later_net_need_kwh = max(
-                0.0,
-                -sum(
-                    float(segment_slots_by_start[start]["net_solar_kwh"])
-                    for start in segment_slots_by_start
-                    if start > slot_start
-                ),
-            )
+            later_net_need_kwh = max(0.0, -suffix_net_solar[slot_start])
             protected_later_kwh = max(0.0, later_net_need_kwh - assigned_later_kwh)
             remaining_energy_kwh = max(
                 0.0,
@@ -3344,6 +3353,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if assigned_kwh <= 0:
                 continue
             planned_discharge[slot_start] = round(assigned_kwh, 6)
+            assigned_total_kwh += assigned_kwh
 
         return planned_discharge
 
