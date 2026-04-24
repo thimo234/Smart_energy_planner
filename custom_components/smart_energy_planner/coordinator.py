@@ -3299,6 +3299,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # happens to overlap the same slot (e.g. solar extension running
                 # to 17:00 while the evening discharge also starts at 17:00, or a
                 # grid charge cluster whose boundary touches a morning peak slot).
+                mode = "accu_uit"
                 if (
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
