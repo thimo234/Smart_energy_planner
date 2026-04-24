@@ -1757,10 +1757,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     rationale_parts.append(
                         "battery has enough energy to cover expected own demand before the next charge block, so export is allowed but optional"
                     )
-                elif battery_energy_available_for_discharge_kwh <= 0 and battery_energy_available_kwh > 0:
-                    rationale_parts.append(
-                        "battery keeps its remaining charge for household demand until the next charging opportunity"
-                    )
                 elif battery_total_energy_kwh <= minimum_battery_reserve_kwh and battery_soc_percent is not None:
                     rationale_parts.append(
                         f"battery stays above the configured minimum reserve of {battery_min_soc_percent:.0f}%"
@@ -2863,13 +2859,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
     ) -> tuple[str, float, datetime]:
         charge_end = cast(datetime, charge_window["end"])
-        charge_kwh = float(charge_window["charge_kwh"])
         usable_hours = float(charge_window["usable_hours"])
-        # After a planned charge window, follow-on discharge planning should assume
-        # the battery is effectively full instead of carrying a partial estimate.
-        # `charge_kwh` is intentionally unused in the simulated SOC update because we
-        # optimistically treat the battery as full after the entire charge phase.
-        _ = charge_kwh
         sim_usable_energy_kwh = usable_capacity_kwh
         if slot["start"] <= now < charge_end:
             current_mode = mode
@@ -2883,18 +2873,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             }
         )
         return current_mode, sim_usable_energy_kwh, charge_end
-
-    def _resolve_charge_phase_mode(
-        self,
-        *,
-        last_charge_mode: str,
-        active_charge_phase_mode: str,
-    ) -> str:
-        if last_charge_mode != "accu_uit":
-            return last_charge_mode
-        if active_charge_phase_mode != "accu_uit":
-            return active_charge_phase_mode
-        return "accu_uit"
 
     def _update_active_charge_phase_state(
         self,
@@ -3057,8 +3035,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Drain to flat: no energy is reserved between segments.  Every
             # discharge window empties the battery completely; surplus above
             # home demand is exported at the most expensive remaining hours.
-            target_end_energy_kwh = 0.0
-            export_target_end_energy_kwh = 0.0
             discharge_budget_kwh = sim_usable_energy_kwh
             current_segment_slot = next(
                 (
@@ -3073,10 +3049,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if current_segment_slot is not None
                 else None
             )
-            discharge_start_threshold_price = self._calculate_battery_discharge_start_threshold(segment_slots)
+            # Use the peak-based threshold when a higher-priced slot still lies
+            # ahead in this segment; otherwise fall back to average_price (post-
+            # charge) or no threshold (pre-charge), so cheap morning slots don't
+            # trigger discharge just because the segment is short.
+            peak_threshold = self._calculate_battery_discharge_start_threshold(segment_slots)
             has_meaningful_later_peak = (
                 current_segment_price is not None
-                and discharge_start_threshold_price is not None
+                and peak_threshold is not None
                 and any(
                     cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
                     and float(candidate["price"]) > current_segment_price
@@ -3084,32 +3064,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     for candidate in segment_slots
                 )
             )
-            if not has_meaningful_later_peak:
-                discharge_start_threshold_price = None
-            # Outside the pre-charge drain phase, fall back to the average import price
-            # as the minimum price required to discharge.  This prevents cheap morning
-            # slots (e.g. 06:00–08:00 at €0.10 right after an overnight grid charge)
-            # from triggering ontladen mode just because the segment is too short to
-            # compute a proper peak-based threshold.
-            if discharge_start_threshold_price is None and not before_first_charge_phase:
-                discharge_start_threshold_price = average_price
+            discharge_start_threshold_price = (
+                peak_threshold if has_meaningful_later_peak
+                else (None if before_first_charge_phase else average_price)
+            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                # Pre-charge: sort by price (most expensive first), simple greedy —
-                # battery is distributed over the most expensive demand hours until empty.
-                # Post-charge: price-ordered with later-demand protection for arbitrage.
-                prefer_higher_prices=before_first_charge_phase or (discharge_start_threshold_price is not None and not before_first_charge_phase),
+                # Always sort by price; pre-charge uses simple greedy,
+                # post-charge uses later-demand protection for arbitrage.
+                prefer_higher_prices=True,
                 protect_later_demand=not before_first_charge_phase,
             )
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
                 planned_discharge_kwh=planned_discharge_kwh,
                 available_energy_kwh=sim_usable_energy_kwh,
-                target_end_energy_kwh=export_target_end_energy_kwh,
-                export_window_start=None,
-                export_window_end=None,
                 max_discharge_kw=max_discharge_kw,
             )
 
@@ -3141,9 +3112,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and sim_usable_energy_kwh > 0
                     and segment_discharge_kwh <= 0
                 )
-                charge_phase_mode = self._resolve_charge_phase_mode(
-                    last_charge_mode=last_charge_mode,
-                    active_charge_phase_mode=active_charge_phase_mode,
+                charge_phase_mode = (
+                    last_charge_mode if last_charge_mode != "accu_uit"
+                    else active_charge_phase_mode
                 )
 
                 # Discharge always takes priority over charging.  A planned discharge
@@ -3256,24 +3227,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         slots: list[dict[str, Any]],
         planned_discharge_kwh: dict[datetime, float],
         available_energy_kwh: float,
-        target_end_energy_kwh: float,
-        export_window_start: datetime | None,
-        export_window_end: datetime | None,
         max_discharge_kw: float,
     ) -> dict[datetime, float]:
-        if (
-            available_energy_kwh <= 0
-            or max_discharge_kw <= 0
-            or not slots
-        ):
+        if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
 
         total_planned_discharge_kwh = sum(float(value) for value in planned_discharge_kwh.values())
-        target_end_energy_kwh = max(0.0, target_end_energy_kwh)
-        required_export_kwh = max(
-            0.0,
-            available_energy_kwh - total_planned_discharge_kwh - target_end_energy_kwh,
-        )
+        required_export_kwh = max(0.0, available_energy_kwh - total_planned_discharge_kwh)
         if required_export_kwh <= 0:
             return {}
 
@@ -3283,18 +3243,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 continue
             if float(slot["net_solar_kwh"]) < 0:
                 continue
-            allowed_hours = float(slot["hours"])
-            if export_window_start is not None and export_window_end is not None:
-                allowed_hours = self._overlap_hours(
-                    slot["start"],
-                    slot["end"],
-                    export_window_start,
-                    export_window_end,
-                )
-            if allowed_hours <= 0:
-                continue
             export_capacity_kwh = min(
-                max_discharge_kw * allowed_hours,
+                max_discharge_kw * float(slot["hours"]),
                 max(0.0, available_energy_kwh),
             )
             if export_capacity_kwh <= 0:
@@ -3421,35 +3371,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         windows: list[dict[str, str | float]],
     ) -> list[dict[str, str | float]]:
-        if not windows:
-            return []
-
-        merged: list[dict[str, str | float]] = []
-        for window in sorted(windows, key=lambda item: str(item["start"])):
-            if not merged:
-                merged.append(dict(window))
-                continue
-
-            previous = merged[-1]
-            previous_end = dt_util.parse_datetime(str(previous["end"]))
-            current_start = dt_util.parse_datetime(str(window["start"]))
-            if (
-                previous_end is not None
-                and current_start is not None
-                and previous_end == current_start
-                and previous.get("mode") == window.get("mode")
-            ):
-                previous["end"] = window["end"]
-                previous["usable_hours"] = round(
-                    float(previous.get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
-                    3,
-                )
-                previous["price"] = max(float(previous.get("price", 0.0)), float(window.get("price", 0.0)))
-                continue
-
-            merged.append(dict(window))
-
-        return merged
+        return self._merge_windows(windows, same_mode_only=True, pick_max_price=True)
 
     def _select_cheapest_charge_windows(
         self,
@@ -3618,6 +3540,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         windows: list[dict[str, str | float]],
     ) -> list[dict[str, str | float]]:
+        return self._merge_windows(windows, same_mode_only=False, pick_max_price=False)
+
+    def _merge_windows(
+        self,
+        windows: list[dict[str, str | float]],
+        *,
+        same_mode_only: bool,
+        pick_max_price: bool,
+    ) -> list[dict[str, str | float]]:
         if not windows:
             return []
 
@@ -3630,13 +3561,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             previous = merged[-1]
             previous_end = dt_util.parse_datetime(str(previous["end"]))
             current_start = dt_util.parse_datetime(str(window["start"]))
-            if previous_end is not None and current_start is not None and previous_end == current_start:
+            if (
+                previous_end is not None
+                and current_start is not None
+                and previous_end == current_start
+                and (not same_mode_only or previous.get("mode") == window.get("mode"))
+            ):
                 previous["end"] = window["end"]
                 previous["usable_hours"] = round(
                     float(previous.get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
                     3,
                 )
-                previous["price"] = min(float(previous.get("price", 0.0)), float(window.get("price", 0.0)))
+                prev_price = float(previous.get("price", 0.0))
+                curr_price = float(window.get("price", 0.0))
+                previous["price"] = max(prev_price, curr_price) if pick_max_price else min(prev_price, curr_price)
                 continue
 
             merged.append(dict(window))
