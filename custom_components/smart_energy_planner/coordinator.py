@@ -2354,19 +2354,41 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             6,
         )
-        # Grid charging should be limited to what solar cannot deliver BEFORE the first
-        # significant discharge window.  Comparing against all future solar is wrong
-        # when discharge comes before the solar: the battery needs to be full for
-        # tonight's discharge even if tomorrow's solar would eventually fill the gap.
+        # Grid charging should be limited to what solar cannot deliver before the
+        # discharge window that FOLLOWS the next solar production peak.  Using the
+        # very first discharge slot as the cutoff is wrong when that discharge
+        # happens tonight and tomorrow's solar comes after it: solar_before_discharge
+        # would be near zero, the grid would charge almost everything overnight, and
+        # tomorrow's solar would find a full battery with no room to contribute.
+        #
+        # Strategy: if there are productive solar slots in the future, use the first
+        # discharge slot that starts AFTER the last productive solar slot as the
+        # cutoff.  This ensures tomorrow's solar is fully credited against the grid
+        # limit, so overnight grid charging only covers the residual that solar
+        # cannot provide.  Fall back to the first discharge slot when no solar is
+        # expected (winter / cloudy forecast).
         first_discharge_slot_start = next(
             (slot["start"] for slot in future_slots if float(slot.get("net_solar_kwh", 0)) < -0.05),
             None,
         )
+        if productive_solar_slot_starts:
+            last_productive_solar_start = max(productive_solar_slot_starts)
+            post_solar_discharge_start = next(
+                (
+                    slot["start"]
+                    for slot in future_slots
+                    if slot["start"] > last_productive_solar_start
+                    and float(slot.get("net_solar_kwh", 0)) < -0.05
+                ),
+                first_discharge_slot_start,
+            )
+        else:
+            post_solar_discharge_start = first_discharge_slot_start
         solar_before_discharge_kwh = round(
             sum(
                 min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
                 for slot in future_slots
-                if first_discharge_slot_start is None or slot["start"] < first_discharge_slot_start
+                if post_solar_discharge_start is None or slot["start"] < post_solar_discharge_start
             ),
             6,
         )
