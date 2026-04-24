@@ -1560,6 +1560,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh=usable_battery_capacity_kwh,
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
+            max_discharge_kw=max_discharge,
             battery_min_profit=battery_min_profit,
         )
         next_planned_solar_charge_start = min(
@@ -2295,6 +2296,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
+        max_discharge_kw: float,
         battery_min_profit: float,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
@@ -2392,7 +2394,39 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             6,
         )
-        grid_charge_limit_kwh = max(0.0, round(target_charge_kwh - solar_before_discharge_kwh, 6))
+        # Grid charging is a last resort: only charge from the grid when the current
+        # battery charge plus expected solar genuinely cannot cover the planned
+        # discharge demands.  During cheap hours the battery should simply be idle
+        # (accu_uit) and save its charge for expensive hours — not top itself up from
+        # the grid just because the price spread is attractive.
+        #
+        # planned_discharge_kwh = total energy the battery must supply before
+        # post_solar_discharge_start (sum of consumption-deficit slots).
+        # current_usable_kwh   = energy already in the battery right now.
+        # solar_before_discharge_kwh = solar that will top the battery up first.
+        #
+        # Grid limit = max(0, deficit) where deficit = discharge − battery − solar.
+        # If battery + solar already covers everything, grid_limit = 0.
+        planned_discharge_before_cutoff_kwh = round(
+            sum(
+                min(
+                    max_discharge_kw * float(slot["hours"]),
+                    max(0.0, -float(slot["net_solar_kwh"])),
+                )
+                for slot in future_slots
+                if float(slot.get("net_solar_kwh", 0)) < -0.05
+                and (post_solar_discharge_start is None or slot["start"] < post_solar_discharge_start)
+            ),
+            6,
+        )
+        current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        grid_charge_limit_kwh = max(
+            0.0,
+            round(
+                planned_discharge_before_cutoff_kwh - current_usable_kwh - solar_before_discharge_kwh,
+                6,
+            ),
+        )
         selected_solar_charge_by_start: dict[datetime, float] = {}
         selected_grid_charge_by_start: dict[datetime, float] = {}
         charge_candidates: list[dict[str, Any]] = []
