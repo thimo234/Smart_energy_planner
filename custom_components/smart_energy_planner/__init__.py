@@ -50,7 +50,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
-from .coordinator import SmartEnergyPlannerCoordinator
+from .coordinator import SmartEnergyPlannerCoordinator, _THERMOSTAT_MAX_COOLDOWN_HOURS
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
@@ -274,6 +274,7 @@ async def _async_apply_heating_switch_control(
         else None,
         heating_is_on=str(switch_state.state).lower() in {"on", "heat", "heating"},
         eco_active=(not cooling_active) and active_preset_mode == PRESET_ECO,
+        eco_setpoint=eco_target,
     )
 
     cold_tolerance = float(merged.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE))
@@ -381,8 +382,20 @@ async def _async_update_cooling_model(
     outdoor_temperature,
     heating_is_on: bool,
     eco_active: bool,
+    eco_setpoint: float | None = None,
 ) -> None:
-    """Learn normalized room cooling speed from complete eco windows."""
+    """Learn normalized room cooling speed from eco windows.
+
+    Two kinds of sessions are counted:
+    - Complete: heating fired during eco (room reached eco setpoint). The time
+      from eco-start to first-heating is the true passive cooling duration.
+    - Partial: eco window ended before eco setpoint was reached, but the room
+      DID cool down (temperature dropped). Solar gain keeps the temperature from
+      dropping, so a real drop confirms passive cooling without contamination.
+      The observed cooling rate (°C/h per °C outdoor delta) is still valid; we
+      project the full cooling duration from it to break the chicken-and-egg
+      deadlock where a too-short eco window prevents the model from ever learning.
+    """
     if current_temperature is None:
         return
     try:
@@ -407,10 +420,10 @@ async def _async_update_cooling_model(
                 "start_timestamp": now.isoformat(),
                 "start_room_temperature_c": round(current_temperature, 3),
                 "start_outdoor_temperature_c": round(outdoor_temp, 3),
+                "eco_setpoint_c": round(eco_setpoint, 3) if eco_setpoint is not None else None,
             }
         elif heating_is_on and session.get("first_heating_timestamp") is None:
-            # Record when heating first fires — this marks the moment the room
-            # reached the eco setpoint and is the true end of the cooling phase.
+            # Record when heating first fires — the room reached eco setpoint.
             session["first_heating_timestamp"] = now.isoformat()
             session["first_heating_room_temperature_c"] = round(current_temperature, 3)
             session["first_heating_outdoor_temperature_c"] = round(outdoor_temp, 3)
@@ -435,24 +448,29 @@ async def _async_update_cooling_model(
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
 
-    # Only learn from sessions where the room demonstrably cooled to eco setpoint:
-    # first_heating_timestamp marks the moment the HVAC fired because the room
-    # reached eco temperature — definitive proof of passive cooling completion.
-    # If heating never fired the room may have been kept warm by solar gain or the
-    # eco window was simply too short; skip those sessions to avoid polluting the
-    # model with misleading data.
     first_heating_ts_raw = session.get("first_heating_timestamp")
     first_heating_ts = dt_util.parse_datetime(first_heating_ts_raw) if first_heating_ts_raw else None
-    if first_heating_ts is None:
-        await _async_save_runtime_state(hass, entry_id, runtime_state)
-        return
 
-    end_time = first_heating_ts
-    end_room_temp = float(session.get("first_heating_room_temperature_c", current_temperature))
-    end_outdoor_temp = float(session.get("first_heating_outdoor_temperature_c", outdoor_temp))
+    if first_heating_ts is not None:
+        # Complete session: room reached eco setpoint. Use the exact cooling duration.
+        end_time = first_heating_ts
+        end_room_temp = float(session.get("first_heating_room_temperature_c", current_temperature))
+        end_outdoor_temp = float(session.get("first_heating_outdoor_temperature_c", outdoor_temp))
+        partial = False
+    else:
+        # Partial session: eco window ended before eco setpoint was reached.
+        # Only count if the room actually cooled — a rising or flat temperature
+        # means solar gain kept the house warm; skip to avoid polluting the model.
+        end_time = now
+        end_room_temp = current_temperature
+        end_outdoor_temp = outdoor_temp
+        partial = True
 
     elapsed_hours = (end_time - start_time).total_seconds() / 3600
     cooling_drop = start_room_temp - end_room_temp
+
+    # Require meaningful cooling — a flat or rising temperature means external
+    # heat (sun) dominated; discard to avoid biasing the model.
     if elapsed_hours < 0.25 or cooling_drop < 0.3:
         await _async_save_runtime_state(hass, entry_id, runtime_state)
         return
@@ -462,6 +480,22 @@ async def _async_update_cooling_model(
     average_delta_temp = max(average_room_temp - average_outdoor_temp, 0.5)
     cooling_rate = cooling_drop / elapsed_hours
     normalized_cooling_rate = cooling_rate / average_delta_temp
+
+    if partial:
+        # Project what the full cooling duration would have been at the observed
+        # rate, so the model can grow beyond the current (possibly too short)
+        # eco window even before eco setpoint is ever reached.
+        session_eco_setpoint = session.get("eco_setpoint_c")
+        if session_eco_setpoint is not None:
+            full_delta = max(start_room_temp - float(session_eco_setpoint), 0.1)
+            projected_hours = full_delta / max(cooling_rate, 0.01)
+            duration_for_model = min(projected_hours, _THERMOSTAT_MAX_COOLDOWN_HOURS)
+        else:
+            # No setpoint recorded — can't project; skip partial session.
+            await _async_save_runtime_state(hass, entry_id, runtime_state)
+            return
+    else:
+        duration_for_model = elapsed_hours
 
     cooling_model = runtime_state.setdefault("cooling_model", {})
     previous_factor = cooling_model.get("rolling_cooling_factor")
@@ -474,10 +508,11 @@ async def _async_update_cooling_model(
     )
     cooling_model["rolling_cooling_factor"] = round(max(0.001, learned_factor), 5)
     cooling_model["sample_count"] = previous_samples + 1
-    cooling_model["eco_sample_count"] = previous_eco_samples + 1
+    if not partial:
+        cooling_model["eco_sample_count"] = previous_eco_samples + 1
     cooling_model["last_delta_temp_c"] = round(average_delta_temp, 3)
     cooling_model["last_observed_drop_c_per_hour"] = round(cooling_rate, 4)
-    cooling_model["last_eco_duration_hours"] = round(elapsed_hours, 3)
+    cooling_model["last_eco_duration_hours"] = round(duration_for_model, 3)
     cooling_model["last_eco_start_temp_c"] = round(start_room_temp, 3)
     cooling_model["last_eco_end_temp_c"] = round(end_room_temp, 3)
     await _async_save_runtime_state(hass, entry_id, runtime_state)
