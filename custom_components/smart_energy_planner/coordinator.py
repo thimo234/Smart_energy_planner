@@ -1454,15 +1454,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        # Clear the early-exit latch when:
-        # (a) the window it was set for has ended, or
-        # (b) the planner is now in a different eco window (new planning cycle produced
-        #     a window with a different end time — fresh window deserves a fresh start).
-        if self._eco_early_exit_until is not None:
-            if now >= self._eco_early_exit_until:
-                self._eco_early_exit_until = None
-            elif active_eco_window is not None and active_eco_window["end"] != self._eco_early_exit_until:
-                self._eco_early_exit_until = None
+        # Clear the early-exit latch only when the window it was set for has ended.
+        # Do NOT reset it when the eco window boundaries shift due to replanning
+        # (e.g. cooldown_hours changing with room temperature) — resetting on every
+        # end-time change was the root cause of rapid eco↔normal oscillation: the
+        # latch fired, eco exited, the planner produced a window with a slightly
+        # different end, the latch reset, eco re-entered, repeat every 15 minutes.
+        if self._eco_early_exit_until is not None and now >= self._eco_early_exit_until:
+            self._eco_early_exit_until = None
         # Once the room reaches the eco setpoint inside an active eco window, latch
         # eco off for the rest of that window.  The room has used its stored floor
         # heat; normal heating resumes to maintain comfort.  The latch prevents
