@@ -2252,11 +2252,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
-        # Target: fill the battery completely.  The battery is expected to be
-        # empty at the start of each charge window (drained by the preceding
-        # discharge window), so the full usable capacity is available to fill.
+        # Target: fill exactly what is currently empty.  When negative-price
+        # grid charging can cover the full remaining space it exhausts the
+        # target first, so solar is skipped (battery stays accu_uit before
+        # the neg-price window and solar goes to home demand instead).
+        # When neg-price alone is insufficient, solar fills the remainder.
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        target_charge_kwh = usable_capacity_kwh
+        target_charge_kwh = current_remaining_capacity_kwh
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
@@ -2350,28 +2352,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # negative_grid should only fill the space that solar cannot cover before
-        # the first negative-price slot arrives.  Solar from e.g. 09:30-12:00
-        # partially charges the battery; grid only needs to top up the remainder
-        # at the cheapest negative-price hours after that.
-        first_neg_price_slot = next(
-            (slot for slot in future_slots if float(slot["import_price"]) < 0),
-            None,
-        )
-        if first_neg_price_slot is not None:
-            solar_kwh_before_neg_price = sum(
-                min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
-                for slot in future_slots
-                if slot["start"] in productive_solar_slot_starts
-                and slot["end"] <= first_neg_price_slot["start"]
-            )
-            neg_grid_target = max(
-                0.0,
-                round(current_remaining_capacity_kwh - solar_kwh_before_neg_price, 6),
-            )
-        else:
-            neg_grid_target = current_remaining_capacity_kwh
-        neg_grid_charged = 0.0
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
         for candidate in sorted(
@@ -2387,29 +2367,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 else (item["start"].date(), float(item["effective_price"]), item["start"]),
             ),
         ):
-            candidate_charge_kwh = float(candidate["charge_kwh"])
-
-            if candidate["kind"] == "negative_grid":
-                # Separate budget: only fill the space that is empty right now.
-                usable_charge_kwh = min(candidate_charge_kwh, neg_grid_target - neg_grid_charged)
-                if usable_charge_kwh <= 0:
-                    continue
-                selected_grid_charge_by_start[candidate["start"]] = round(
-                    selected_grid_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
-                    6,
-                )
-                neg_grid_charged += usable_charge_kwh
-                continue
-
             if charged_kwh >= target_charge_kwh:
                 break
 
+            candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
-                # Regular grid only fills the deficit solar cannot cover.
+                # Regular grid only fills the genuine deficit solar cannot cover.
                 candidate_charge_kwh = min(
                     candidate_charge_kwh,
                     max(0.0, grid_charge_limit_kwh - charged_grid_kwh),
                 )
+            # negative_grid: no separate cap — fills the shared target directly.
             usable_charge_kwh = min(candidate_charge_kwh, target_charge_kwh - charged_kwh)
             if usable_charge_kwh <= 0:
                 continue
@@ -2424,7 +2392,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     selected_grid_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
                     6,
                 )
-                charged_grid_kwh += usable_charge_kwh
+                if candidate["kind"] == "grid":
+                    charged_grid_kwh += usable_charge_kwh
             charged_kwh += usable_charge_kwh
 
         for slot in future_slots:
