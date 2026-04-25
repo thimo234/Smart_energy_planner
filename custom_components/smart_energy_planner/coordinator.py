@@ -2360,12 +2360,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             key=lambda item: (
                 # Priority: negative-grid (0) → solar (1) → regular grid (2).
                 0 if item["kind"] == "negative_grid" else (1 if item["kind"] == "solar" else 2),
-                # Within each group:
-                #   negative_grid / grid: cheapest (most negative) first.
-                #   solar: today before tomorrow, then cheapest opportunity-cost.
-                float(item["effective_price"])
-                if item["kind"] in ("negative_grid", "grid")
-                else (item["start"].date(), float(item["effective_price"]), item["start"]),
+                # Within neg_grid: current slot first so the battery charges
+                # immediately when price is negative right now, then sort
+                # remaining neg_grid slots cheapest (most negative) first.
+                # solar: today before tomorrow, then cheapest opportunity-cost.
+                (item["start"] > now or item["end"] <= now, float(item["effective_price"]))
+                if item["kind"] == "negative_grid"
+                else (
+                    float(item["effective_price"])
+                    if item["kind"] == "grid"
+                    else (item["start"].date(), float(item["effective_price"]), item["start"])
+                ),
             ),
         ):
             if charged_kwh >= target_charge_kwh:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -120,6 +120,22 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
 
 class BatteryPlannerSensor(PlannerSensor):
     """Battery planner sensor with battery-only attributes."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_written_mode: str | None = None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # Only write HA state (and fire state_changed) when the mode value
+        # actually changes.  Every coordinator refresh updates attributes like
+        # current_price and battery_soc, which would otherwise fire a
+        # state_changed event every 15 minutes even while mode stays the same,
+        # causing automations to trigger unnecessarily.
+        current_mode = str(self.coordinator.data.battery_strategy or "")
+        if current_mode != self._last_written_mode:
+            self._last_written_mode = current_mode
+            self.async_write_ha_state()
 
     @property
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
