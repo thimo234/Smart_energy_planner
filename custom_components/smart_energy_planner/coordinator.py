@@ -2290,6 +2290,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         for slot in future_slots:
             slot_capacity_kwh = max_charge_kw * float(slot["hours"])
+
+            # Negative import price: grid pays us to consume — always charge from
+            # the grid at full rate regardless of solar or profit margin.
+            if float(slot["import_price"]) < 0:
+                charge_candidates.append(
+                    {
+                        "kind": "negative_grid",
+                        "start": slot["start"],
+                        "end": slot["end"],
+                        "charge_kwh": round(slot_capacity_kwh, 6),
+                        "effective_price": round(float(slot["import_price"]), 6),
+                    }
+                )
+                continue
+
             solar_charge_kwh = min(
                 slot_capacity_kwh,
                 max(0.0, float(slot["net_solar_kwh"])),
@@ -2340,17 +2355,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for candidate in sorted(
             charge_candidates,
             key=lambda item: (
-                # Solar always before grid; within each group sort independently.
-                0 if item["kind"] == "solar" else 1,
-                # Solar: today's slots before tomorrow's (absorb available solar
-                # before planning tomorrow's cycle), then within each calendar
-                # day pick the cheapest-opportunity-cost hour first so the
-                # battery does not start charging at 07:00 when cheap midday
-                # hours can fill the same capacity at lower cost.
-                # Grid: cheapest import price first.
-                (item["start"].date(), float(item["effective_price"]), item["start"])
-                if item["kind"] == "solar"
-                else float(item["effective_price"]),
+                # Priority: negative-grid (0) → solar (1) → regular grid (2).
+                0 if item["kind"] == "negative_grid" else (1 if item["kind"] == "solar" else 2),
+                # Within each group:
+                #   negative_grid / grid: cheapest (most negative) first.
+                #   solar: today before tomorrow, then cheapest opportunity-cost.
+                float(item["effective_price"])
+                if item["kind"] in ("negative_grid", "grid")
+                else (item["start"].date(), float(item["effective_price"]), item["start"]),
             ),
         ):
             if charged_kwh >= target_charge_kwh:
@@ -2358,10 +2370,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
+                # Regular grid only fills the deficit solar cannot cover.
                 candidate_charge_kwh = min(
                     candidate_charge_kwh,
                     max(0.0, grid_charge_limit_kwh - charged_grid_kwh),
                 )
+            # negative_grid: no capacity limit — fill the whole battery.
             usable_charge_kwh = min(candidate_charge_kwh, target_charge_kwh - charged_kwh)
             if usable_charge_kwh <= 0:
                 continue
@@ -2376,7 +2390,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     selected_grid_charge_by_start.get(candidate["start"], 0.0) + usable_charge_kwh,
                     6,
                 )
-                charged_grid_kwh += usable_charge_kwh
+                if candidate["kind"] == "grid":
+                    charged_grid_kwh += usable_charge_kwh
             charged_kwh += usable_charge_kwh
 
         for slot in future_slots:
