@@ -2354,6 +2354,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
+        neg_grid_charged_kwh = 0.0
         for candidate in sorted(
             charge_candidates,
             key=lambda item: (
@@ -2394,7 +2395,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 if candidate["kind"] == "grid":
                     charged_grid_kwh += usable_charge_kwh
+                else:
+                    neg_grid_charged_kwh += usable_charge_kwh
             charged_kwh += usable_charge_kwh
+
+        # If negative-price grid alone covers ≥ 95 % of the target, the remaining
+        # solar contribution is trivially small (< 5 % ≈ a few minutes of charging).
+        # Drop it so the battery stays idle (accu_uit) before the neg-price window
+        # rather than starting solar-charge mode hours earlier.
+        if target_charge_kwh > 0 and neg_grid_charged_kwh / target_charge_kwh >= 0.95:
+            selected_solar_charge_by_start.clear()
 
         for slot in future_slots:
             charge_kwh = float(selected_solar_charge_by_start.get(slot["start"], 0.0))
