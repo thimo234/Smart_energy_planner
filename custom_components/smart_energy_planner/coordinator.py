@@ -2399,12 +2399,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     neg_grid_charged_kwh += usable_charge_kwh
             charged_kwh += usable_charge_kwh
 
-        # If negative-price grid alone covers ≥ 95 % of the target, the remaining
-        # solar contribution is trivially small (< 5 % ≈ a few minutes of charging).
-        # Drop it so the battery stays idle (accu_uit) before the neg-price window
-        # rather than starting solar-charge mode hours earlier.
-        if target_charge_kwh > 0 and neg_grid_charged_kwh / target_charge_kwh >= 0.95:
-            selected_solar_charge_by_start.clear()
+        # When negative-price grid charging is planned, drop any solar that starts
+        # BEFORE the first neg-price slot.  The battery should stay accu_uit until
+        # the neg-price window so it has maximum room for paid charging and solar
+        # goes directly to home demand instead of being stored pre-emptively.
+        # Solar that starts AFTER the neg-price window is kept — it fills any
+        # remaining capacity that neg-grid alone could not cover.
+        if neg_grid_charged_kwh > 0 and selected_solar_charge_by_start:
+            neg_grid_selected_starts = {
+                c["start"]
+                for c in charge_candidates
+                if c["kind"] == "negative_grid" and c["start"] in selected_grid_charge_by_start
+            }
+            if neg_grid_selected_starts:
+                first_neg_grid_start = min(neg_grid_selected_starts)
+                for start in list(selected_solar_charge_by_start.keys()):
+                    if start < first_neg_grid_start:
+                        del selected_solar_charge_by_start[start]
 
         for slot in future_slots:
             charge_kwh = float(selected_solar_charge_by_start.get(slot["start"], 0.0))
