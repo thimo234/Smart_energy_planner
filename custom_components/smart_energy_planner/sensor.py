@@ -32,7 +32,21 @@ async def async_setup_entry(
         entities.extend(
             [
                 BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
-                BatteryPlannerSensor(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy"),
+                BatteryPlannerSensor(
+                    coordinator,
+                    entry,
+                    "battery_strategy",
+                    "Battery Strategy",
+                    "battery_strategy",
+                    device_class=SensorDeviceClass.ENUM,
+                    options=[
+                        "accu_uit",
+                        "laden_van_net",
+                        "laden_met_zonne_energie",
+                        "ontladen",
+                        "ontladen_naar_net",
+                    ],
+                ),
                 BatteryProfitSensor(
                     coordinator,
                     entry,
@@ -95,6 +109,8 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         value_key: str,
         *,
         native_unit_of_measurement: str | None = None,
+        device_class: str | None = None,
+        options: list[str] | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._value_key = value_key
@@ -102,6 +118,8 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         self._attr_name = _planner_entity_name(entry, name)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_native_unit_of_measurement = native_unit_of_measurement
+        self._attr_device_class = device_class
+        self._attr_options = options
         self._attr_icon = "mdi:home-lightning-bolt-outline"
 
     @property
