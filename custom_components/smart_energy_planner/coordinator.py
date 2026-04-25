@@ -3119,11 +3119,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         for cluster in charge_phase_clusters
                     )
                 )
-                # After a solar charge, hold in laden_met_zonne_energie until a
+                # Hold in laden_met_zonne_energie after any charge phase until a
                 # planned discharge slot starts — so the inverter doesn't flip to
-                # accu_uit (or export) between the charge end and discharge window.
-                hold_solar_charge_mode = (
-                    last_charge_mode == "laden_met_zonne_energie"
+                # accu_uit between the charge window end and the discharge window.
+                # Use laden_met_zonne_energie even after grid charging so the
+                # inverter accepts solar passively without drawing from the grid.
+                hold_charge_mode = (
+                    last_charge_mode in ("laden_met_zonne_energie", "laden_van_net")
                     and sim_usable_energy_kwh > 0
                     and segment_discharge_kwh <= 0
                 )
@@ -3154,12 +3156,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     else:
                         mode = "ontladen"
                         sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_discharge_kwh)
-                elif within_charge_phase or hold_solar_charge_mode:
+                elif within_charge_phase:
                     # A charge window always beats a plain export slot.  Export
                     # that is a forced part of a segment is handled separately
                     # through segment_discharge_kwh; segment_export_kwh must
                     # never override a planned charge phase.
                     mode = charge_phase_mode
+                elif hold_charge_mode:
+                    mode = "laden_met_zonne_energie"
                 elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"
