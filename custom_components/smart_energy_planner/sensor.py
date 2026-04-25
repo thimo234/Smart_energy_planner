@@ -12,6 +12,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
 from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
 
+_BATTERY_STRATEGY_OPTIONS = [
+    "accu_uit",
+    "laden_van_net",
+    "laden_met_zonne_energie",
+    "ontladen",
+    "ontladen_naar_net",
+]
+
 
 def _planner_entity_name(entry: ConfigEntry, suffix: str) -> str:
     """Build a readable entity name from the planner entry title."""
@@ -32,21 +40,7 @@ async def async_setup_entry(
         entities.extend(
             [
                 BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
-                BatteryPlannerSensor(
-                    coordinator,
-                    entry,
-                    "battery_strategy",
-                    "Battery Strategy",
-                    "battery_strategy",
-                    device_class=SensorDeviceClass.ENUM,
-                    options=[
-                        "accu_uit",
-                        "laden_van_net",
-                        "laden_met_zonne_energie",
-                        "ontladen",
-                        "ontladen_naar_net",
-                    ],
-                ),
+                BatteryStrategySensor(coordinator, entry),
                 BatteryProfitSensor(
                     coordinator,
                     entry,
@@ -109,8 +103,6 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         value_key: str,
         *,
         native_unit_of_measurement: str | None = None,
-        device_class: str | None = None,
-        options: list[str] | None = None,
     ) -> None:
         super().__init__(coordinator)
         self._value_key = value_key
@@ -118,8 +110,6 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         self._attr_name = _planner_entity_name(entry, name)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_native_unit_of_measurement = native_unit_of_measurement
-        self._attr_device_class = device_class
-        self._attr_options = options
         self._attr_icon = "mdi:home-lightning-bolt-outline"
 
     @property
@@ -205,6 +195,20 @@ class BatteryPlannerSensor(PlannerSensor):
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }
+
+
+class BatteryStrategySensor(BatteryPlannerSensor):
+    """Battery strategy sensor with ENUM device class for automation state picker."""
+
+    _attr_device_class = "enum"
+    _attr_options = _BATTERY_STRATEGY_OPTIONS
+
+    def __init__(
+        self,
+        coordinator: SmartEnergyPlannerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy")
 
 
 class BatteryProfitSensor(PlannerSensor):
