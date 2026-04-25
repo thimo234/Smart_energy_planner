@@ -112,7 +112,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
     def extra_state_attributes(self) -> dict[str, str | float | int | None]:
         return {
             "planner_kind": self.coordinator.data.planner_kind,
-            "status": self.coordinator.data.status,
+            self._value_key: self.native_value,
             "source_status": self.coordinator.data.source_status,
             "source_errors": self.coordinator.data.source_errors,
         }
