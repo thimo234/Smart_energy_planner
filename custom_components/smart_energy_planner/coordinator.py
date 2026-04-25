@@ -2350,10 +2350,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # negative_grid fills only what is actually empty right now (battery may
-        # not be at 0 when a negative-price window arrives).  Solar/regular-grid
-        # planning targets a full charge from empty (next cycle after discharge).
-        neg_grid_target = current_remaining_capacity_kwh
+        # negative_grid should only fill the space that solar cannot cover before
+        # the first negative-price slot arrives.  Solar from e.g. 09:30-12:00
+        # partially charges the battery; grid only needs to top up the remainder
+        # at the cheapest negative-price hours after that.
+        first_neg_price_slot = next(
+            (slot for slot in future_slots if float(slot["import_price"]) < 0),
+            None,
+        )
+        if first_neg_price_slot is not None:
+            solar_kwh_before_neg_price = sum(
+                min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
+                for slot in future_slots
+                if slot["start"] in productive_solar_slot_starts
+                and slot["end"] <= first_neg_price_slot["start"]
+            )
+            neg_grid_target = max(
+                0.0,
+                round(current_remaining_capacity_kwh - solar_kwh_before_neg_price, 6),
+            )
+        else:
+            neg_grid_target = current_remaining_capacity_kwh
         neg_grid_charged = 0.0
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
