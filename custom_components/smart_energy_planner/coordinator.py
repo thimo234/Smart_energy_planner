@@ -2382,10 +2382,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             elif item["kind"] == "grid":
                 secondary = float(item["effective_price"])
             else:
-                # Pick the latest productive solar slots first so the charge window
-                # starts as close to the solar peak as possible rather than at
-                # the first available morning slot.
-                secondary = (item["start"].date(), -item["start"].timestamp())
+                # Cheapest export-price slots first (lowest foregone revenue);
+                # prefer later start as tiebreaker to delay window where possible.
+                secondary = (item["start"].date(), float(item["effective_price"]), -item["start"].timestamp())
             return (
                 0 if item["kind"] == "negative_grid" else (1 if item["kind"] == "solar" else 2),
                 secondary,
