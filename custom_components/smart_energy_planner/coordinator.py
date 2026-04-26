@@ -2339,12 +2339,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "end": slot["end"],
                         "charge_kwh": round(solar_charge_kwh, 6),
                         "net_solar_kwh": round(float(slot["net_solar_kwh"]), 6),
-                        "effective_price": round(
-                            float(slot["export_price"])
-                            if has_export_price_sensor
-                            else float(slot["import_price"]) - 0.15,
-                            6,
-                        ),
+                        "effective_price": round(float(slot["import_price"]), 6),
                     }
                 )
                 # Solar slots are never grid-charged — skip grid candidate for this slot.
