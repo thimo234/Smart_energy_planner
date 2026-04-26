@@ -61,7 +61,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
-_CLEAR_PRICE_PEAK_MIN_DELTA = 0.02
 _THERMOSTAT_ECO_MERGE_GAP = timedelta(hours=1)
 _THERMOSTAT_FALLBACK_COOLING_FACTOR = 0.04
 _THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS = 2.0
@@ -3121,50 +3120,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slots[0]["start"] < first_charge_phase_start
                 )
             )
-            # Drain to flat: no energy is reserved between segments.  Every
-            # discharge window empties the battery completely; surplus above
-            # home demand is exported at the most expensive remaining hours.
+            # Distribute battery capacity across the most expensive deficit hours
+            # first (highest price → next highest → ... until battery empty).
             discharge_budget_kwh = sim_usable_energy_kwh
-            current_segment_slot = next(
-                (
-                    candidate
-                    for candidate in segment_slots
-                    if cast(datetime, candidate["start"]) <= now < cast(datetime, candidate["end"])
-                ),
-                segment_slots[0] if segment_slots else None,
-            )
-            current_segment_price = (
-                float(current_segment_slot["price"])
-                if current_segment_slot is not None
-                else None
-            )
-            # Use the peak-based threshold when a higher-priced slot still lies
-            # ahead in this segment; otherwise fall back to average_price (post-
-            # charge) or no threshold (pre-charge), so cheap morning slots don't
-            # trigger discharge just because the segment is short.
-            peak_threshold = self._calculate_battery_discharge_start_threshold(segment_slots)
-            has_meaningful_later_peak = (
-                current_segment_price is not None
-                and peak_threshold is not None
-                and any(
-                    cast(datetime, candidate["start"]) > cast(datetime, current_segment_slot["start"])
-                    and float(candidate["price"]) > current_segment_price
-                    and float(candidate["net_solar_kwh"]) < 0
-                    for candidate in segment_slots
-                )
-            )
-            discharge_start_threshold_price = (
-                peak_threshold if has_meaningful_later_peak
-                else (None if before_first_charge_phase else average_price)
-            )
             planned_discharge_kwh = self._plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
-                # Always sort by price; pre-charge uses simple greedy,
-                # post-charge uses later-demand protection for arbitrage.
-                prefer_higher_prices=True,
-                protect_later_demand=not before_first_charge_phase,
             )
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
@@ -3191,10 +3153,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
-                discharge_threshold_reached = (
-                    discharge_start_threshold_price is None
-                    or float(segment_slot["price"]) >= discharge_start_threshold_price
-                )
                 within_charge_phase = (
                     any(
                         segment_slot_end > cluster["start"] and segment_slot_start < cluster["end"]
@@ -3234,7 +3192,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if (
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
-                    and (discharge_threshold_reached or before_first_charge_phase)
                     and not suppress_discharge
                 ):
                     last_charge_mode = "accu_uit"
@@ -3301,37 +3258,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return self._merge_mode_windows(hourly_modes), current_mode
 
-    def _calculate_battery_discharge_start_threshold(
-        self,
-        slots: list[dict[str, Any]],
-    ) -> float | None:
-        if len(slots) < 3:
-            return None
-
-        prices = [float(slot["price"]) for slot in slots]
-        valley_min = prices[0]
-        index = 0
-        while index + 1 < len(prices) and prices[index + 1] <= prices[index]:
-            index += 1
-            valley_min = min(valley_min, prices[index])
-
-        peak_max = prices[index]
-        while index + 1 < len(prices) and prices[index + 1] >= prices[index]:
-            index += 1
-            peak_max = max(peak_max, prices[index])
-
-        if peak_max <= valley_min or index >= len(prices) - 1:
-            return None
-
-        post_peak_min = min(prices[index + 1 :], default=peak_max)
-        if (
-            peak_max - valley_min < _CLEAR_PRICE_PEAK_MIN_DELTA
-            or peak_max - post_peak_min < _CLEAR_PRICE_PEAK_MIN_DELTA
-        ):
-            return None
-
-        return (valley_min + peak_max) / 2.0
-
     def _plan_segment_export_kwh(
         self,
         *,
@@ -3388,8 +3314,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         slots: list[dict[str, Any]],
         available_energy_kwh: float,
         max_discharge_kw: float,
-        prefer_higher_prices: bool,
-        protect_later_demand: bool = True,
     ) -> dict[datetime, float]:
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
@@ -3420,64 +3344,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         remaining_energy_kwh = available_energy_kwh
         planned_discharge: dict[datetime, float] = {}
-        slot_order = (
-            sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"]))
-            if prefer_higher_prices
-            else sorted(deficit_slots, key=lambda item: item["start"])
-        )
-        # Simple greedy: fill slots in order (price-desc or chronological) until budget runs out.
-        # Used for pre-charge discharge (prefer_higher_prices=True, protect_later_demand=False)
-        # as well as for the plain chronological case.
-        if not prefer_higher_prices or not protect_later_demand:
-            for slot in slot_order:
-                if remaining_energy_kwh <= 0:
-                    break
-                assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
-                if assigned_kwh <= 0:
-                    continue
-                planned_discharge[cast(datetime, slot["start"])] = round(assigned_kwh, 6)
-                remaining_energy_kwh -= assigned_kwh
-            return planned_discharge
-
-        segment_slots_by_start = {
-            cast(datetime, slot["start"]): slot
-            for slot in slots
-        }
-        # Precompute suffix sums of net_solar_kwh so later_net_need_kwh is O(1)
-        # per slot instead of O(n).  suffix_net_solar[s] = sum of net_solar_kwh
-        # for ALL segment slots with start > s.
-        sorted_slot_starts = sorted(segment_slots_by_start.keys())
-        suffix_net_solar: dict[datetime, float] = {}
-        _running = 0.0
-        for _start in reversed(sorted_slot_starts):
-            suffix_net_solar[_start] = _running
-            _running += float(segment_slots_by_start[_start]["net_solar_kwh"])
-
-        assigned_total_kwh = 0.0
-        for slot in slot_order:
+        for slot in sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"])):
             if remaining_energy_kwh <= 0:
                 break
-
-            slot_start = cast(datetime, slot["start"])
-            # assigned_later_kwh: how much has already been committed to slots
-            # chronologically after this one (typically few entries in practice).
-            assigned_later_kwh = sum(
-                float(value)
-                for start, value in planned_discharge.items()
-                if start > slot_start
-            )
-            later_net_need_kwh = max(0.0, -suffix_net_solar[slot_start])
-            protected_later_kwh = max(0.0, later_net_need_kwh - assigned_later_kwh)
-            remaining_energy_kwh = max(
-                0.0,
-                float(available_energy_kwh) - assigned_total_kwh - protected_later_kwh,
-            )
             assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)
             if assigned_kwh <= 0:
                 continue
-            planned_discharge[slot_start] = round(assigned_kwh, 6)
-            assigned_total_kwh += assigned_kwh
-
+            planned_discharge[cast(datetime, slot["start"])] = round(assigned_kwh, 6)
+            remaining_energy_kwh -= assigned_kwh
         return planned_discharge
 
     def _merge_mode_windows(
