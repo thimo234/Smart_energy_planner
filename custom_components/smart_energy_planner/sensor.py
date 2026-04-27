@@ -47,14 +47,7 @@ async def async_setup_entry(
                     "battery_profit_total_eur",
                     "Battery Profit Total",
                 ),
-                BatteryPlannerSensor(
-                    coordinator,
-                    entry,
-                    "estimated_home_demand_today",
-                    "Estimated Home Demand Today",
-                    "estimated_total_home_demand_kwh",
-                    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-                ),
+                HomeDemandSensor(coordinator, entry),
             ]
         )
 
@@ -194,6 +187,30 @@ class BatteryPlannerSensor(PlannerSensor):
             "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
+        }
+
+
+class HomeDemandSensor(BatteryPlannerSensor):
+    """Sensor exposing estimated total and hourly home demand for diagnostics."""
+
+    def __init__(
+        self,
+        coordinator: SmartEnergyPlannerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            entry,
+            "estimated_home_demand_today",
+            "Estimated Home Demand Today",
+            "estimated_total_home_demand_kwh",
+            native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return super().extra_state_attributes | {
+            "estimated_hourly_home_demand": self.coordinator.data.estimated_hourly_home_demand,
         }
 
 
