@@ -2332,16 +2332,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 max(0.0, float(slot["net_solar_kwh"])),
             )
             if solar_charge_kwh > 0 and slot["start"] in productive_solar_slot_starts:
-                charge_candidates.append(
-                    {
-                        "kind": "solar",
-                        "start": slot["start"],
-                        "end": slot["end"],
-                        "charge_kwh": round(solar_charge_kwh, 6),
-                        "net_solar_kwh": round(float(slot["net_solar_kwh"]), 6),
-                        "effective_price": round(float(slot["import_price"]), 6),
-                    }
+                solar_effective_price = float(slot["import_price"])
+                solar_next_peak = self._calculate_next_battery_peak_price(
+                    future_slots,
+                    slot["end"],
+                    price_key="import_price",
                 )
+                if (
+                    solar_next_peak is not None
+                    and solar_next_peak - solar_effective_price >= battery_min_profit
+                ):
+                    charge_candidates.append(
+                        {
+                            "kind": "solar",
+                            "start": slot["start"],
+                            "end": slot["end"],
+                            "charge_kwh": round(solar_charge_kwh, 6),
+                            "net_solar_kwh": round(float(slot["net_solar_kwh"]), 6),
+                            "effective_price": round(solar_effective_price, 6),
+                        }
+                    )
                 # Solar slots are never grid-charged — skip grid candidate for this slot.
                 continue
 
