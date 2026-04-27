@@ -2975,7 +2975,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> tuple[str, float, datetime]:
         charge_end = cast(datetime, charge_window["end"])
         usable_hours = float(charge_window["usable_hours"])
-        sim_usable_energy_kwh = usable_capacity_kwh
+        charge_kwh = float(charge_window.get("charge_kwh", 0.0))
+        sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
         if slot["start"] <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
