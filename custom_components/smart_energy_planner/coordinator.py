@@ -3196,7 +3196,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # done, so the full evening discharge happens in one uninterrupted
                 # session rather than draining partially between neg-price windows.
                 more_todays_charge_ahead = any(
-                    cluster["start"] >= segment_slot_end and cluster["start"] < cycle_end
+                    cluster["end"] > segment_slot_end and cluster["start"] < cycle_end
                     for cluster in charge_phase_clusters
                 )
                 suppress_discharge = (
