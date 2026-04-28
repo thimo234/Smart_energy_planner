@@ -471,6 +471,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     f"invalid_battery_soc_value ({battery_soc_sensor}: state={battery_soc_state.state!r})"
                 )
 
+            # Re-check after late-discovered overrides (e.g. no_total_energy_history_yet
+            # is set above, after the initial retry decision at the top of this method).
+            late_source_errors = self._collect_source_errors(source_status)
+            if late_source_errors:
+                if late_source_errors != source_errors:
+                    _LOGGER.warning("Smart Energy Planner late source errors: %s", late_source_errors)
+                self._schedule_source_error_retry()
+            elif not source_errors:
+                self._cancel_source_error_retry()
+
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
                 non_heating_daily_average = 0.0
