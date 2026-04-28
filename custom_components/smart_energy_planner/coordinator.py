@@ -233,6 +233,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
             battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
+            if solar_sensor and solar_state is None:
+                similar = sorted(
+                    s.entity_id for s in self.hass.states.async_all() if "solcast" in s.entity_id.lower()
+                )
+                _LOGGER.warning(
+                    "Solcast entity '%s' not found in state machine. Available solcast entities: %s",
+                    solar_sensor,
+                    similar or "none",
+                )
+            if battery_soc_state is not None:
+                _LOGGER.warning(
+                    "Battery SOC entity '%s' state=%r (type=%s)",
+                    battery_soc_sensor,
+                    battery_soc_state.state,
+                    type(battery_soc_state.state).__name__,
+                )
+
             source_status = self._build_source_status(
                 price_sensor=price_sensor,
                 price_state=price_state,
