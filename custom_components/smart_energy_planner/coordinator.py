@@ -442,8 +442,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["room_temperature_sensor"] = "invalid_temperature_value"
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
-            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_state and battery_soc_percent is None:
-                source_status["battery_soc_sensor"] = "invalid_battery_soc_value"
+            if (
+                planner_kind == PLANNER_KIND_BATTERY
+                and battery_soc_state is not None
+                and battery_soc_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN, "")
+                and battery_soc_percent is None
+            ):
+                source_status["battery_soc_sensor"] = (
+                    f"invalid_battery_soc_value ({battery_soc_sensor}: state={battery_soc_state.state!r})"
+                )
 
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
@@ -719,9 +726,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not entity_id:
             return "not_configured"
         if state is None:
-            return "entity_not_found"
+            return f"entity_not_found ({entity_id})"
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
-            return "entity_unavailable"
+            return f"entity_unavailable ({entity_id})"
         return "ok"
 
     def _unknown_source_status(self, planner_kind: str) -> dict[str, str]:
