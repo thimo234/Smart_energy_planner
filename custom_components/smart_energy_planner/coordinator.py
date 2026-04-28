@@ -253,21 +253,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
             battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
-            if solar_sensor and solar_state is None:
+            if battery_soc_sensor and battery_soc_state is None:
                 similar = sorted(
-                    s.entity_id for s in self.hass.states.async_all() if "solcast" in s.entity_id.lower()
+                    s.entity_id
+                    for s in self.hass.states.async_all()
+                    if any(kw in s.entity_id.lower() for kw in ("zonnepanelen", "battery", "soc"))
                 )
                 _LOGGER.warning(
-                    "Solcast entity '%s' not found in state machine. Available solcast entities: %s",
-                    solar_sensor,
-                    similar or "none",
-                )
-            if battery_soc_state is not None:
-                _LOGGER.warning(
-                    "Battery SOC entity '%s' state=%r (type=%s)",
+                    "Battery SOC entity '%s' not found in state machine. Available similar entities: %s",
                     battery_soc_sensor,
-                    battery_soc_state.state,
-                    type(battery_soc_state.state).__name__,
+                    similar or "none",
                 )
 
             source_status = self._build_source_status(
@@ -750,7 +745,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not entity_id:
             return "not_configured"
         if state is None:
-            return f"entity_not_found ({entity_id})"
+            keywords = [p.lower() for p in entity_id.replace(".", "_").split("_") if len(p) > 2][1:3]
+            similar = sorted(
+                s.entity_id
+                for s in self.hass.states.async_all()
+                if any(kw in s.entity_id.lower() for kw in keywords)
+            )[:5]
+            hint = f" | similar: {similar}" if similar else " | no similar entities in state machine"
+            return f"entity_not_found ({entity_id}){hint}"
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
             return f"entity_unavailable ({entity_id})"
         return "ok"
