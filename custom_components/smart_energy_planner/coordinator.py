@@ -201,7 +201,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if self._source_error_retry_unsub is not None:
             return
         self._source_error_retry_unsub = async_call_later(
-            self.hass, 60, self._handle_source_error_retry
+            self.hass, 30, self._handle_source_error_retry
         )
 
     @callback

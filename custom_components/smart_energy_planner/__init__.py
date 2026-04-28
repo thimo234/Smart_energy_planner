@@ -23,6 +23,7 @@ from .const import (
     CONF_PRICE_RESOLUTION,
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
+    CONF_SOLCAST_TOMORROW_SENSOR,
     CONF_TEMPERATURE_SENSOR,
     CONF_THERMOSTAT_COLD_TOLERANCE,
     CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
@@ -108,6 +109,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(_entity_id(CONF_EXPORT_PRICE_SENSOR))
         tracked_entities.append(_entity_id(CONF_SOLCAST_TODAY_SENSOR))
+        tracked_entities.append(_entity_id(CONF_SOLCAST_TOMORROW_SENSOR))
         tracked_entities.append(_entity_id(CONF_BATTERY_SOC_SENSOR))
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         tracked_entities.extend(
@@ -127,7 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         old_state = event.data.get("old_state")
         if new_state is None or new_state == old_state:
             return
-        hass.async_create_task(coordinator.async_request_refresh())
+        hass.async_create_task(coordinator.async_refresh())
 
     entry.async_on_unload(
         async_track_state_change_event(
