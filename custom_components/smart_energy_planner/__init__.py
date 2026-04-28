@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -128,6 +128,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             [entity_id for entity_id in tracked_entities if entity_id],
             _handle_source_state_change,
+        )
+    )
+
+    # After all integrations finish loading, run a fresh coordinator update so
+    # the startup-timing window (entities not yet in state machine) is closed
+    # quickly instead of waiting for the next 15-minute cycle.
+    entry.async_on_unload(
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED,
+            lambda _event: hass.async_create_task(coordinator.async_refresh()),
         )
     )
 
