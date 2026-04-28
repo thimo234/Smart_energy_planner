@@ -8,7 +8,7 @@ import logging
 import statistics
 from typing import Any, cast
 
-from homeassistant.components.recorder import history
+from homeassistant.components.recorder import get_instance as get_recorder_instance, history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
@@ -820,7 +820,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     no_attributes=True,
                 )
 
-            history_result = await self.hass.async_add_executor_job(_load_history)
+            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
         except Exception:
             return 0.0
 
@@ -870,7 +870,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     no_attributes=True,
                 )
 
-            history_result = await self.hass.async_add_executor_job(_load_history)
+            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
         except Exception:
             return {}
 
