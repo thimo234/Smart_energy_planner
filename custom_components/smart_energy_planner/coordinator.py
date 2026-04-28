@@ -2525,11 +2525,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for candidate in sorted(next_candidates, key=_selection_sort_key):
             if next_charged_kwh >= next_target_kwh:
                 break
-            if (
-                candidate["kind"] == "solar"
-                and float(candidate["effective_price"]) > next_min_solar_price + _SOLAR_TIER_TOLERANCE
-            ):
-                continue
+            # Next-cycle: no tier filter for solar — we need to fill the full
+            # battery and should use all productive solar hours, cheapest first.
             candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
                 candidate_charge_kwh = min(
