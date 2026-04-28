@@ -443,7 +443,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["room_temperature_sensor"] = "invalid_temperature_value"
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
-            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_state and battery_soc_percent is None:
+            if (
+                planner_kind == PLANNER_KIND_BATTERY
+                and battery_soc_state is not None
+                and battery_soc_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN, "")
+                and battery_soc_percent is None
+            ):
                 source_status["battery_soc_sensor"] = (
                     f"invalid_battery_soc_value ({battery_soc_sensor}: state={battery_soc_state.state!r})"
                 )
