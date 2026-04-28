@@ -1919,11 +1919,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 hour_average = hourly_average_by_hour.get(hour)
                 if previous_week_usage is not None and previous_week_previous_hour_usage is not None:
-                    historical_hourly = previous_week_previous_hour_usage + (
+                    last_week_hourly = previous_week_previous_hour_usage + (
                         (previous_week_usage - previous_week_previous_hour_usage) * 0.2
                     )
                 elif previous_week_usage is not None:
-                    historical_hourly = previous_week_usage
+                    last_week_hourly = previous_week_usage
+                else:
+                    last_week_hourly = None
+                # Blend last-week value with multi-week average when both are
+                # available so a single outlier day (EV charge, guests, etc.)
+                # cannot dominate the forecast. Cap each input individually
+                # before blending: without this a single 4+ kWh EV day pushes
+                # the 50/50 average above the final cap and the cap is hit
+                # regardless, making the blend ineffective.
+                _slot_cap = 3.0
+                if last_week_hourly is not None and hour_average is not None:
+                    historical_hourly = (
+                        min(last_week_hourly, _slot_cap) + min(hour_average, _slot_cap)
+                    ) / 2
+                elif last_week_hourly is not None:
+                    historical_hourly = last_week_hourly
                 elif hour_average is not None:
                     historical_hourly = hour_average
                 else:
