@@ -220,6 +220,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
             battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
+            _LOGGER.debug(
+                "Planner entity IDs: price=%s solar=%s solar_tomorrow=%s total_energy=%s battery_soc=%s",
+                price_sensor, solar_sensor, solar_tomorrow_sensor, total_energy_sensor, battery_soc_sensor,
+            )
+
             price_state = self.hass.states.get(price_sensor)
             export_price_state = self.hass.states.get(export_price_sensor) if export_price_sensor else None
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
