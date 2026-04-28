@@ -220,11 +220,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
             battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
-            _LOGGER.debug(
-                "Planner entity IDs: price=%s solar=%s solar_tomorrow=%s total_energy=%s battery_soc=%s",
-                price_sensor, solar_sensor, solar_tomorrow_sensor, total_energy_sensor, battery_soc_sensor,
-            )
-
             price_state = self.hass.states.get(price_sensor)
             export_price_state = self.hass.states.get(export_price_sensor) if export_price_sensor else None
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
@@ -706,9 +701,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not entity_id:
             return "not_configured"
         if state is None:
-            return "entity_not_found"
+            return f"entity_not_found ({entity_id})"
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
-            return "entity_unavailable"
+            return f"entity_unavailable ({entity_id})"
         return "ok"
 
     def _unknown_source_status(self, planner_kind: str) -> dict[str, str]:
