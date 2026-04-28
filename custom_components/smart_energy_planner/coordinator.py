@@ -2333,10 +2333,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             minimum_slots=1,
         )
 
-        # Nothing to plan if the battery is already effectively full.
-        if current_remaining_capacity_kwh < 0.1:
-            return planned_solar_charge_windows, planned_grid_charge_windows
-
         # Split the planning horizon at midnight so that cheaper neg-price slots
         # tomorrow do not displace charging opportunities that must happen today
         # (before tonight's discharge).  Each cycle fills its own independent
