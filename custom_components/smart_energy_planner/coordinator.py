@@ -745,12 +745,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not entity_id:
             return "not_configured"
         if state is None:
-            keywords = [p.lower() for p in entity_id.replace(".", "_").split("_") if len(p) > 2][1:3]
+            parts = [p.lower() for p in entity_id.replace(".", "_").split("_") if len(p) > 2]
+            # Use first two significant parts + last part for broadest matching
+            keywords = list({*parts[1:3], parts[-1]} if parts else set())
             similar = sorted(
                 s.entity_id
                 for s in self.hass.states.async_all()
                 if any(kw in s.entity_id.lower() for kw in keywords)
-            )[:5]
+            )[:10]
             hint = f" | similar: {similar}" if similar else " | no similar entities in state machine"
             return f"entity_not_found ({entity_id}){hint}"
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
