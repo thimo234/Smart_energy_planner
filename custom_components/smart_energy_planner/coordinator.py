@@ -11,7 +11,8 @@ from typing import Any, cast
 from homeassistant.components.recorder import get_instance as get_recorder_instance, history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -193,6 +194,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
         self._eco_early_exit_until: datetime | None = None
+        self._source_error_retry_unsub: object | None = None
+
+    @callback
+    def _schedule_source_error_retry(self) -> None:
+        if self._source_error_retry_unsub is not None:
+            return
+        self._source_error_retry_unsub = async_call_later(
+            self.hass, 60, self._handle_source_error_retry
+        )
+
+    @callback
+    def _handle_source_error_retry(self, _now) -> None:
+        self._source_error_retry_unsub = None
+        self.hass.async_create_task(self.async_refresh())
+
+    def _cancel_source_error_retry(self) -> None:
+        if self._source_error_retry_unsub is not None:
+            self._source_error_retry_unsub()
+            self._source_error_retry_unsub = None
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -276,6 +296,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             source_errors = self._collect_source_errors(source_status)
             if source_errors:
                 _LOGGER.warning("Smart Energy Planner source errors: %s", source_errors)
+                self._schedule_source_error_retry()
+            else:
+                self._cancel_source_error_retry()
 
             current_price = _coerce_float(price_state.state) if price_state else None
             export_current_price = (
