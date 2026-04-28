@@ -3186,12 +3186,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
             )
-            forced_export_kwh = self._plan_segment_export_kwh(
-                slots=segment_slots,
-                available_energy_kwh=sim_usable_energy_kwh,
-                total_segment_demand_kwh=total_segment_demand_kwh,
-                max_discharge_kw=max_discharge_kw,
+            # Never plan forced export before an upcoming charge phase.  Any
+            # surplus battery energy should be saved for the post-charge peak
+            # (e.g. 0.247 EUR/kWh) rather than sold now at a cheap pre-charge
+            # price (e.g. 0.054 EUR/kWh).  When no charge phase is scheduled,
+            # the battery won't be refilled so export can proceed freely.
+            _has_upcoming_charge = (
+                first_charge_phase_start is not None
+                and bool(segment_slots)
+                and segment_slots[0]["start"] < first_charge_phase_start
             )
+            if _has_upcoming_charge:
+                forced_export_kwh: dict[datetime, float] = {}
+            else:
+                forced_export_kwh = self._plan_segment_export_kwh(
+                    slots=segment_slots,
+                    available_energy_kwh=sim_usable_energy_kwh,
+                    total_segment_demand_kwh=total_segment_demand_kwh,
+                    max_discharge_kw=max_discharge_kw,
+                )
             has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
