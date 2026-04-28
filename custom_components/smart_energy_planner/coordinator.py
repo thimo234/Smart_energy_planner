@@ -3261,8 +3261,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
                 within_export_window = (
-                    _export_allowed_from is None
-                    or segment_slot_start >= _export_allowed_from
+                    _export_allowed_from is not None
+                    and segment_slot_start >= _export_allowed_from
                 )
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
                 within_charge_phase = (
