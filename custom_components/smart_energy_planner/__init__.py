@@ -8,8 +8,8 @@ from typing import Any
 from homeassistant.components.climate.const import HVACMode
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.core import CoreState, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -137,15 +137,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
 
-    # After all integrations finish loading, run a fresh coordinator update so
-    # the startup-timing window (entities not yet in state machine) is closed
-    # quickly instead of waiting for the next 15-minute cycle.
-    entry.async_on_unload(
-        hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED,
-            lambda _event: hass.async_create_task(coordinator.async_refresh()),
+    # Ensure a fresh coordinator refresh runs once HA has fully started so
+    # that source entities (ESPHome, Solcast) are available.  Two cases:
+    #
+    # 1. HA is still starting: fire at EVENT_HOMEASSISTANT_STARTED then
+    #    again 30 seconds later to catch devices that connect after startup.
+    # 2. HA already running (integration reloaded after boot, or
+    #    ConfigEntryNotReady delayed setup past the startup event):
+    #    refresh immediately and schedule a 30-second delayed refresh.
+    def _do_refresh(_=None) -> None:
+        hass.async_create_task(coordinator.async_refresh())
+
+    def _on_ha_started(_event=None) -> None:
+        _do_refresh()
+        entry.async_on_unload(async_call_later(hass, 30, _do_refresh))
+
+    if hass.state is CoreState.running:
+        _on_ha_started()
+    else:
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_ha_started)
         )
-    )
 
     @callback
     def _handle_coordinator_update() -> None:
