@@ -98,22 +98,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
 
-    tracked_entities = [merged.get(CONF_PRICE_SENSOR)]
+    def _entity_id(key: str) -> str | None:
+        value = merged.get(key)
+        if isinstance(value, dict):
+            value = value.get("entity_id")
+        return str(value) if value else None
+
+    tracked_entities = [_entity_id(CONF_PRICE_SENSOR)]
     if planner_kind == PLANNER_KIND_BATTERY:
-        tracked_entities.append(merged.get(CONF_EXPORT_PRICE_SENSOR))
-        tracked_entities.append(merged.get(CONF_SOLCAST_TODAY_SENSOR))
-        tracked_entities.append(merged.get(CONF_BATTERY_SOC_SENSOR))
+        tracked_entities.append(_entity_id(CONF_EXPORT_PRICE_SENSOR))
+        tracked_entities.append(_entity_id(CONF_SOLCAST_TODAY_SENSOR))
+        tracked_entities.append(_entity_id(CONF_BATTERY_SOC_SENSOR))
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         tracked_entities.extend(
             [
-                merged.get(CONF_TEMPERATURE_SENSOR),
-                merged.get(CONF_ROOM_TEMPERATURE_SENSOR),
-                merged.get(CONF_HEATING_SWITCH_ENTITY),
-                merged.get(CONF_COOLING_MODE_SWITCH_ENTITY),
+                _entity_id(CONF_TEMPERATURE_SENSOR),
+                _entity_id(CONF_ROOM_TEMPERATURE_SENSOR),
+                _entity_id(CONF_HEATING_SWITCH_ENTITY),
+                _entity_id(CONF_COOLING_MODE_SWITCH_ENTITY),
             ]
         )
     if planner_kind == PLANNER_KIND_BATTERY:
-        tracked_entities.append(merged.get(CONF_TOTAL_ENERGY_SENSOR))
+        tracked_entities.append(_entity_id(CONF_TOTAL_ENERGY_SENSOR))
 
     @callback
     def _handle_source_state_change(event: Event[EventStateChangedData]) -> None:
