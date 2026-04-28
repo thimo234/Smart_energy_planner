@@ -3232,6 +3232,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
+            # Export to grid is only allowed within 8 hours before the next
+            # planned charge phase.  Exporting earlier risks draining the
+            # battery so much that home demand can't be covered until the
+            # next charge window.  When no charge is scheduled the battery
+            # won't be refilled, so export proceeds freely.
+            _next_charge_after_segment = min(
+                (c["start"] for c in charge_phase_clusters if segment_slots and c["start"] > segment_slots[-1]["end"]),
+                default=None,
+            )
+            _export_allowed_from = (
+                _next_charge_after_segment - timedelta(hours=8)
+                if _next_charge_after_segment is not None
+                else None
+            )
+
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
             # total planned discharge for all segment slots that start AFTER s.
             suffix_discharge_kwh: dict[datetime, float] = {}
@@ -3245,6 +3260,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
+                within_export_window = (
+                    _export_allowed_from is None
+                    or segment_slot_start >= _export_allowed_from
+                )
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
                 within_charge_phase = (
                     any(
@@ -3288,7 +3307,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and not suppress_discharge
                 ):
                     last_charge_mode = "accu_uit"
-                    if segment_export_kwh > 0:
+                    if segment_export_kwh > 0 and within_export_window:
                         # Export surplus on top of home-demand discharge: drain both
                         # at the most expensive slot inside the discharge window.
                         mode = "ontladen_naar_net"
@@ -3306,7 +3325,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     mode = charge_phase_mode
                 elif hold_charge_mode:
                     mode = "laden_met_zonne_energie"
-                elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
+                elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0 and within_export_window:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_export_kwh)
@@ -3321,6 +3340,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and slot_solar_kwh >= 0
                         and segment_end_index < len(slots)
                         and float(segment_slot["export_price"]) >= average_export_price
+                        and within_export_window
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
