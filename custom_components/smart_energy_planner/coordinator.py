@@ -3115,23 +3115,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
             )
-            # Before a scheduled charge phase, only allow export at prices that
-            # are already above the global average — cheap-price export before
-            # recharging from solar wastes arbitrage margin available at the
-            # post-charge peak.  When no charge is coming (or we're already past
-            # the first charge), apply no minimum so surplus can freely flow.
+            # Never plan forced export before an upcoming charge phase.  Any
+            # surplus battery energy should be saved for the post-charge peak
+            # (e.g. 0.247 EUR/kWh) rather than sold now at a cheap pre-charge
+            # price (e.g. 0.054 EUR/kWh).  When no charge phase is scheduled,
+            # the battery won't be refilled so export can proceed freely.
             _has_upcoming_charge = (
                 first_charge_phase_start is not None
                 and bool(segment_slots)
                 and segment_slots[0]["start"] < first_charge_phase_start
             )
-            forced_export_kwh = self._plan_segment_export_kwh(
-                slots=segment_slots,
-                available_energy_kwh=sim_usable_energy_kwh,
-                total_segment_demand_kwh=total_segment_demand_kwh,
-                max_discharge_kw=max_discharge_kw,
-                min_export_price=average_export_price if _has_upcoming_charge else None,
-            )
+            if _has_upcoming_charge:
+                forced_export_kwh: dict[datetime, float] = {}
+            else:
+                forced_export_kwh = self._plan_segment_export_kwh(
+                    slots=segment_slots,
+                    available_energy_kwh=sim_usable_energy_kwh,
+                    total_segment_demand_kwh=total_segment_demand_kwh,
+                    max_discharge_kw=max_discharge_kw,
+                )
             has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
@@ -3286,7 +3288,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         available_energy_kwh: float,
         total_segment_demand_kwh: float,
         max_discharge_kw: float,
-        min_export_price: float | None = None,
     ) -> dict[datetime, float]:
         if available_energy_kwh <= 0 or max_discharge_kw <= 0 or not slots:
             return {}
@@ -3301,8 +3302,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         export_slots: list[dict[str, Any]] = []
         for slot in slots:
             export_price = float(slot["export_price"])
-            if min_export_price is not None and export_price < min_export_price:
-                continue
             export_capacity_kwh = min(
                 max_discharge_kw * float(slot["hours"]),
                 max(0.0, available_energy_kwh),
