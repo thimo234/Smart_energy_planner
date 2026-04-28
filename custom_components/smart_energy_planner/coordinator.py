@@ -257,6 +257,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planner_kind=planner_kind,
             )
             source_errors = self._collect_source_errors(source_status)
+            if source_errors:
+                _LOGGER.warning("Smart Energy Planner source errors: %s", source_errors)
 
             current_price = _coerce_float(price_state.state) if price_state else None
             export_current_price = (
@@ -425,7 +427,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_state and battery_soc_percent is None:
-                source_status["battery_soc_sensor"] = "invalid_battery_soc_value"
+                source_status["battery_soc_sensor"] = (
+                    f"invalid_battery_soc_value ({battery_soc_sensor}: state={battery_soc_state.state!r})"
+                )
 
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
