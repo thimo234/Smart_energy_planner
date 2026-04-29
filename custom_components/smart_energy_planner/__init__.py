@@ -159,9 +159,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # 2. HA already running (integration reloaded after boot, or
     #    ConfigEntryNotReady delayed setup past the startup event):
     #    refresh immediately and schedule a 30-second delayed refresh.
+    @callback
     def _do_refresh(_=None) -> None:
         hass.async_create_task(coordinator.async_refresh())
 
+    @callback
     def _on_ha_started(_event=None) -> None:
         _do_refresh()
         entry.async_on_unload(async_call_later(hass, 30, _do_refresh))
