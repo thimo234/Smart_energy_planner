@@ -204,6 +204,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # errors and stops only when _cancel_source_error_retry runs.  This
         # is robust against any code path failing to reschedule a one-shot
         # timer (e.g. an unexpected exception inside _async_update_data).
+        _LOGGER.info("Smart Energy Planner: scheduling source error retry (every 30s)")
         self._source_error_retry_unsub = async_track_time_interval(
             self.hass,
             self._handle_source_error_retry,
@@ -212,10 +213,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     @callback
     def _handle_source_error_retry(self, _now) -> None:
+        _LOGGER.info("Smart Energy Planner: source error retry firing")
         self.hass.async_create_task(self.async_refresh())
 
     def _cancel_source_error_retry(self) -> None:
         if self._source_error_retry_unsub is not None:
+            _LOGGER.info("Smart Energy Planner: cancelling source error retry")
             self._source_error_retry_unsub()
             self._source_error_retry_unsub = None
 

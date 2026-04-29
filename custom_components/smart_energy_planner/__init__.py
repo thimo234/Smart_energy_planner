@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -9,9 +10,15 @@ from homeassistant.components.climate.const import HVACMode
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import CoreState, Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+
+_LOGGER = logging.getLogger(__name__)
 
 from .const import (
     CONF_EXPORT_PRICE_SENSOR,
@@ -156,6 +163,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_ha_started)
         )
+
+    # Independent backup recovery: refresh every 60s while there are source
+    # errors.  This is registered at entry level (not coordinator level) so
+    # it cannot be broken by anything the coordinator does internally.
+    @callback
+    def _backup_recovery_check(_now) -> None:
+        data = coordinator.data
+        if data is None:
+            _LOGGER.info("Smart Energy Planner backup recovery: refreshing (no data yet)")
+            hass.async_create_task(coordinator.async_refresh())
+            return
+        errors = getattr(data, "source_errors", None)
+        if errors:
+            _LOGGER.info(
+                "Smart Energy Planner backup recovery: refreshing (source errors: %s)",
+                errors,
+            )
+            hass.async_create_task(coordinator.async_refresh())
+
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass, _backup_recovery_check, timedelta(seconds=60)
+        )
+    )
 
     @callback
     def _handle_coordinator_update() -> None:
