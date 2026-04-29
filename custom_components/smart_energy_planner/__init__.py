@@ -128,16 +128,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(_entity_id(CONF_TOTAL_ENERGY_SENSOR))
 
+    tracked = [entity_id for entity_id in tracked_entities if entity_id]
+    _LOGGER.info("Smart Energy Planner: tracking state changes for entities: %s", tracked)
+
     @callback
     def _handle_source_state_change(event: Event[EventStateChangedData]) -> None:
-        if event.data.get("new_state") is None:
+        new_state = event.data.get("new_state")
+        if new_state is None:
             return
+        _LOGGER.info(
+            "Smart Energy Planner: state change for %s (state=%s), triggering refresh",
+            event.data.get("entity_id", "?"),
+            new_state.state,
+        )
         hass.async_create_task(coordinator.async_refresh())
 
     entry.async_on_unload(
         async_track_state_change_event(
             hass,
-            [entity_id for entity_id in tracked_entities if entity_id],
+            tracked,
             _handle_source_state_change,
         )
     )
@@ -164,27 +173,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_ha_started)
         )
 
-    # Independent backup recovery: refresh every 60s while there are source
-    # errors.  This is registered at entry level (not coordinator level) so
-    # it cannot be broken by anything the coordinator does internally.
+    # Independent backup recovery: poll every 30s while there are source
+    # errors.  Registered at entry level so it is immune to anything the
+    # coordinator does internally (including exceptions in _async_update_data).
     @callback
     def _backup_recovery_check(_now) -> None:
         data = coordinator.data
         if data is None:
-            _LOGGER.info("Smart Energy Planner backup recovery: refreshing (no data yet)")
+            _LOGGER.info("Smart Energy Planner backup recovery: no data yet, triggering refresh")
             hass.async_create_task(coordinator.async_refresh())
             return
         errors = getattr(data, "source_errors", None)
         if errors:
             _LOGGER.info(
-                "Smart Energy Planner backup recovery: refreshing (source errors: %s)",
+                "Smart Energy Planner backup recovery: source errors present (%s), triggering refresh",
                 errors,
             )
             hass.async_create_task(coordinator.async_refresh())
+        else:
+            _LOGGER.debug("Smart Energy Planner backup recovery: no errors, skipping")
 
     entry.async_on_unload(
         async_track_time_interval(
-            hass, _backup_recovery_check, timedelta(seconds=60)
+            hass, _backup_recovery_check, timedelta(seconds=30)
         )
     )
 

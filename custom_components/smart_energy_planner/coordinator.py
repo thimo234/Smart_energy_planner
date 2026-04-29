@@ -582,6 +582,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return result
         except Exception as err:
             _LOGGER.exception("Planner update failed")
+            # Always schedule a retry when an unexpected exception occurs so the
+            # integration can recover without a manual reload.
+            self._schedule_source_error_retry()
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 fallback_status = self._unknown_source_status(planner_kind)
