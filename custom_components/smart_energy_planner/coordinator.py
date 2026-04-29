@@ -207,7 +207,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     @callback
     def _handle_source_error_retry(self, _now) -> None:
         self._source_error_retry_unsub = None
-        self.hass.async_create_task(self.async_refresh())
+        self.hass.async_create_task(self._async_retry_refresh())
+
+    async def _async_retry_refresh(self) -> None:
+        await self.async_refresh()
+        # If the refresh failed (exception before _schedule_source_error_retry
+        # ran inside _async_update_data), keep the retry loop alive.
+        if not self.last_update_success:
+            self._schedule_source_error_retry()
 
     def _cancel_source_error_retry(self) -> None:
         if self._source_error_retry_unsub is not None:
