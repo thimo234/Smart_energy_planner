@@ -2460,31 +2460,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_candidates = [c for c in charge_candidates if c["start"] < cycle_end]
         next_candidates = [c for c in charge_candidates if c["start"] >= cycle_end]
 
-        # Cheapest solar price per cycle: only slots in that price tier are
-        # selected; more expensive solar hours (e.g. low-sun morning slots)
-        # are skipped so the algorithm never spills into a costlier tier.
-        _SOLAR_TIER_TOLERANCE = 0.005
-        current_min_solar_price = min(
-            (float(c["effective_price"]) for c in current_candidates if c["kind"] == "solar"),
-            default=float("inf"),
-        )
-        next_min_solar_price = min(
-            (float(c["effective_price"]) for c in next_candidates if c["kind"] == "solar"),
-            default=float("inf"),
-        )
-
         # ── Current-cycle selection (today) ──────────────────────────────────
+        # Solar slots are sorted cheapest-price first; we greedily select them
+        # until the battery is full — no tier filter.
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
         neg_grid_charged_kwh = 0.0
         for candidate in sorted(current_candidates, key=_selection_sort_key):
             if charged_kwh >= target_charge_kwh:
                 break
-            if (
-                candidate["kind"] == "solar"
-                and float(candidate["effective_price"]) > current_min_solar_price + _SOLAR_TIER_TOLERANCE
-            ):
-                continue
             candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
                 candidate_charge_kwh = min(
