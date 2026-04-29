@@ -2328,13 +2328,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
-        # Target: fill exactly what is currently empty.  When negative-price
-        # grid charging can cover the full remaining space it exhausts the
-        # target first, so solar is skipped (battery stays accu_uit before
-        # the neg-price window and solar goes to home demand instead).
-        # When neg-price alone is insufficient, solar fills the remainder.
-        current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        target_charge_kwh = current_remaining_capacity_kwh
+        # Always plan for a full battery: discharge cycles are expected to drain
+        # the battery completely, so both cycles target full capacity regardless
+        # of current SOC.  After charge cycles the battery is assumed full.
+        target_charge_kwh = usable_capacity_kwh
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
@@ -2367,12 +2364,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             6,
         )
 
-        # Current cycle: fill only today's deficit (battery may not be empty).
+        # Both cycles: solar + grid must together fill the full battery from empty.
         current_grid_limit_kwh = max(
             0.0,
-            round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(usable_capacity_kwh - current_cycle_solar_kwh, 6),
         )
-        # Next cycle: assume battery is discharged to empty before midnight.
         next_grid_limit_kwh = max(
             0.0,
             round(usable_capacity_kwh - next_cycle_solar_kwh, 6),
