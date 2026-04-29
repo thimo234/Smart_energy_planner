@@ -12,7 +12,7 @@ from homeassistant.components.recorder import get_instance as get_recorder_insta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -200,21 +200,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _schedule_source_error_retry(self) -> None:
         if self._source_error_retry_unsub is not None:
             return
-        self._source_error_retry_unsub = async_call_later(
-            self.hass, 30, self._handle_source_error_retry
+        # Self-repeating interval — fires every 30s while there are source
+        # errors and stops only when _cancel_source_error_retry runs.  This
+        # is robust against any code path failing to reschedule a one-shot
+        # timer (e.g. an unexpected exception inside _async_update_data).
+        self._source_error_retry_unsub = async_track_time_interval(
+            self.hass,
+            self._handle_source_error_retry,
+            timedelta(seconds=30),
         )
 
     @callback
     def _handle_source_error_retry(self, _now) -> None:
-        self._source_error_retry_unsub = None
-        self.hass.async_create_task(self._async_retry_refresh())
-
-    async def _async_retry_refresh(self) -> None:
-        await self.async_refresh()
-        # If the refresh failed (exception before _schedule_source_error_retry
-        # ran inside _async_update_data), keep the retry loop alive.
-        if not self.last_update_success:
-            self._schedule_source_error_retry()
+        self.hass.async_create_task(self.async_refresh())
 
     def _cancel_source_error_retry(self) -> None:
         if self._source_error_retry_unsub is not None:
