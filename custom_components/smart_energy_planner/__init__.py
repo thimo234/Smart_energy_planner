@@ -123,9 +123,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     def _handle_source_state_change(event: Event[EventStateChangedData]) -> None:
-        new_state = event.data.get("new_state")
-        old_state = event.data.get("old_state")
-        if new_state is None or new_state == old_state:
+        if event.data.get("new_state") is None:
             return
         hass.async_create_task(coordinator.async_refresh())
 
