@@ -62,8 +62,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_refresh()
     if coordinator.data is None:
         raise ConfigEntryNotReady("Planner data is not ready yet")
-    if coordinator.data.status in {"waiting_for_price_sensor", "waiting_for_nordpool_prices"}:
-        raise ConfigEntryNotReady("Nord Pool prices are not available yet")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     merged = {**entry.data, **entry.options}
