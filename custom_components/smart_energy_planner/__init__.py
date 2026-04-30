@@ -105,6 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady("Planner data is not ready yet")
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
 
     def _entity_id(key: str) -> str | None:
