@@ -65,13 +65,11 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Energy Planner from a config entry."""
-    coordinator = SmartEnergyPlannerCoordinator(hass, entry)
-    await coordinator.async_refresh()
-    if coordinator.data is None:
-        raise ConfigEntryNotReady("Planner data is not ready yet")
-
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     merged = {**entry.data, **entry.options}
+
+    # Load persisted runtime state BEFORE the first coordinator refresh so
+    # that battery profit tracking reads the correct stored values instead of
+    # starting from an empty dict and overwriting them with 0.
     runtime_state = hass.data.setdefault(RUNTIME_STATE, {})
     persisted_state = await _async_load_runtime_state(hass, entry.entry_id)
     runtime_state[entry.entry_id] = {
@@ -101,7 +99,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "battery_profit_last_updated": persisted_state.get("battery_profit_last_updated"),
     }
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    coordinator = SmartEnergyPlannerCoordinator(hass, entry)
+    await coordinator.async_refresh()
+    if coordinator.data is None:
+        raise ConfigEntryNotReady("Planner data is not ready yet")
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
 
     def _entity_id(key: str) -> str | None:
