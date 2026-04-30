@@ -493,11 +493,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 total_energy_daily_average = 0.0
                 non_heating_daily_average = 0.0
                 heating_estimate = 0.0
-                historical_hourly_usage: dict[datetime, float] = {}
+                hourly_demand_table: dict[str, float] = {}
             else:
                 non_heating_daily_average = total_energy_daily_average
                 heating_estimate = 0.0
-                historical_hourly_usage = await self._async_get_hourly_energy_usage(total_energy_sensor) if total_energy_sensor else {}
+                hourly_demand_table = {}
+                if total_energy_sensor and total_energy_state:
+                    current_energy = _coerce_float(total_energy_state.state)
+                    if current_energy is not None:
+                        hourly_demand_table = await self._async_update_hourly_demand_table(
+                            current_value=current_energy,
+                            now=now,
+                        )
+                    else:
+                        hourly_demand_table = dict(
+                            (self.hass.data.get(RUNTIME_STATE, {})
+                             .get(self.config_entry.entry_id, {})
+                             .get("hourly_demand_table") or {})
+                        )
 
             cooling_profile = await self._async_estimate_room_cooling_profile(
                 room_temperature_sensor=room_temperature_sensor,
@@ -530,7 +543,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
                     total_energy_daily_average_kwh=total_energy_daily_average,
                     non_heating_daily_average_kwh=non_heating_daily_average,
-                    historical_hourly_usage=historical_hourly_usage,
+                    hourly_demand_table=hourly_demand_table,
                     room_temperature_c=room_temperature,
                     thermostat_setpoint_c=thermostat_setpoint,
                     thermostat_cool_setpoint_c=thermostat_cool_setpoint,
@@ -854,6 +867,66 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         runtime_state["battery_profit_last_updated"] = now
         await self._async_persist_runtime_state(runtime_state)
 
+    async def _async_update_hourly_demand_table(
+        self,
+        *,
+        current_value: float,
+        now: datetime,
+    ) -> dict[str, float]:
+        """Maintain a 168-slot (7 × 24) EMA table of hourly energy consumption.
+
+        Each slot key is str(weekday * 24 + hour).  When the hour changes the
+        delta between the current reading and the reading at the previous hour
+        boundary is applied with alpha=0.2:
+            new = old + (delta - old) * 0.2
+        Values are capped at 10 kWh/h before the update to guard against
+        sensor spikes or meter rollovers.
+        """
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+            self.config_entry.entry_id, {}
+        )
+        table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
+        last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
+        last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
+        last_ts_raw = runtime_state.get("hourly_demand_last_ts")
+        current_hour_key = now.weekday() * 24 + now.hour
+        changed = False
+
+        if last_value is None or last_hour_key is None:
+            # First call: store the baseline without updating any slot.
+            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
+            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
+            runtime_state["hourly_demand_last_ts"] = now.isoformat()
+            changed = True
+        elif last_hour_key != current_hour_key:
+            # The hour has turned: compute consumption of the completed hour.
+            last_ts = dt_util.parse_datetime(last_ts_raw) if last_ts_raw else None
+            elapsed_hours = (
+                max(0.1, (now - last_ts).total_seconds() / 3600) if last_ts else 1.0
+            )
+            delta = current_value - last_value
+            # If HA was down for more than one hour normalise to per-hour.
+            hourly_delta = delta / elapsed_hours if elapsed_hours > 1.5 else delta
+            # Cap and reject negatives (meter reset / rollover).
+            if 0.0 <= hourly_delta <= 10.0:
+                slot = str(last_hour_key)
+                existing = _coerce_float(table.get(slot))
+                if existing is None:
+                    table[slot] = round(hourly_delta, 4)
+                else:
+                    table[slot] = round(existing + (hourly_delta - existing) * 0.2, 4)
+            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
+            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
+            runtime_state["hourly_demand_last_ts"] = now.isoformat()
+            runtime_state["hourly_demand_table"] = table
+            changed = True
+
+        if changed:
+            runtime_state["hourly_demand_table"] = table
+            await self._async_persist_runtime_state(runtime_state)
+
+        return table
+
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
         data = await store.async_load() or {}
@@ -873,6 +946,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
+            "hourly_demand_table": runtime_state.get("hourly_demand_table", {}),
+            "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
+            "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
+            "hourly_demand_last_ts": runtime_state.get("hourly_demand_last_ts"),
         }
         await store.async_save(data)
 
@@ -1416,7 +1493,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         lookback_average_kwh: float,
         total_energy_daily_average_kwh: float,
         non_heating_daily_average_kwh: float,
-        historical_hourly_usage: dict[datetime, float],
+        hourly_demand_table: dict[str, float],
         room_temperature_c: float | None,
         thermostat_setpoint_c: float | None,
         thermostat_cool_setpoint_c: float | None,
@@ -1472,7 +1549,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
-            historical_hourly_usage=historical_hourly_usage,
+            hourly_demand_table=hourly_demand_table,
             horizon_end=planning_horizon_end,
         )
         estimated_total_home_demand_kwh = round(
@@ -1994,15 +2071,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         non_heating_daily_average_kwh: float,
         heating_estimate_kwh: float,
-        historical_hourly_usage: dict[datetime, float] | None = None,
+        hourly_demand_table: dict[str, float] | None = None,
         horizon_end: datetime | None = None,
     ) -> list[dict[str, str | float]]:
-        """Build a simple hourly demand forecast for the visible planning horizon."""
-        base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
-        empty_slot_hourly = max(0.4, base_hourly)
-        historical_hourly_usage = historical_hourly_usage or {}
+        """Build an hourly demand forecast from the 168-slot EMA table.
 
-        # Higher heating share during morning and evening hours.
+        Each slot key is str(weekday * 24 + hour).  Falls back to
+        max(0.4, daily_average / 24) for slots not yet in the table.
+        """
+        base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
+        fallback_hourly = max(0.4, base_hourly)
+        table = hourly_demand_table or {}
+
         heating_profile = [
             0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
             0.06, 0.07, 0.06, 0.045, 0.035, 0.03,
@@ -2015,59 +2095,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         horizon_end = horizon_end or (today_start + timedelta(days=1))
         day_count = max(1, (horizon_end.date() - today_start.date()).days + 1)
 
-        hourly_average_by_hour: dict[int, float] = {}
-        for hour in range(24):
-            hour_values = [
-                usage_kwh
-                for slot_start, usage_kwh in historical_hourly_usage.items()
-                if slot_start.hour == hour
-            ]
-            if hour_values:
-                hourly_average_by_hour[hour] = statistics.fmean(hour_values)
-
         forecast: list[dict[str, str | float]] = []
         for day_offset in range(day_count):
             day_start = today_start + timedelta(days=day_offset)
             for hour in range(24):
                 slot_start = day_start + timedelta(hours=hour)
-                slot_end = slot_start + timedelta(hours=1)
-                previous_week_usage = historical_hourly_usage.get(slot_start - timedelta(days=7))
-                previous_week_previous_hour_usage = historical_hourly_usage.get(
-                    slot_start - timedelta(days=7, hours=1)
+                slot_key = str(slot_start.weekday() * 24 + hour)
+                table_value = _coerce_float(table.get(slot_key))
+                historical_hourly = (
+                    min(table_value, 3.0) if table_value is not None else fallback_hourly
                 )
-                hour_average = hourly_average_by_hour.get(hour)
-                if previous_week_usage is not None and previous_week_previous_hour_usage is not None:
-                    last_week_hourly = previous_week_previous_hour_usage + (
-                        (previous_week_usage - previous_week_previous_hour_usage) * 0.2
-                    )
-                elif previous_week_usage is not None:
-                    last_week_hourly = previous_week_usage
-                else:
-                    last_week_hourly = None
-                # Blend last-week value with multi-week average when both are
-                # available so a single outlier day (EV charge, guests, etc.)
-                # cannot dominate the forecast. Cap each input individually
-                # before blending: without this a single 4+ kWh EV day pushes
-                # the 50/50 average above the final cap and the cap is hit
-                # regardless, making the blend ineffective.
-                _slot_cap = 3.0
-                if last_week_hourly is not None and hour_average is not None:
-                    historical_hourly = (
-                        min(last_week_hourly, _slot_cap) + min(hour_average, _slot_cap)
-                    ) / 2
-                elif last_week_hourly is not None:
-                    historical_hourly = last_week_hourly
-                elif hour_average is not None:
-                    historical_hourly = hour_average
-                else:
-                    historical_hourly = empty_slot_hourly
-                historical_hourly = min(3.0, max(0.0, historical_hourly))
                 heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
                 total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
                 forecast.append(
                     {
                         "start": slot_start.isoformat(),
-                        "end": slot_end.isoformat(),
+                        "end": (slot_start + timedelta(hours=1)).isoformat(),
                         "estimated_kwh": total_hourly,
                     }
                 )
