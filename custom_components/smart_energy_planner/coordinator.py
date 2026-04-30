@@ -1218,6 +1218,52 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return sorted(peak_blocks, key=lambda item: item["start"])
 
+    def _select_thermostat_eco_window(
+        self,
+        *,
+        windows: list[PlannerWindow],
+        now: datetime,
+        cooldown_hours: float,
+    ) -> list[dict[str, datetime | float]]:
+        """Find the single most expensive contiguous block of cooldown_hours.
+
+        Searches all price windows (not just expensive peaks) so the eco window
+        is always cooldown_hours long, placed at the most expensive time of day.
+        Includes a lookback of cooldown_hours to detect blocks already in progress.
+        """
+        if cooldown_hours <= 0:
+            return []
+
+        lookback_start = now - timedelta(hours=cooldown_hours)
+        eligible = [w for w in windows if w.end > lookback_start]
+        if not eligible:
+            return []
+
+        best: dict[str, datetime | float] | None = None
+        for i, start_win in enumerate(eligible):
+            block_start = start_win.start  # not clipped — allows detecting ongoing blocks
+            accumulated = 0.0
+            weighted = 0.0
+            block_end = block_start
+            for w in eligible[i:]:
+                usable_start = max(w.start, block_end)
+                usable_hours = (w.end - usable_start).total_seconds() / 3600
+                if usable_hours <= 0:
+                    continue
+                take = min(usable_hours, cooldown_hours - accumulated)
+                weighted += w.price * take
+                accumulated += take
+                block_end = usable_start + timedelta(hours=take)
+                if accumulated >= cooldown_hours:
+                    avg = weighted / accumulated
+                    if best is None or avg > float(best["average_price"]):
+                        best = {"start": block_start, "end": block_end, "average_price": avg}
+                    break
+
+        if best is None or cast(datetime, best["end"]) <= now:
+            return []
+        return [best]
+
     def _select_thermostat_peak_eco_windows(
         self,
         *,
@@ -1493,12 +1539,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if price_signal_available:
             try:
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    eco_windows = self._select_thermostat_peak_eco_windows(
+                    eco_windows = self._select_thermostat_eco_window(
                         windows=windows,
                         now=now,
                         cooldown_hours=eco_duration_hours,
-                        average_price=average_price,
-                        expensive_threshold=expensive_threshold,
                     )
                 else:
                     eco_windows = self._select_expensive_peak_blocks(
