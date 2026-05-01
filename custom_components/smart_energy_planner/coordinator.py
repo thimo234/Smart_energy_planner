@@ -194,6 +194,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
         self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
+        self._locked_eco_window: dict | None = None
         self._source_error_retry_unsub: object | None = None
 
     @callback
@@ -1657,6 +1658,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
+        # Lock the eco window once entered so that mid-session price updates
+        # (e.g. day-ahead prices arriving at ~13:00) cannot silently switch to
+        # a different window and break the active eco session.
+        if self._locked_eco_window is not None:
+            locked_end = cast(datetime, self._locked_eco_window["end"])
+            if now < locked_end:
+                active_eco_window = self._locked_eco_window  # keep running window
+            else:
+                self._locked_eco_window = None  # window expired, release lock
+        if self._locked_eco_window is None and active_eco_window is not None:
+            self._locked_eco_window = active_eco_window  # latch new window
+
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
