@@ -524,6 +524,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
 
+            # Apply EMA (α=0.2) to smooth hours_to_eco and suppress per-refresh noise.
+            raw_eco_hours = cooling_profile.get("hours_to_eco")
+            if raw_eco_hours is not None and planner_kind == PLANNER_KIND_THERMOSTAT:
+                _rs = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+                    self.config_entry.entry_id, {}
+                )
+                last_smoothed = _coerce_float(_rs.get("smoothed_eco_hours"))
+                smoothed = (
+                    round(last_smoothed + (raw_eco_hours - last_smoothed) * 0.2, 2)
+                    if last_smoothed is not None
+                    else round(raw_eco_hours, 2)
+                )
+                _rs["smoothed_eco_hours"] = smoothed
+                cooling_profile["hours_to_eco"] = smoothed
+
             try:
                 result = self._build_plan(
                     planner_kind=planner_kind,
@@ -950,6 +965,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
             "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
             "hourly_demand_last_ts": runtime_state.get("hourly_demand_last_ts"),
+            "smoothed_eco_hours": runtime_state.get("smoothed_eco_hours"),
         }
         await store.async_save(data)
 
@@ -1694,20 +1710,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
 
-        # Eco is only active when:
-        # - inside an active eco window
-        # - the current price slot is expensive (≥ average, with a small tolerance to
-        #   prevent oscillation when the price is right on the boundary)
-        # - the room has not yet reached the eco setpoint (no latch set)
-        # - preheat is not active (preheat takes priority so the floor stores heat
-        #   before eco begins, even when the price is already above average)
+        # Eco continues for the full planned window regardless of individual cheap
+        # price slots within it — interrupting eco mid-window for a cheap slot
+        # prevents the room from ever cooling to eco temperature.
+        # Eco may only be interrupted early when no cheap heating window remains
+        # after the eco block ends.  One valley may be skipped, so >= 1 cheap
+        # window after eco is sufficient to keep eco active.
+        next_valley_reachable = True
+        if active_eco_window is not None:
+            eco_end_ts = cast(datetime, active_eco_window["end"])
+            cheap_after_eco = [
+                w for w in all_windows if w.start >= eco_end_ts and w.price <= average_price
+            ]
+            next_valley_reachable = len(cheap_after_eco) >= 1
         eco_active_now = (
             active_eco_window is not None
-            and current_price is not None
-            and current_price >= average_price - 0.01
             and not eco_temp_reached
             and self._eco_early_exit_until is None
             and not preheat_active_now
+            and next_valley_reachable
         )
         eco_window = (
             active_eco_window

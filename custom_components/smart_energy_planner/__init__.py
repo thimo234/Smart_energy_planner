@@ -101,6 +101,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "hourly_demand_last_value": persisted_state.get("hourly_demand_last_value"),
         "hourly_demand_last_hour_key": persisted_state.get("hourly_demand_last_hour_key"),
         "hourly_demand_last_ts": persisted_state.get("hourly_demand_last_ts"),
+        "smoothed_eco_hours": persisted_state.get("smoothed_eco_hours"),
     }
 
     coordinator = SmartEnergyPlannerCoordinator(hass, entry)
