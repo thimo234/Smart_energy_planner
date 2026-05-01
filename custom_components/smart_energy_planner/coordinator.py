@@ -1701,6 +1701,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
+        # Never preheat while a locked eco session is running: preheating would
+        # counteract the active eco session AND break eco_active_now via the
+        # preheat_active_now condition.  The preheat for the NEXT eco cycle is
+        # applied naturally once the locked window expires.
+        if self._locked_eco_window is not None:
+            preheat_active_now = False
 
         # Eco continues for the full planned window regardless of individual cheap
         # price slots within it — interrupting eco mid-window for a cheap slot
