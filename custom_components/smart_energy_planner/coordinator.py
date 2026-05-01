@@ -1722,7 +1722,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cheap_after_eco = [
                 w for w in all_windows if w.start >= eco_end_ts and w.price <= average_price
             ]
-            next_valley_reachable = len(cheap_after_eco) >= 1
+            next_valley_reachable = len(cheap_after_eco) >= 4
         eco_active_now = (
             active_eco_window is not None
             and not eco_temp_reached
