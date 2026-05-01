@@ -193,7 +193,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
-        self._eco_early_exit_until: datetime | None = None
+        self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
         self._source_error_retry_unsub: object | None = None
 
     @callback
@@ -1653,31 +1653,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     raise
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
-        # Only relevant for thermostat planners; battery planners have no room sensor
-        eco_temp_reached = (
-            planner_kind == PLANNER_KIND_THERMOSTAT
-            and room_temperature_c is not None
-            and thermostat_eco_setpoint_c is not None
-            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1
-        )
         active_eco_window = next(
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        # Clear the early-exit latch only when the window it was set for has ended.
-        # Do NOT reset it when the eco window boundaries shift due to replanning
-        # (e.g. cooldown_hours changing with room temperature) — resetting on every
-        # end-time change was the root cause of rapid eco↔normal oscillation: the
-        # latch fired, eco exited, the planner produced a window with a slightly
-        # different end, the latch reset, eco re-entered, repeat every 15 minutes.
-        if self._eco_early_exit_until is not None and now >= self._eco_early_exit_until:
-            self._eco_early_exit_until = None
-        # Once the room reaches the eco setpoint inside an active eco window, latch
-        # eco off for the rest of that window.  The room has used its stored floor
-        # heat; normal heating resumes to maintain comfort.  The latch prevents
-        # rapid oscillation between eco and normal every update cycle.
-        if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
-            self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
@@ -1725,8 +1704,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next_valley_reachable = len(cheap_after_eco) >= 4
         eco_active_now = (
             active_eco_window is not None
-            and not eco_temp_reached
-            and self._eco_early_exit_until is None
             and not preheat_active_now
             and next_valley_reachable
         )
