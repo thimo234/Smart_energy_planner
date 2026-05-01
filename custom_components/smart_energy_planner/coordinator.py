@@ -1914,6 +1914,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale_parts.append(
                 "preheating is active so the floor can store heat before the upcoming eco window"
             )
+        elif planner_kind == PLANNER_KIND_THERMOSTAT and cheap_now and any(
+            cast(datetime, w["start"]) > now for w in eco_windows
+        ):
+            heat_pump_strategy = "preheating"
+            score += 4
+            rationale_parts.append(
+                "price is cheap now and an eco window is upcoming: good time to preheat the floor"
+            )
         elif cheap_now and (best_solar_is_now or solar_covers_today):
             heat_pump_strategy = "normal"
             rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
