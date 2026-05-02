@@ -1711,9 +1711,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # Eco continues for the full planned window regardless of individual cheap
         # price slots within it — interrupting eco mid-window for a cheap slot
         # prevents the room from ever cooling to eco temperature.
-        # Eco may only be interrupted early when no cheap heating window remains
-        # after the eco block ends.  One valley may be skipped, so >= 1 cheap
-        # window after eco is sufficient to keep eco active.
+        # Eco may only be interrupted early when no proper cheap valley remains
+        # after the eco block ends.  A valley requires at least 4 cheap windows.
         next_valley_reachable = True
         if active_eco_window is not None:
             eco_end_ts = cast(datetime, active_eco_window["end"])
@@ -1722,19 +1721,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # extends to or beyond the price-data horizon, assume a valley is
             # reachable rather than prematurely breaking eco.
             if len(windows_after_eco) >= 8:
-                # A cheap valley is only usable once the room has cooled to eco
-                # setpoint.  room_cooling_hours_to_eco is based on the current
-                # temperature, so it already reflects how much cooling is left.
-                # One valley may be skipped, so >= 1 reachable cheap window is
-                # sufficient to keep eco active.
-                cooling_hours = room_cooling_hours_to_eco or 0.0
-                ready_ts = now + timedelta(hours=cooling_hours)
-                reachable_after = max(eco_end_ts, ready_ts)
+                # The room is already cooling during eco, so the cooling-time
+                # offset is NOT applied here — using now + time_to_eco would
+                # push the search window 18 h into the future while the room is
+                # already cooling, causing eco to break prematurely.
+                # Instead, require at least 4 consecutive cheap windows after
+                # eco ends (= a proper valley, as requested by the user).
                 cheap_reachable = [
                     w for w in all_windows
-                    if w.start >= reachable_after and w.price <= average_price
+                    if w.start >= eco_end_ts and w.price <= average_price
                 ]
-                next_valley_reachable = len(cheap_reachable) >= 1
+                next_valley_reachable = len(cheap_reachable) >= 4
         eco_active_now = (
             active_eco_window is not None
             and not preheat_active_now
