@@ -1634,7 +1634,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             try:
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
                     eco_windows = self._select_thermostat_eco_window(
-                        windows=windows,
+                        windows=all_windows,
                         now=now,
                         cooldown_hours=eco_duration_hours,
                     )
@@ -1717,10 +1717,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         next_valley_reachable = True
         if active_eco_window is not None:
             eco_end_ts = cast(datetime, active_eco_window["end"])
-            cheap_after_eco = [
-                w for w in all_windows if w.start >= eco_end_ts and w.price <= average_price
-            ]
-            next_valley_reachable = len(cheap_after_eco) >= 4
+            windows_after_eco = [w for w in all_windows if w.start >= eco_end_ts]
+            # Only evaluate when enough post-eco data exists; if the eco window
+            # extends to or beyond the price-data horizon, assume a valley is
+            # reachable rather than prematurely breaking eco.
+            if len(windows_after_eco) >= 8:
+                cheap_after_eco = [w for w in windows_after_eco if w.price <= average_price]
+                next_valley_reachable = len(cheap_after_eco) >= 4
         eco_active_now = (
             active_eco_window is not None
             and not preheat_active_now
