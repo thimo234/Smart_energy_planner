@@ -2351,7 +2351,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         ),
                     }
                 )
-                # Solar slots are never grid-charged — skip grid candidate for this slot.
+                # When there's a shortfall and the import price here is cheaper than
+                # the next peak, also allow grid top-up for the remaining slot capacity
+                # so cheap solar-hour prices beat expensive later grid slots.
+                remaining_after_solar_kwh = slot_capacity_kwh - solar_charge_kwh
+                if grid_charge_limit_kwh > 0 and remaining_after_solar_kwh > 0:
+                    solar_slot_peak_price = self._calculate_next_battery_peak_price(
+                        future_slots,
+                        slot["end"],
+                        price_key="import_price",
+                    )
+                    if (
+                        solar_slot_peak_price is not None
+                        and solar_slot_peak_price - float(slot["import_price"]) >= battery_min_profit
+                    ):
+                        charge_candidates.append(
+                            {
+                                "kind": "grid",
+                                "start": slot["start"],
+                                "end": slot["end"],
+                                "charge_kwh": round(
+                                    min(remaining_after_solar_kwh, grid_charge_limit_kwh), 6
+                                ),
+                                "effective_price": round(float(slot["import_price"]), 6),
+                            }
+                        )
                 continue
 
             if grid_charge_limit_kwh <= 0 or (
