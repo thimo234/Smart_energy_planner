@@ -1722,8 +1722,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # extends to or beyond the price-data horizon, assume a valley is
             # reachable rather than prematurely breaking eco.
             if len(windows_after_eco) >= 8:
-                cheap_after_eco = [w for w in windows_after_eco if w.price <= average_price]
-                next_valley_reachable = len(cheap_after_eco) >= 4
+                # A cheap valley is only usable once the room has cooled to eco
+                # setpoint.  room_cooling_hours_to_eco is based on the current
+                # temperature, so it already reflects how much cooling is left.
+                # One valley may be skipped, so >= 1 reachable cheap window is
+                # sufficient to keep eco active.
+                cooling_hours = room_cooling_hours_to_eco or 0.0
+                ready_ts = now + timedelta(hours=cooling_hours)
+                reachable_after = max(eco_end_ts, ready_ts)
+                cheap_reachable = [
+                    w for w in all_windows
+                    if w.start >= reachable_after and w.price <= average_price
+                ]
+                next_valley_reachable = len(cheap_reachable) >= 1
         eco_active_now = (
             active_eco_window is not None
             and not preheat_active_now
