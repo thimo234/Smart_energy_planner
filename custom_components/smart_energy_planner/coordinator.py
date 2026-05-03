@@ -1755,6 +1755,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and not preheat_active_now
             and next_valley_reachable
         )
+        # Permanent-eco mode: when the room cools so slowly that hours_to_eco
+        # hits the cap (warm weather), there is no point in cycling between
+        # normal and eco.  Force eco on permanently and suppress preheating.
+        if (
+            planner_kind == PLANNER_KIND_THERMOSTAT
+            and eco_duration_hours >= _THERMOSTAT_MAX_COOLDOWN_HOURS
+        ):
+            eco_active_now = True
+            preheat_active_now = False
+            self._locked_preheat_end = None
         eco_window = (
             active_eco_window
             if eco_active_now
