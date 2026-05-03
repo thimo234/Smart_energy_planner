@@ -35,7 +35,8 @@
           "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
           "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
-          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
+          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
+          "solar_forecast_factor": "Zonnepaneel prognose zekerheid (1.0 = 100%)"
         }
       }
     }
