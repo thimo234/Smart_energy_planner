@@ -22,7 +22,6 @@ from .const import (
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
-    CONF_SOLAR_FORECAST_FACTOR,
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
@@ -46,7 +45,6 @@ from .const import (
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
-    DEFAULT_SOLAR_FORECAST_FACTOR,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
@@ -2482,22 +2480,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # target; price sorting within each cycle is preserved.
         cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-        # Apply a configurable discount to the solar forecast so that the grid
-        # charge limit reflects forecast uncertainty.  Factor < 1.0 causes the
-        # planner to treat solar as less than forecast, triggering grid charging
-        # as a safety buffer on partly-cloudy days where Solcast may overestimate.
-        solar_forecast_factor = max(
-            0.1,
-            min(1.0, float(self._config.get(CONF_SOLAR_FORECAST_FACTOR, DEFAULT_SOLAR_FORECAST_FACTOR))),
-        )
-
         # Per-cycle productive solar for independent grid-charge limits.
         current_cycle_solar_kwh = round(
             sum(
                 min(max_charge_kw * float(s["hours"]), max(0.0, float(s["net_solar_kwh"])))
                 for s in future_slots
                 if s["start"] < cycle_end and s["start"] in productive_solar_slot_starts
-            ) * solar_forecast_factor,
+            ),
             6,
         )
         next_cycle_solar_kwh = round(
@@ -2505,7 +2494,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 min(max_charge_kw * float(s["hours"]), max(0.0, float(s["net_solar_kwh"])))
                 for s in future_slots
                 if s["start"] >= cycle_end and s["start"] in productive_solar_slot_starts
-            ) * solar_forecast_factor,
+            ),
             6,
         )
 
