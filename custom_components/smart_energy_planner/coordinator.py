@@ -3304,8 +3304,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot_start = slot["start"]
             charge_window_handled = False
             for charge_lookup, charge_mode, price_key in (
-                (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
                 (grid_charge_starts,  "laden_van_net",           "import_price"),
+                (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
             ):
                 if slot_start not in charge_lookup:
                     continue
