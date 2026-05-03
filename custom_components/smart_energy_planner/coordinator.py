@@ -195,6 +195,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._active_charge_phase_mode = "accu_uit"
         self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
         self._locked_eco_window: dict | None = None
+        self._locked_preheat_end: datetime | None = None
         self._source_error_retry_unsub: object | None = None
 
     @callback
@@ -1701,6 +1702,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
+        # Lock preheat once it activates so that eco-window drift (caused by
+        # EMA updates to hours_to_eco) cannot push the preheat-window start
+        # past NOW and revert the mode to "normal" mid-preheat.  The lock is
+        # released as soon as eco starts (locked_eco_window is set).
+        if preheat_active_now and self._locked_preheat_end is None:
+            # Determine when the preheat session should end (= when eco starts).
+            preheat_eco_start = next(
+                (cast(datetime, w["end"]) for w in preheat_windows if w["start"] <= now < w["end"]),
+                None,
+            )
+            if preheat_eco_start is not None:
+                self._locked_preheat_end = preheat_eco_start
+        if self._locked_preheat_end is not None:
+            if self._locked_eco_window is not None or now >= self._locked_preheat_end:
+                self._locked_preheat_end = None  # eco started or preheat window expired
+            else:
+                preheat_active_now = True  # hold preheat mode across planning ticks
         # Never preheat while a locked eco session is running: preheating would
         # counteract the active eco session AND break eco_active_now via the
         # preheat_active_now condition.  The preheat for the NEXT eco cycle is
