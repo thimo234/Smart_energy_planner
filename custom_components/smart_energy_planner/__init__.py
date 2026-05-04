@@ -435,6 +435,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
     store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
     data = await store.async_load() or {}
     data[entry_id] = {
+        **(data.get(entry_id, {}) or {}),
         "manual_temperature": runtime_state.get("manual_temperature"),
         "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
         "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
