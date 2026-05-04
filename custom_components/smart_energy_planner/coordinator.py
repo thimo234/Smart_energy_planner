@@ -3389,16 +3389,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
             )
+            # Surplus = battery energy minus what is actually planned to discharge
+            # for home demand (NOT total segment demand).  The segment may span
+            # until the next charge window (e.g. 06:00-12:00) while the battery
+            # only covers the expensive early hours; the remaining energy would
+            # otherwise sit idle and represents genuine export surplus.
+            total_planned_discharge_kwh = sum(planned_discharge_kwh.values())
             # Plan export for any genuine surplus: battery energy above what the
-            # segment's home demand needs.  The within_export_window gate (8 h
-            # before the next charge) prevents depleting the battery too early.
+            # discharge plan needs.  The within_export_window gate (8 h before
+            # the next charge) prevents depleting the battery too early.
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
                 available_energy_kwh=sim_usable_energy_kwh,
-                total_segment_demand_kwh=total_segment_demand_kwh,
+                total_segment_demand_kwh=total_planned_discharge_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
-            has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
+            has_export_surplus = sim_usable_energy_kwh > total_planned_discharge_kwh
 
             # Export to grid is only allowed within 8 hours before the next
             # planned charge phase.  Exporting earlier risks draining the
