@@ -75,9 +75,6 @@ _THERMOSTAT_COOLING_LEARN_SAMPLES = 3
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
-# Grid top-ups smaller than this (kWh) are suppressed to avoid disruptive
-# 15-minute laden_van_net windows when the battery is nearly full.
-_BATTERY_MIN_GRID_CHARGE_KWH = 0.5
 
 
 @dataclass(slots=True)
@@ -200,6 +197,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._locked_eco_window: dict | None = None
         self._locked_preheat_end: datetime | None = None
         self._source_error_retry_unsub: object | None = None
+        self._discharge_session_started: bool = False
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -2534,11 +2532,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
-        # Suppress trivial top-ups: a tiny grid charge (e.g. 0.2 kWh when SOC
-        # is 98%) causes a disruptive 15-minute laden_van_net window mid-
-        # discharge session. Only allow grid charging when the gap is meaningful.
-        if current_grid_limit_kwh < _BATTERY_MIN_GRID_CHARGE_KWH:
+
+        # Discharge cycle tracking: once the battery is well-charged (SOC >= 70%)
+        # the daily charge cycle is considered complete and the discharge cycle begins.
+        # During a discharge cycle, suppress current-cycle grid charging to prevent
+        # brief laden_van_net windows from interrupting an active discharge session.
+        # The cycle resets when an active charge phase resumes or the battery is
+        # critically low (safety valve for winter / no-solar scenarios).
+        usable_soc_fraction = (
+            current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
+        )
+        if self._active_charge_phase_end is not None and self._active_charge_phase_end > now:
+            # Charge phase is actively running — not a discharge cycle.
+            self._discharge_session_started = False
+        elif usable_soc_fraction < 0.15:
+            # Safety valve: battery nearly empty — allow grid charging regardless.
+            self._discharge_session_started = False
+        elif usable_soc_fraction >= 0.70:
+            # Charge cycle complete; discharge cycle begins (or continues).
+            self._discharge_session_started = True
+        # Between 15 % and 70 %: flag coasts — maintains state from previous tick.
+
+        if self._discharge_session_started:
             current_grid_limit_kwh = 0.0
+
         # Next cycle: battery assumed empty — must fill full capacity.
         next_grid_limit_kwh = max(
             0.0,
