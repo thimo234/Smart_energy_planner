@@ -75,6 +75,9 @@ _THERMOSTAT_COOLING_LEARN_SAMPLES = 3
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
+# Grid top-ups smaller than this (kWh) are suppressed to avoid disruptive
+# 15-minute laden_van_net windows when the battery is nearly full.
+_BATTERY_MIN_GRID_CHARGE_KWH = 0.5
 
 
 @dataclass(slots=True)
@@ -2531,6 +2534,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
+        # Suppress trivial top-ups: a tiny grid charge (e.g. 0.2 kWh when SOC
+        # is 98%) causes a disruptive 15-minute laden_van_net window mid-
+        # discharge session. Only allow grid charging when the gap is meaningful.
+        if current_grid_limit_kwh < _BATTERY_MIN_GRID_CHARGE_KWH:
+            current_grid_limit_kwh = 0.0
         # Next cycle: battery assumed empty — must fill full capacity.
         next_grid_limit_kwh = max(
             0.0,
