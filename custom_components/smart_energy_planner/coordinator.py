@@ -3412,7 +3412,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # next charge window.  When no charge is scheduled the battery
             # won't be refilled, so export proceeds freely.
             _next_charge_after_segment = min(
-                (c["start"] for c in charge_phase_clusters if segment_slots and c["start"] > segment_slots[-1]["end"]),
+                (c["start"] for c in charge_phase_clusters if segment_slots and c["start"] >= segment_slots[-1]["end"]),
                 default=None,
             )
             _export_allowed_from = (
