@@ -1756,16 +1756,32 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and not preheat_active_now
             and next_valley_reachable
         )
-        # Permanent-eco mode: when the room cools so slowly that hours_to_eco
-        # hits the cap (warm weather), there is no point in cycling between
-        # normal and eco.  Force eco on permanently and suppress preheating.
-        if (
-            planner_kind == PLANNER_KIND_THERMOSTAT
-            and eco_duration_hours >= _THERMOSTAT_MAX_COOLDOWN_HOURS
-        ):
-            eco_active_now = True
-            preheat_active_now = False
-            self._locked_preheat_end = None
+        # Dynamic permanent-eco: instead of a fixed 18-hour cap, check whether
+        # the room can actually cool to eco setpoint before the next cheap valley.
+        # The "next valley" is the first cheap window (price <= average) that
+        # follows the next upcoming expensive period.  If eco_duration_hours >
+        # hours_to_next_valley, the room won't reach eco setpoint before the next
+        # valley — so force eco continuously until the room has cooled enough that
+        # eco_duration_hours ≤ hours_to_next_valley and normal scheduling can resume.
+        if planner_kind == PLANNER_KIND_THERMOSTAT and eco_duration_hours > 0:
+            _saw_expensive = False
+            _next_valley_start: datetime | None = None
+            for _w in all_windows:
+                if _w.end <= now:
+                    continue
+                if _w.price > average_price:
+                    _saw_expensive = True
+                elif _saw_expensive:
+                    _next_valley_start = _w.start
+                    break
+            if _next_valley_start is not None:
+                hours_to_next_valley = max(
+                    0.0, (_next_valley_start - now).total_seconds() / 3600
+                )
+                if eco_duration_hours > hours_to_next_valley:
+                    eco_active_now = True
+                    preheat_active_now = False
+                    self._locked_preheat_end = None
         eco_window = (
             active_eco_window
             if eco_active_now
