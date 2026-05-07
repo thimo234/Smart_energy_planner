@@ -3520,6 +3520,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
                     and not suppress_discharge
+                    and not within_charge_phase
                 ):
                     last_charge_mode = "accu_uit"
                     if segment_export_kwh > 0 and within_export_window:
