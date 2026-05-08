@@ -3218,17 +3218,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode = "accu_uit"
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
-        if (
-            active_charge_phase_end is not None
-            and active_charge_phase_end > now
-            and any(w["start"] <= now < w["end"] for w in normalized_windows)
-        ):
+        if active_charge_phase_end is not None and active_charge_phase_end > now:
+            # The charge phase is still running (or was running when the plan was
+            # last evaluated).  Re-inject it as a cluster anchored at *now* so that
+            # the current slot stays in charge mode even when the new planning run
+            # does not (re-)select that slot — e.g. because the battery is nearly
+            # full and the solar window is skipped by the capacity gate.
+            # Safety: _active_charge_phase_end is only written while we are inside
+            # an active charge window, so it can never carry a stale value from a
+            # different day/cycle (it is cleared by _update_active_charge_phase_state
+            # the moment active_charge_phase becomes None).
             normalized_windows.append({"start": now, "end": active_charge_phase_end})
             normalized_windows.sort(key=lambda window: window["start"])
         else:
-            # Stale persisted window is not relevant; discard its mode so it cannot
-            # bleed into charge_phase_mode and label future slots (e.g. night grid
-            # charge windows) with the wrong mode (e.g. laden_met_zonne_energie).
             active_charge_phase_mode = "accu_uit"
 
         clusters: list[dict[str, datetime]] = []
