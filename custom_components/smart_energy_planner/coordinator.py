@@ -1204,6 +1204,57 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return fallback_rate, fallback_hours
 
+    def _find_next_valley_start(
+        self,
+        windows: list[PlannerWindow],
+        now: datetime,
+        average_price: float,
+    ) -> datetime | None:
+        """Return the start of the first true price valley after the next expensive period.
+
+        A valley is a contiguous plateau of equal-price windows where:
+        - every window in the plateau has price <= average_price
+        - the window immediately before the plateau is strictly more expensive
+        - the window immediately after the plateau is strictly more expensive
+          (or the plateau reaches the end of available data)
+
+        The search first waits for at least one expensive window (price > average_price)
+        so we skip any current cheap period and find the NEXT valley.
+        """
+        future = sorted(
+            [w for w in windows if w.end > now],
+            key=lambda w: w.start,
+        )
+        n = len(future)
+        saw_expensive = False
+        i = 0
+        while i < n:
+            if not saw_expensive:
+                if future[i].price > average_price:
+                    saw_expensive = True
+                i += 1
+                continue
+            p = future[i].price
+            if p > average_price:
+                i += 1
+                continue
+            # Cheap window after expensive — check left boundary
+            prev_price = future[i - 1].price if i > 0 else float("inf")
+            if prev_price <= p:
+                i += 1
+                continue
+            # Find the end of the equal-price plateau
+            j = i
+            while j + 1 < n and future[j + 1].price == p:
+                j += 1
+            # Check right boundary (end of data counts as infinite price)
+            next_price = future[j + 1].price if j + 1 < n else float("inf")
+            if next_price <= p:
+                i = j + 1
+                continue
+            return future[i].start
+        return None
+
     def _select_most_expensive_window_block(
         self,
         *,
@@ -1666,10 +1717,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # a different window and break the active eco session.
         if self._locked_eco_window is not None:
             locked_end = cast(datetime, self._locked_eco_window["end"])
-            if now < locked_end:
-                active_eco_window = self._locked_eco_window  # keep running window
+            room_reached_eco = (
+                planner_kind == PLANNER_KIND_THERMOSTAT
+                and room_temperature_c is not None
+                and thermostat_eco_setpoint_c is not None
+                and room_temperature_c <= thermostat_eco_setpoint_c
+            )
+            if now >= locked_end or room_reached_eco:
+                self._locked_eco_window = None  # window expired or room cooled enough
             else:
-                self._locked_eco_window = None  # window expired, release lock
+                active_eco_window = self._locked_eco_window  # keep running window
         if self._locked_eco_window is None and active_eco_window is not None:
             self._locked_eco_window = active_eco_window  # latch new window
 
@@ -1811,16 +1868,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 _eco_hours_from_current = 0.0  # room already at or below eco temp
             else:
                 _eco_hours_from_current = eco_duration_hours  # fallback to setpoint-based
-            _saw_expensive = False
-            _next_valley_start: datetime | None = None
-            for _w in all_windows:
-                if _w.end <= now:
-                    continue
-                if _w.price > average_price:
-                    _saw_expensive = True
-                elif _saw_expensive:
-                    _next_valley_start = _w.start
-                    break
+            _next_valley_start = self._find_next_valley_start(
+                all_windows, now, average_price
+            )
             if _next_valley_start is not None:
                 hours_to_next_valley = max(
                     0.0, (_next_valley_start - now).total_seconds() / 3600
