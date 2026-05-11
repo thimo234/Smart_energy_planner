@@ -196,6 +196,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
         self._locked_eco_window: dict | None = None
         self._locked_preheat_end: datetime | None = None
+        self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
         self._source_error_retry_unsub: object | None = None
         self._discharge_session_started: bool = False
 
@@ -1703,23 +1704,48 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
+        # ── Step 1: resolve an existing lock ────────────────────────────────
         # Lock preheat once it activates so that eco-window drift (caused by
         # EMA updates to hours_to_eco) cannot push the preheat-window start
         # past NOW and revert the mode to "normal" mid-preheat.  The lock is
-        # released as soon as eco starts (locked_eco_window is set).
+        # released as soon as eco starts (locked_eco_window is set) or the
+        # locked end-time is reached.
+        if self._locked_preheat_end is not None:
+            if self._locked_eco_window is not None:
+                # Eco started — normal end of preheat session.
+                self._locked_preheat_end = None
+                self._preheat_expired_at = None
+            elif now >= self._locked_preheat_end:
+                # Timeout without eco starting: record the expiry timestamp so
+                # we can suppress a back-to-back session (see Step 2 below).
+                self._preheat_expired_at = self._locked_preheat_end
+                self._locked_preheat_end = None
+            else:
+                preheat_active_now = True  # hold preheat mode across planning ticks
+        # ── Step 2: suppress back-to-back sessions ──────────────────────────
+        # When the previous preheat session timed out without eco starting
+        # (e.g. day-ahead prices arriving at 13:00 shifted the eco window
+        # 2 h forward) a new preheat window may start at exactly the moment
+        # the old one expired.  Without this guard that would double the total
+        # preheat duration.  Suppress any preheat window whose start ≤ the
+        # recorded expiry; the suppression is lifted once eco starts.
+        if self._preheat_expired_at is not None:
+            if self._locked_eco_window is not None:
+                self._preheat_expired_at = None  # eco arrived — fresh cycle
+            elif preheat_active_now and any(
+                w["start"] <= self._preheat_expired_at
+                for w in preheat_windows
+                if w["start"] <= now < w["end"]
+            ):
+                preheat_active_now = False
+        # ── Step 3: latch a new lock for this session ────────────────────────
         if preheat_active_now and self._locked_preheat_end is None:
-            # Determine when the preheat session should end (= when eco starts).
             preheat_eco_start = next(
                 (cast(datetime, w["end"]) for w in preheat_windows if w["start"] <= now < w["end"]),
                 None,
             )
             if preheat_eco_start is not None:
                 self._locked_preheat_end = preheat_eco_start
-        if self._locked_preheat_end is not None:
-            if self._locked_eco_window is not None or now >= self._locked_preheat_end:
-                self._locked_preheat_end = None  # eco started or preheat window expired
-            else:
-                preheat_active_now = True  # hold preheat mode across planning ticks
         # Never preheat while a locked eco session is running: preheating would
         # counteract the active eco session AND break eco_active_now via the
         # preheat_active_now condition.  The preheat for the NEXT eco cycle is
@@ -1759,11 +1785,32 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # Dynamic permanent-eco: instead of a fixed 18-hour cap, check whether
         # the room can actually cool to eco setpoint before the next cheap valley.
         # The "next valley" is the first cheap window (price <= average) that
-        # follows the next upcoming expensive period.  If eco_duration_hours >
-        # hours_to_next_valley, the room won't reach eco setpoint before the next
-        # valley — so force eco continuously until the room has cooled enough that
-        # eco_duration_hours ≤ hours_to_next_valley and normal scheduling can resume.
+        # follows the next upcoming expensive period.  If the remaining cooling
+        # time (from the CURRENT room temperature, not the setpoint) exceeds
+        # hours_to_next_valley, the room won't reach eco setpoint in time — so
+        # force eco continuously.  Once the room has cooled enough the condition
+        # stops being met and normal scheduling resumes.
         if planner_kind == PLANNER_KIND_THERMOSTAT and eco_duration_hours > 0:
+            # Compute remaining time to reach eco setpoint from the actual current
+            # room temperature rather than from the (higher) setpoint temperature.
+            # This prevents forcing eco when the room is already close to eco temp.
+            if (
+                room_temperature_c is not None
+                and thermostat_eco_setpoint_c is not None
+                and room_cooling_rate_c_per_hour is not None
+                and room_cooling_rate_c_per_hour > 0
+                and room_temperature_c > thermostat_eco_setpoint_c
+            ):
+                _current_delta = room_temperature_c - thermostat_eco_setpoint_c
+                _eco_hours_from_current = _current_delta / room_cooling_rate_c_per_hour
+            elif (
+                room_temperature_c is not None
+                and thermostat_eco_setpoint_c is not None
+                and room_temperature_c <= thermostat_eco_setpoint_c
+            ):
+                _eco_hours_from_current = 0.0  # room already at or below eco temp
+            else:
+                _eco_hours_from_current = eco_duration_hours  # fallback to setpoint-based
             _saw_expensive = False
             _next_valley_start: datetime | None = None
             for _w in all_windows:
@@ -1778,7 +1825,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 hours_to_next_valley = max(
                     0.0, (_next_valley_start - now).total_seconds() / 3600
                 )
-                if eco_duration_hours > hours_to_next_valley:
+                if _eco_hours_from_current > hours_to_next_valley:
                     eco_active_now = True
                     preheat_active_now = False
                     self._locked_preheat_end = None
