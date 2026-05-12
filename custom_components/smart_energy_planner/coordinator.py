@@ -603,18 +603,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Override the sensor with the actual REMAINING cooling time from the
             # current room temperature, so it shows "time until eco temp is reached
             # from now" rather than the model-based time from setpoint.
+            # Use proportional scaling against the model hours_to_eco so the result
+            # stays consistent with the learned/smoothed rate:
+            #   current_hours = (current_delta / cooldown_delta) * hours_to_eco
+            # where cooldown_delta = max(room_temp, setpoint) - eco_setpoint.
+            # This avoids using the raw cooling_rate_c_per_hour directly, which is
+            # the uncapped rate and can be much higher than what hours_to_eco implies.
             if (
                 planner_kind == PLANNER_KIND_THERMOSTAT
                 and room_temperature is not None
                 and thermostat_eco_setpoint is not None
             ):
-                _rate = cooling_profile.get("cooling_rate_c_per_hour") or 0.0
                 if room_temperature <= thermostat_eco_setpoint:
                     result.room_cooling_hours_to_eco = 0.0
-                elif _rate > 0:
-                    result.room_cooling_hours_to_eco = round(
-                        (room_temperature - thermostat_eco_setpoint) / _rate, 2
-                    )
+                else:
+                    _model_hours = cooling_profile.get("hours_to_eco")
+                    _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
+                    _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
+                    _current_delta = room_temperature - thermostat_eco_setpoint
+                    if _model_hours is not None and _cooldown_delta > 0:
+                        result.room_cooling_hours_to_eco = round(
+                            (_current_delta / _cooldown_delta) * _model_hours, 2
+                        )
+                    else:
+                        _rate = cooling_profile.get("cooling_rate_c_per_hour") or 0.0
+                        if _rate > 0:
+                            result.room_cooling_hours_to_eco = round(
+                                _current_delta / _rate, 2
+                            )
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
