@@ -603,12 +603,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Override the sensor with the actual REMAINING cooling time from the
             # current room temperature, so it shows "time until eco temp is reached
             # from now" rather than the model-based time from setpoint.
-            # Use proportional scaling against the model hours_to_eco so the result
-            # stays consistent with the learned/smoothed rate:
-            #   current_hours = (current_delta / cooldown_delta) * hours_to_eco
-            # where cooldown_delta = max(room_temp, setpoint) - eco_setpoint.
-            # This avoids using the raw cooling_rate_c_per_hour directly, which is
-            # the uncapped rate and can be much higher than what hours_to_eco implies.
+            # Prefer the last directly-observed cooling rate (adjusted for the
+            # current indoor-outdoor delta) over the model estimate, because the
+            # rolling_cooling_factor can be corrupted by short/noisy sessions.
             if (
                 planner_kind == PLANNER_KIND_THERMOSTAT
                 and room_temperature is not None
@@ -617,19 +614,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if room_temperature <= thermostat_eco_setpoint:
                     result.room_cooling_hours_to_eco = 0.0
                 else:
-                    _model_hours = cooling_profile.get("hours_to_eco")
-                    _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
-                    _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
                     _current_delta = room_temperature - thermostat_eco_setpoint
-                    if _model_hours is not None and _cooldown_delta > 0:
+                    _last_rate = cooling_profile.get("last_observed_rate_c_per_hour")
+                    _last_delta_t = cooling_profile.get("last_observed_delta_temp_c")
+                    _current_delta_t = (
+                        room_temperature - outdoor_temperature
+                        if outdoor_temperature is not None else None
+                    )
+                    if (
+                        _last_rate is not None
+                        and _last_rate > 0
+                        and _last_delta_t is not None
+                        and _last_delta_t > 0
+                        and _current_delta_t is not None
+                        and _current_delta_t > 0
+                    ):
+                        # Scale observed rate for current indoor-outdoor differential.
+                        _adjusted_rate = _last_rate * (_current_delta_t / _last_delta_t)
                         result.room_cooling_hours_to_eco = round(
-                            (_current_delta / _cooldown_delta) * _model_hours, 2
+                            _current_delta / max(_adjusted_rate, 0.01), 2
                         )
                     else:
-                        _rate = cooling_profile.get("cooling_rate_c_per_hour") or 0.0
-                        if _rate > 0:
+                        # Fallback: proportional scaling from model hours
+                        _model_hours = cooling_profile.get("hours_to_eco")
+                        _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
+                        _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
+                        if _model_hours is not None and _cooldown_delta > 0:
                             result.room_cooling_hours_to_eco = round(
-                                _current_delta / _rate, 2
+                                (_current_delta / _cooldown_delta) * _model_hours, 2
                             )
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
@@ -1180,7 +1192,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "hours_to_eco": None,
                 "cooling_rate_c_per_hour": None,
                 "reference_outdoor_temp_c": outdoor_temperature_c,
+                "last_observed_rate_c_per_hour": None,
+                "last_observed_delta_temp_c": None,
             }
+
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        cooling_model = runtime_state.get("cooling_model", {})
+        last_observed_rate = _coerce_float(cooling_model.get("last_observed_drop_c_per_hour"))
+        last_observed_delta = _coerce_float(cooling_model.get("last_delta_temp_c"))
 
         cooldown_reference_temperature = max(room_temperature_c, thermostat_setpoint_c)
         cooldown_delta = max(cooldown_reference_temperature - thermostat_eco_setpoint_c, 0.3)
@@ -1195,6 +1214,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "hours_to_eco": round(hours_to_eco, 2),
             "cooling_rate_c_per_hour": round(estimated_rate, 3),
             "reference_outdoor_temp_c": reference_outdoor,
+            "last_observed_rate_c_per_hour": last_observed_rate,
+            "last_observed_delta_temp_c": last_observed_delta,
         }
 
     def _estimate_cooling_profile_from_model(
@@ -1222,7 +1243,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            learned_rate = max(0.03, min(2.0, learned_factor * delta_temp))
+            # Cap the stored factor to a physically plausible range.  The model
+            # can accumulate a corrupted (too-high) factor from early short
+            # partial sessions with high apparent cooling rates; clamping it
+            # prevents those artifacts from permanently dominating the estimate.
+            clamped_factor = min(learned_factor, 10.0 * _THERMOSTAT_FALLBACK_COOLING_FACTOR)
+            learned_rate = max(0.03, min(2.0, clamped_factor * delta_temp))
             blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
             estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
             estimated_hours = min(
