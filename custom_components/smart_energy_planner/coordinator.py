@@ -600,6 +600,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 result.room_cooling_rate_c_per_hour = cooling_profile["cooling_rate_c_per_hour"]
                 result.cooling_reference_outdoor_temp_c = cooling_profile["reference_outdoor_temp_c"]
                 result.rationale = "thermostat planning degraded after runtime error; using normal mode"
+            # Override the sensor with the actual REMAINING cooling time from the
+            # current room temperature, so it shows "time until eco temp is reached
+            # from now" rather than the model-based time from setpoint.
+            if (
+                planner_kind == PLANNER_KIND_THERMOSTAT
+                and room_temperature is not None
+                and thermostat_eco_setpoint is not None
+            ):
+                _rate = cooling_profile.get("cooling_rate_c_per_hour") or 0.0
+                if room_temperature <= thermostat_eco_setpoint:
+                    result.room_cooling_hours_to_eco = 0.0
+                elif _rate > 0:
+                    result.room_cooling_hours_to_eco = round(
+                        (room_temperature - thermostat_eco_setpoint) / _rate, 2
+                    )
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
