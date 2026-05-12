@@ -58,7 +58,7 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
-from .coordinator import SmartEnergyPlannerCoordinator, _THERMOSTAT_MAX_COOLDOWN_HOURS
+from .coordinator import SmartEnergyPlannerCoordinator, _THERMOSTAT_FALLBACK_COOLING_FACTOR, _THERMOSTAT_MAX_COOLDOWN_HOURS
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
@@ -560,7 +560,13 @@ async def _async_update_cooling_model(
     average_outdoor_temp = (start_outdoor_temp + end_outdoor_temp) / 2
     average_delta_temp = max(average_room_temp - average_outdoor_temp, 0.5)
     cooling_rate = cooling_drop / elapsed_hours
-    normalized_cooling_rate = cooling_rate / average_delta_temp
+    # Cap normalized rate to 10× the conservative fallback factor so that
+    # noisy short sessions (e.g. from rapid eco on/off oscillation) cannot
+    # corrupt the rolling_cooling_factor with unrealistically high values.
+    normalized_cooling_rate = min(
+        cooling_rate / average_delta_temp,
+        10.0 * _THERMOSTAT_FALLBACK_COOLING_FACTOR,
+    )
 
     if partial:
         # Project what the full cooling duration would have been at the observed
