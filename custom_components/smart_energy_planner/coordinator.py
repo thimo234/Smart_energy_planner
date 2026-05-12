@@ -543,6 +543,43 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 _rs["smoothed_eco_hours"] = smoothed
                 cooling_profile["hours_to_eco"] = smoothed
 
+            # Eco window duration = time to cool from the CURRENT room temperature to the
+            # eco setpoint, so the scheduled eco block always covers the full cool-down
+            # starting from wherever the room actually is right now.
+            cooling_hours_from_current: float | None = None
+            if (
+                planner_kind == PLANNER_KIND_THERMOSTAT
+                and room_temperature is not None
+                and thermostat_eco_setpoint is not None
+            ):
+                if room_temperature <= thermostat_eco_setpoint:
+                    cooling_hours_from_current = 0.0
+                else:
+                    _cur_delta = room_temperature - thermostat_eco_setpoint
+                    _last_rate = cooling_profile.get("last_observed_rate_c_per_hour")
+                    _last_delta_t = cooling_profile.get("last_observed_delta_temp_c")
+                    _cur_delta_t = (
+                        room_temperature - outdoor_temperature
+                        if outdoor_temperature is not None else None
+                    )
+                    if (
+                        _last_rate is not None and _last_rate > 0
+                        and _last_delta_t is not None and _last_delta_t > 0
+                        and _cur_delta_t is not None and _cur_delta_t > 0
+                    ):
+                        _adjusted_rate = _last_rate * (_cur_delta_t / _last_delta_t)
+                        cooling_hours_from_current = round(
+                            min(_cur_delta / max(_adjusted_rate, 0.01), _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
+                        )
+                    else:
+                        _model_hours = cooling_profile.get("hours_to_eco")
+                        _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
+                        _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
+                        if _model_hours is not None and _cooldown_delta > 0:
+                            cooling_hours_from_current = round(
+                                min((_cur_delta / _cooldown_delta) * _model_hours, _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
+                            )
+
             try:
                 result = self._build_plan(
                     planner_kind=planner_kind,
@@ -568,7 +605,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     thermostat_cool_setpoint_c=thermostat_cool_setpoint,
                     thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                     thermostat_eco_setpoint_c=thermostat_eco_setpoint,
-                    room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
+                    room_cooling_hours_to_eco=cooling_hours_from_current if cooling_hours_from_current is not None else cooling_profile.get("hours_to_eco"),
                     room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
                     cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
                     battery_soc_percent=battery_soc_percent,
@@ -600,49 +637,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 result.room_cooling_rate_c_per_hour = cooling_profile["cooling_rate_c_per_hour"]
                 result.cooling_reference_outdoor_temp_c = cooling_profile["reference_outdoor_temp_c"]
                 result.rationale = "thermostat planning degraded after runtime error; using normal mode"
-            # Override the sensor with the actual REMAINING cooling time from the
-            # current room temperature, so it shows "time until eco temp is reached
-            # from now" rather than the model-based time from setpoint.
-            # Prefer the last directly-observed cooling rate (adjusted for the
-            # current indoor-outdoor delta) over the model estimate, because the
-            # rolling_cooling_factor can be corrupted by short/noisy sessions.
-            if (
-                planner_kind == PLANNER_KIND_THERMOSTAT
-                and room_temperature is not None
-                and thermostat_eco_setpoint is not None
-            ):
-                if room_temperature <= thermostat_eco_setpoint:
-                    result.room_cooling_hours_to_eco = 0.0
-                else:
-                    _current_delta = room_temperature - thermostat_eco_setpoint
-                    _last_rate = cooling_profile.get("last_observed_rate_c_per_hour")
-                    _last_delta_t = cooling_profile.get("last_observed_delta_temp_c")
-                    _current_delta_t = (
-                        room_temperature - outdoor_temperature
-                        if outdoor_temperature is not None else None
-                    )
-                    if (
-                        _last_rate is not None
-                        and _last_rate > 0
-                        and _last_delta_t is not None
-                        and _last_delta_t > 0
-                        and _current_delta_t is not None
-                        and _current_delta_t > 0
-                    ):
-                        # Scale observed rate for current indoor-outdoor differential.
-                        _adjusted_rate = _last_rate * (_current_delta_t / _last_delta_t)
-                        result.room_cooling_hours_to_eco = round(
-                            _current_delta / max(_adjusted_rate, 0.01), 2
-                        )
-                    else:
-                        # Fallback: proportional scaling from model hours
-                        _model_hours = cooling_profile.get("hours_to_eco")
-                        _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
-                        _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
-                        if _model_hours is not None and _cooldown_delta > 0:
-                            result.room_cooling_hours_to_eco = round(
-                                (_current_delta / _cooldown_delta) * _model_hours, 2
-                            )
+            if cooling_hours_from_current is not None:
+                result.room_cooling_hours_to_eco = cooling_hours_from_current
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
@@ -1423,52 +1419,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return sorted(peak_blocks, key=lambda item: item["start"])
 
-    def _select_thermostat_eco_window(
-        self,
-        *,
-        windows: list[PlannerWindow],
-        now: datetime,
-        cooldown_hours: float,
-    ) -> list[dict[str, datetime | float]]:
-        """Find the single most expensive contiguous block of cooldown_hours.
-
-        Searches all price windows (not just expensive peaks) so the eco window
-        is always cooldown_hours long, placed at the most expensive time of day.
-        Includes a lookback of cooldown_hours to detect blocks already in progress.
-        """
-        if cooldown_hours <= 0:
-            return []
-
-        lookback_start = now - timedelta(hours=cooldown_hours)
-        eligible = [w for w in windows if w.end > lookback_start]
-        if not eligible:
-            return []
-
-        best: dict[str, datetime | float] | None = None
-        for i, start_win in enumerate(eligible):
-            block_start = start_win.start  # not clipped — allows detecting ongoing blocks
-            accumulated = 0.0
-            weighted = 0.0
-            block_end = block_start
-            for w in eligible[i:]:
-                usable_start = max(w.start, block_end)
-                usable_hours = (w.end - usable_start).total_seconds() / 3600
-                if usable_hours <= 0:
-                    continue
-                take = min(usable_hours, cooldown_hours - accumulated)
-                weighted += w.price * take
-                accumulated += take
-                block_end = usable_start + timedelta(hours=take)
-                if accumulated >= cooldown_hours:
-                    avg = weighted / accumulated
-                    if best is None or avg > float(best["average_price"]):
-                        best = {"start": block_start, "end": block_end, "average_price": avg}
-                    break
-
-        if best is None or cast(datetime, best["end"]) <= now:
-            return []
-        return [best]
-
     def _select_thermostat_peak_eco_windows(
         self,
         *,
@@ -1744,10 +1694,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if price_signal_available:
             try:
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    eco_windows = self._select_thermostat_eco_window(
+                    eco_windows = self._select_thermostat_peak_eco_windows(
                         windows=all_windows,
                         now=now,
                         cooldown_hours=eco_duration_hours,
+                        average_price=average_price,
+                        expensive_threshold=eco_expensive_threshold,
                     )
                 else:
                     eco_windows = self._select_expensive_peak_blocks(
