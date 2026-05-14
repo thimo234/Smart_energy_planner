@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_BATTERY_SOLAR_SAFETY_FACTOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
@@ -46,6 +47,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_BATTERY_SOLAR_SAFETY_FACTOR,
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
@@ -274,6 +276,14 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 ),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=50, step=0.1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_BATTERY_SOLAR_SAFETY_FACTOR,
+                default=user_input.get(
+                    CONF_BATTERY_SOLAR_SAFETY_FACTOR, DEFAULT_BATTERY_SOLAR_SAFETY_FACTOR
+                ),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.5, max=1.0, step=0.05, mode=selector.NumberSelectorMode.SLIDER)
             ),
         }
     )
