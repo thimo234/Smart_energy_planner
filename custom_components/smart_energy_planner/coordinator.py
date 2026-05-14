@@ -1744,23 +1744,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         # Preheat ends exactly when the eco window begins (window["start"]), so the
         # room warms up before eco drops the setpoint — not during it.
-        preheat_windows = [
-            {
-                "start": max(
-                    cast(datetime, window["start"]) - timedelta(minutes=preheat_minutes),
-                    now.replace(hour=0, minute=0, second=0, microsecond=0),
-                ),
-                "end": cast(datetime, window["start"]),
-                "average_price": window["average_price"],
-            }
-            for window in eco_windows
-            if preheat_minutes > 0
-        ]
-        preheat_windows = [
-            window
-            for window in preheat_windows
-            if window["end"] > now
-        ]
+        # With multiple eco peaks, clamp each preheat start to not overlap with the
+        # preceding eco window — otherwise preheat for peak N+1 suppresses eco for peak N.
+        sorted_eco_for_preheat = sorted(eco_windows, key=lambda w: w["start"])
+        preheat_windows = []
+        for idx, eco_win in enumerate(sorted_eco_for_preheat):
+            if preheat_minutes <= 0:
+                break
+            eco_start = cast(datetime, eco_win["start"])
+            raw_start = eco_start - timedelta(minutes=preheat_minutes)
+            prev_eco_end = cast(datetime, sorted_eco_for_preheat[idx - 1]["end"]) if idx > 0 else None
+            clamped_start = max(
+                raw_start,
+                now.replace(hour=0, minute=0, second=0, microsecond=0),
+                *(([prev_eco_end]) if prev_eco_end is not None else []),
+            )
+            if clamped_start < eco_start and eco_start > now:
+                preheat_windows.append(
+                    {"start": clamped_start, "end": eco_start, "average_price": eco_win["average_price"]}
+                )
         preheat_window = next(
             (
                 window
@@ -2079,7 +2081,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         elif planner_kind == PLANNER_KIND_THERMOSTAT and cheap_now and any(
             cast(datetime, w["start"]) > now for w in eco_windows
         ):
-            heat_pump_strategy = "preheating"
+            heat_pump_strategy = "normal"
             score += 4
             rationale_parts.append(
                 "price is cheap now and an eco window is upcoming: good time to preheat the floor"
