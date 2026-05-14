@@ -25,6 +25,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_BATTERY_SOLAR_SAFETY_FACTOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
     CONF_HEATING_SWITCH_ENTITY,
@@ -47,6 +48,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_BATTERY_SOLAR_SAFETY_FACTOR,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_TEMP,
@@ -1927,6 +1929,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
         )
+        solar_safety_factor = max(
+            0.1,
+            min(1.0, float(self._config.get(CONF_BATTERY_SOLAR_SAFETY_FACTOR, DEFAULT_BATTERY_SOLAR_SAFETY_FACTOR))),
+        )
         planned_solar_charge_windows, planned_grid_charge_windows = self._plan_charge_windows_for_horizon(
             slots=energy_balance_slots,
             now=now,
@@ -1934,6 +1940,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
             battery_min_profit=battery_min_profit,
+            solar_safety_factor=solar_safety_factor,
         )
         next_planned_solar_charge_start = min(
             (
@@ -2608,6 +2615,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
         battery_min_profit: float,
+        solar_safety_factor: float = 1.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2634,8 +2642,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
         # Per-cycle productive solar for independent grid-charge limits.
+        # The solar_safety_factor discounts the expected solar so that the planner
+        # schedules extra grid charging to cover forecast uncertainty.
         current_cycle_solar_kwh = round(
-            sum(
+            solar_safety_factor * sum(
                 min(max_charge_kw * float(s["hours"]), max(0.0, float(s["net_solar_kwh"])))
                 for s in future_slots
                 if s["start"] < cycle_end and s["start"] in productive_solar_slot_starts
@@ -2643,7 +2653,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             6,
         )
         next_cycle_solar_kwh = round(
-            sum(
+            solar_safety_factor * sum(
                 min(max_charge_kw * float(s["hours"]), max(0.0, float(s["net_solar_kwh"])))
                 for s in future_slots
                 if s["start"] >= cycle_end and s["start"] in productive_solar_slot_starts
