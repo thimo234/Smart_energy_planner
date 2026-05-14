@@ -2081,7 +2081,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         elif planner_kind == PLANNER_KIND_THERMOSTAT and cheap_now and any(
             cast(datetime, w["start"]) > now for w in eco_windows
         ):
-            heat_pump_strategy = "preheating"
+            heat_pump_strategy = "normal"
             score += 4
             rationale_parts.append(
                 "price is cheap now and an eco window is upcoming: good time to preheat the floor"
