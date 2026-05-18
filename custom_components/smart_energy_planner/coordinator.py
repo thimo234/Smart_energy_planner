@@ -2915,59 +2915,69 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # Extend the solar charge window to cover until the first discharge slot that
-        # comes AFTER the last selected solar slot, so the battery stays in laden mode
-        # rather than going idle between the planned peak charge window and the start
-        # of the evening discharge.  The global first_discharge_slot_start may be
-        # today's evening (before tomorrow's solar), so we compute the cutoff relative
-        # to last_selected_solar_end instead.
+        # Once a solar charge block has started, keep the inverter in
+        # laden_met_zonne_energie for the rest of that productive solar period.
+        # The economic selector above may pick only the cheapest productive slots;
+        # without this continuity pass the public strategy can alternate between
+        # accu_uit and laden_met_zonne_energie while the user still sees one solar
+        # charge window.  Starting at the first selected solar slot (not the last)
+        # fills any productive gaps inside the same daylight period and also keeps
+        # the existing tail extension until the first post-solar deficit slot.
         if planned_solar_charge_windows:
-            last_selected_solar_end = max(
+            first_selected_solar_start = min(
                 (
-                    slot["end"]
+                    cast(datetime, slot["start"])
                     for slot in future_slots
                     if slot["start"] in selected_solar_charge_by_start
                 ),
                 default=None,
             )
-            if last_selected_solar_end is not None:
-                # First slot after the selected window where solar goes negative (evening).
+            if first_selected_solar_start is not None:
+                # First slot after the selected block starts where solar goes
+                # negative (evening).  Until then every productive solar slot is
+                # part of the active charge window once charging has begun.
                 post_solar_discharge_start = next(
                     (
                         slot["start"]
                         for slot in future_slots
-                        if slot["start"] >= last_selected_solar_end
+                        if slot["start"] >= first_selected_solar_start
                         and float(slot.get("net_solar_kwh", 0)) < -0.05
                     ),
                     None,
                 )
-                if post_solar_discharge_start is not None:
-                    for slot in future_slots:
-                        if slot["start"] < last_selected_solar_end:
-                            continue
-                        if slot["start"] >= post_solar_discharge_start:
-                            break
-                        if slot["start"] not in productive_solar_slot_starts:
-                            continue
-                        extension_charge_kwh = min(
-                            max_charge_kw * float(slot["hours"]),
-                            max(0.0, float(slot["net_solar_kwh"])),
-                        )
-                        if extension_charge_kwh <= 0:
-                            continue
-                        planned_solar_charge_windows.append(
-                            {
-                                "start": slot["start"].isoformat(),
-                                "end": slot["end"].isoformat(),
-                                "price": round(
-                                    float(slot["export_price"])
-                                    if has_export_price_sensor
-                                    else float(slot["import_price"]) - 0.15,
-                                    6,
-                                ),
-                                "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
-                            }
-                        )
+                solar_charge_period_end = post_solar_discharge_start or max(
+                    (cast(datetime, slot["end"]) for slot in future_slots),
+                    default=first_selected_solar_start,
+                )
+                for slot in future_slots:
+                    slot_start = cast(datetime, slot["start"])
+                    if slot_start < first_selected_solar_start:
+                        continue
+                    if slot_start >= solar_charge_period_end:
+                        break
+                    if slot_start not in productive_solar_slot_starts:
+                        continue
+                    if slot_start in selected_solar_charge_by_start:
+                        continue
+                    extension_charge_kwh = min(
+                        max_charge_kw * float(slot["hours"]),
+                        max(0.0, float(slot["net_solar_kwh"])),
+                    )
+                    if extension_charge_kwh <= 0:
+                        continue
+                    planned_solar_charge_windows.append(
+                        {
+                            "start": slot_start.isoformat(),
+                            "end": cast(datetime, slot["end"]).isoformat(),
+                            "price": round(
+                                float(slot["export_price"])
+                                if has_export_price_sensor
+                                else float(slot["import_price"]) - 0.15,
+                                6,
+                            ),
+                            "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
+                        }
+                    )
 
         for slot in future_slots:
             slot_charge_kwh = float(selected_grid_charge_by_start.get(slot["start"], 0.0))
