@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
+import re
 import statistics
 from typing import Any, cast
 
@@ -28,6 +30,7 @@ from .const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
+    CONF_EXPORT_PRICE_FORMULA,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
@@ -49,6 +52,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_EXPORT_PRICE_FORMULA,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_TEMP,
@@ -77,6 +81,71 @@ _THERMOSTAT_COOLING_LEARN_SAMPLES = 3
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
+
+_EXPORT_PRICE_FORMULA_FUNCTIONS = {"abs": abs, "max": max, "min": min, "round": round}
+
+
+def _normalize_price_formula(formula: str) -> str:
+    """Normalize Dutch-friendly cents notation before safe formula evaluation."""
+
+    normalized = formula.strip().replace(",", ".")
+    return re.sub(
+        r"(?i)\b(\d+(?:\.\d+)?)\s*(?:cent|cents|ct)\b",
+        lambda match: str(float(match.group(1)) / 100.0),
+        normalized,
+    )
+
+
+def _safe_eval_price_formula(formula: str, *, price: float) -> float:
+    """Evaluate a small arithmetic formula using the import price as input."""
+
+    normalized = _normalize_price_formula(formula)
+    if not normalized:
+        normalized = DEFAULT_EXPORT_PRICE_FORMULA
+
+    # Convenience mode: a bare number means "this much below import".
+    # Values greater than one are treated as cents, so both "11" and "0.11"
+    # represent an 11 cent/kWh discount.
+    bare_number = _coerce_float(normalized)
+    if bare_number is not None:
+        discount = bare_number / 100.0 if abs(bare_number) > 1 else bare_number
+        return price - discount
+
+    tree = ast.parse(normalized, mode="eval")
+
+    def _eval(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _eval(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+            return float(node.value)
+        if isinstance(node, ast.Name):
+            if node.id in ("price", "import_price", "inkoopprijs"):
+                return price
+            raise ValueError(f"unknown name {node.id!r}")
+        if isinstance(node, ast.UnaryOp):
+            operand = _eval(node.operand)
+            if isinstance(node.op, ast.UAdd):
+                return operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+        if isinstance(node, ast.BinOp):
+            left = _eval(node.left)
+            right = _eval(node.right)
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            function = _EXPORT_PRICE_FORMULA_FUNCTIONS.get(node.func.id)
+            if function is not None and not node.keywords:
+                return float(function(*(_eval(arg) for arg in node.args)))
+        raise ValueError(f"unsupported expression {ast.dump(node, include_attributes=False)}")
+
+    return _eval(tree)
 
 
 @dataclass(slots=True)
@@ -310,10 +379,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 self._cancel_source_error_retry()
 
             current_price = _coerce_float(price_state.state) if price_state else None
+            export_price_formula = self._export_price_formula()
             export_current_price = (
                 _coerce_float(export_price_state.state)
                 if export_price_state
-                else current_price
+                else self._derive_export_price(current_price, export_price_formula)
             )
             price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
             windows = self._extract_price_windows(
@@ -327,17 +397,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_resolution,
                 include_past=True,
             )
-            export_windows = self._extract_price_windows(
-                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
-                export_current_price,
-                price_resolution,
-            )
-            all_export_windows = self._extract_price_windows(
-                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
-                export_current_price,
-                price_resolution,
-                include_past=True,
-            )
+            if export_price_state:
+                export_windows = self._extract_price_windows(
+                    export_price_state.attributes,
+                    export_current_price,
+                    price_resolution,
+                )
+                all_export_windows = self._extract_price_windows(
+                    export_price_state.attributes,
+                    export_current_price,
+                    price_resolution,
+                    include_past=True,
+                )
+            else:
+                export_windows = self._derive_export_price_windows(windows, export_price_formula)
+                all_export_windows = self._derive_export_price_windows(all_windows, export_price_formula)
             battery_switch_windows = self._build_battery_switch_windows(
                 attributes=price_state.attributes if price_state else {},
                 current_price=current_price,
@@ -349,7 +423,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 windows,
             )
             export_price_average = self._extract_price_average(
-                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_price_state.attributes if export_price_state else {},
                 export_windows,
             )
 
@@ -2631,7 +2705,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
         target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
 
-        has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
             max_charge_kw=max_charge_kw,
@@ -2915,59 +2988,64 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # Extend the solar charge window to cover until the first discharge slot that
-        # comes AFTER the last selected solar slot, so the battery stays in laden mode
-        # rather than going idle between the planned peak charge window and the start
-        # of the evening discharge.  The global first_discharge_slot_start may be
-        # today's evening (before tomorrow's solar), so we compute the cutoff relative
-        # to last_selected_solar_end instead.
+        # Once a solar charge block has started, keep the inverter in
+        # laden_met_zonne_energie for the rest of that productive solar period.
+        # The economic selector above may pick only the cheapest productive slots;
+        # without this continuity pass the public strategy can alternate between
+        # accu_uit and laden_met_zonne_energie while the user still sees one solar
+        # charge window.  Starting at the first selected solar slot (not the last)
+        # fills any productive gaps inside the same daylight period and also keeps
+        # the existing tail extension until the first post-solar deficit slot.
         if planned_solar_charge_windows:
-            last_selected_solar_end = max(
+            first_selected_solar_start = min(
                 (
-                    slot["end"]
+                    cast(datetime, slot["start"])
                     for slot in future_slots
                     if slot["start"] in selected_solar_charge_by_start
                 ),
                 default=None,
             )
-            if last_selected_solar_end is not None:
-                # First slot after the selected window where solar goes negative (evening).
+            if first_selected_solar_start is not None:
+                # First slot after the selected block starts where solar goes
+                # negative (evening).  Until then every productive solar slot is
+                # part of the active charge window once charging has begun.
                 post_solar_discharge_start = next(
                     (
                         slot["start"]
                         for slot in future_slots
-                        if slot["start"] >= last_selected_solar_end
+                        if slot["start"] >= first_selected_solar_start
                         and float(slot.get("net_solar_kwh", 0)) < -0.05
                     ),
                     None,
                 )
-                if post_solar_discharge_start is not None:
-                    for slot in future_slots:
-                        if slot["start"] < last_selected_solar_end:
-                            continue
-                        if slot["start"] >= post_solar_discharge_start:
-                            break
-                        if slot["start"] not in productive_solar_slot_starts:
-                            continue
-                        extension_charge_kwh = min(
-                            max_charge_kw * float(slot["hours"]),
-                            max(0.0, float(slot["net_solar_kwh"])),
-                        )
-                        if extension_charge_kwh <= 0:
-                            continue
-                        planned_solar_charge_windows.append(
-                            {
-                                "start": slot["start"].isoformat(),
-                                "end": slot["end"].isoformat(),
-                                "price": round(
-                                    float(slot["export_price"])
-                                    if has_export_price_sensor
-                                    else float(slot["import_price"]) - 0.15,
-                                    6,
-                                ),
-                                "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
-                            }
-                        )
+                solar_charge_period_end = post_solar_discharge_start or max(
+                    (cast(datetime, slot["end"]) for slot in future_slots),
+                    default=first_selected_solar_start,
+                )
+                for slot in future_slots:
+                    slot_start = cast(datetime, slot["start"])
+                    if slot_start < first_selected_solar_start:
+                        continue
+                    if slot_start >= solar_charge_period_end:
+                        break
+                    if slot_start not in productive_solar_slot_starts:
+                        continue
+                    if slot_start in selected_solar_charge_by_start:
+                        continue
+                    extension_charge_kwh = min(
+                        max_charge_kw * float(slot["hours"]),
+                        max(0.0, float(slot["net_solar_kwh"])),
+                    )
+                    if extension_charge_kwh <= 0:
+                        continue
+                    planned_solar_charge_windows.append(
+                        {
+                            "start": slot_start.isoformat(),
+                            "end": cast(datetime, slot["end"]).isoformat(),
+                            "price": round(float(slot["export_price"]), 6),
+                            "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
+                        }
+                    )
 
         for slot in future_slots:
             slot_charge_kwh = float(selected_grid_charge_by_start.get(slot["start"], 0.0))
@@ -3395,13 +3473,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         now: datetime,
         active_charge_phase: dict[str, datetime] | None,
+        charge_phase_clusters: list[dict[str, datetime]],
         current_mode: str,
         last_charge_mode: str,
         active_charge_phase_mode: str,
     ) -> None:
         if active_charge_phase is not None and active_charge_phase["start"] <= now < active_charge_phase["end"]:
-            self._active_charge_phase_end = active_charge_phase["end"]
-            self._active_charge_phase_mode = (
+            locked_mode = (
                 current_mode
                 if current_mode in ("laden_met_zonne_energie", "laden_van_net")
                 else (
@@ -3410,7 +3488,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     else active_charge_phase_mode
                 )
             )
-            return
+            if locked_mode in ("laden_met_zonne_energie", "laden_van_net"):
+                # Once a charge command has become active, keep the battery in a
+                # charge mode until the planned charge session has completed.
+                # Replanning can otherwise drop the current slot when SOC/solar
+                # changes, which makes automations bounce between accu_uit and
+                # charging.  The lock is intentionally limited to the current
+                # calendar-day cycle so tomorrow's charge plan does not keep the
+                # inverter charging overnight.
+                cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                self._active_charge_phase_end = max(
+                    (
+                        cluster["end"]
+                        for cluster in charge_phase_clusters
+                        if cluster["end"] > now and cluster["start"] < cycle_end
+                    ),
+                    default=active_charge_phase["end"],
+                )
+                self._active_charge_phase_mode = locked_mode
+                return
 
         self._active_charge_phase_end = None
         self._active_charge_phase_mode = "accu_uit"
@@ -3700,6 +3796,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._update_active_charge_phase_state(
             now=now,
             active_charge_phase=active_charge_phase,
+            charge_phase_clusters=charge_phase_clusters,
             current_mode=current_mode,
             last_charge_mode=last_charge_mode,
             active_charge_phase_mode=active_charge_phase_mode,
@@ -4133,6 +4230,43 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows = self._aggregate_price_windows_to_hourly(windows)
 
         return sorted(windows, key=lambda item: item.start)
+
+    def _export_price_formula(self) -> str:
+        """Return the configured export price formula used without a dedicated export sensor."""
+
+        formula = self._config.get(CONF_EXPORT_PRICE_FORMULA, DEFAULT_EXPORT_PRICE_FORMULA)
+        return str(formula or DEFAULT_EXPORT_PRICE_FORMULA)
+
+    def _derive_export_price(self, import_price: float | None, formula: str) -> float | None:
+        """Calculate export price from import price and the configured formula."""
+
+        if import_price is None:
+            return None
+        try:
+            return float(_safe_eval_price_formula(formula, price=import_price))
+        except (SyntaxError, TypeError, ValueError, ZeroDivisionError) as err:
+            _LOGGER.warning(
+                "Invalid export price formula %r; falling back to import price %.6f: %s",
+                formula,
+                import_price,
+                err,
+            )
+            return import_price
+
+    def _derive_export_price_windows(
+        self,
+        windows: list[PlannerWindow],
+        formula: str,
+    ) -> list[PlannerWindow]:
+        """Build export price windows from import price windows using the formula."""
+
+        derived: list[PlannerWindow] = []
+        for window in windows:
+            derived_price = self._derive_export_price(window.price, formula)
+            if derived_price is None:
+                continue
+            derived.append(PlannerWindow(start=window.start, end=window.end, price=derived_price))
+        return derived
 
     def _extract_price_average(
         self,
