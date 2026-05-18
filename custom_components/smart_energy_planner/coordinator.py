@@ -3042,7 +3042,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         {
                             "start": slot_start.isoformat(),
                             "end": cast(datetime, slot["end"]).isoformat(),
-                            "price": round(float(slot["export_price"]), 6),
+                            "price": round(
+                                float(slot["export_price"])
+                                if has_export_price_sensor
+                                else float(slot["import_price"]) - 0.15,
+                                6,
+                            ),
                             "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
                         }
                     )
