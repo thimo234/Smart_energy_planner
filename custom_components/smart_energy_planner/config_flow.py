@@ -23,6 +23,7 @@ from .const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
+    CONF_EXPORT_PRICE_FORMULA,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_NAME,
     CONF_PLANNER_KIND,
@@ -48,6 +49,7 @@ from .const import (
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
+    DEFAULT_EXPORT_PRICE_FORMULA,
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
@@ -206,6 +208,10 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 _filter_price_sensors(hass),
                 current_value=user_input.get(CONF_EXPORT_PRICE_SENSOR),
             ),
+            vol.Required(
+                CONF_EXPORT_PRICE_FORMULA,
+                default=user_input.get(CONF_EXPORT_PRICE_FORMULA, DEFAULT_EXPORT_PRICE_FORMULA),
+            ): selector.TextSelector(),
             vol.Required(
                 CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
             ): _entity_selector(
