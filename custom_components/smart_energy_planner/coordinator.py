@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import ast
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
-import re
 import statistics
 from typing import Any, cast
 
-from homeassistant.components.recorder import get_instance as get_recorder_instance, history
+from homeassistant.components.recorder import history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -22,7 +19,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
-    CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_SOC_PERCENT,
@@ -30,7 +26,6 @@ from .const import (
     CONF_BATTERY_SOC_SENSOR,
     CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
-    CONF_EXPORT_PRICE_FORMULA,
     CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
@@ -47,12 +42,10 @@ from .const import (
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
-    DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
-    DEFAULT_EXPORT_PRICE_FORMULA,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
     DEFAULT_THERMOSTAT_MIN_TEMP,
@@ -81,71 +74,6 @@ _THERMOSTAT_COOLING_LEARN_SAMPLES = 3
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
-
-_EXPORT_PRICE_FORMULA_FUNCTIONS = {"abs": abs, "max": max, "min": min, "round": round}
-
-
-def _normalize_price_formula(formula: str) -> str:
-    """Normalize Dutch-friendly cents notation before safe formula evaluation."""
-
-    normalized = formula.strip().replace(",", ".")
-    return re.sub(
-        r"(?i)\b(\d+(?:\.\d+)?)\s*(?:cent|cents|ct)\b",
-        lambda match: str(float(match.group(1)) / 100.0),
-        normalized,
-    )
-
-
-def _safe_eval_price_formula(formula: str, *, price: float) -> float:
-    """Evaluate a small arithmetic formula using the import price as input."""
-
-    normalized = _normalize_price_formula(formula)
-    if not normalized:
-        normalized = DEFAULT_EXPORT_PRICE_FORMULA
-
-    # Convenience mode: a bare number means "this much below import".
-    # Values greater than one are treated as cents, so both "11" and "0.11"
-    # represent an 11 cent/kWh discount.
-    bare_number = _coerce_float(normalized)
-    if bare_number is not None:
-        discount = bare_number / 100.0 if abs(bare_number) > 1 else bare_number
-        return price - discount
-
-    tree = ast.parse(normalized, mode="eval")
-
-    def _eval(node: ast.AST) -> float:
-        if isinstance(node, ast.Expression):
-            return _eval(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
-            return float(node.value)
-        if isinstance(node, ast.Name):
-            if node.id in ("price", "import_price", "inkoopprijs"):
-                return price
-            raise ValueError(f"unknown name {node.id!r}")
-        if isinstance(node, ast.UnaryOp):
-            operand = _eval(node.operand)
-            if isinstance(node.op, ast.UAdd):
-                return operand
-            if isinstance(node.op, ast.USub):
-                return -operand
-        if isinstance(node, ast.BinOp):
-            left = _eval(node.left)
-            right = _eval(node.right)
-            if isinstance(node.op, ast.Add):
-                return left + right
-            if isinstance(node.op, ast.Sub):
-                return left - right
-            if isinstance(node.op, ast.Mult):
-                return left * right
-            if isinstance(node.op, ast.Div):
-                return left / right
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            function = _EXPORT_PRICE_FORMULA_FUNCTIONS.get(node.func.id)
-            if function is not None and not node.keywords:
-                return float(function(*(_eval(arg) for arg in node.args)))
-        raise ValueError(f"unsupported expression {ast.dump(node, include_attributes=False)}")
-
-    return _eval(tree)
 
 
 @dataclass(slots=True)
@@ -264,38 +192,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
-        self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
-        self._locked_eco_window: dict | None = None
-        self._locked_preheat_end: datetime | None = None
-        self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
-        self._source_error_retry_unsub: object | None = None
-        self._discharge_session_started: bool = False
-
-    @callback
-    def _schedule_source_error_retry(self) -> None:
-        if self._source_error_retry_unsub is not None:
-            return
-        # Self-repeating interval — fires every 30s while there are source
-        # errors and stops only when _cancel_source_error_retry runs.  This
-        # is robust against any code path failing to reschedule a one-shot
-        # timer (e.g. an unexpected exception inside _async_update_data).
-        _LOGGER.info("Smart Energy Planner: scheduling source error retry (every 30s)")
-        self._source_error_retry_unsub = async_track_time_interval(
-            self.hass,
-            self._handle_source_error_retry,
-            timedelta(seconds=30),
-        )
-
-    @callback
-    def _handle_source_error_retry(self, _now) -> None:
-        _LOGGER.info("Smart Energy Planner: source error retry firing")
-        self.hass.async_create_task(self.async_refresh())
-
-    def _cancel_source_error_retry(self) -> None:
-        if self._source_error_retry_unsub is not None:
-            _LOGGER.info("Smart Energy Planner: cancelling source error retry")
-            self._source_error_retry_unsub()
-            self._source_error_retry_unsub = None
+        self._eco_early_exit_until: datetime | None = None
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -336,18 +233,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
             battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
-            if battery_soc_sensor and battery_soc_state is None:
-                similar = sorted(
-                    s.entity_id
-                    for s in self.hass.states.async_all()
-                    if any(kw in s.entity_id.lower() for kw in ("zonnepanelen", "battery", "soc"))
-                )
-                _LOGGER.warning(
-                    "Battery SOC entity '%s' not found in state machine. Available similar entities: %s",
-                    battery_soc_sensor,
-                    similar or "none",
-                )
-
             source_status = self._build_source_status(
                 price_sensor=price_sensor,
                 price_state=price_state,
@@ -372,18 +257,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planner_kind=planner_kind,
             )
             source_errors = self._collect_source_errors(source_status)
-            if source_errors:
-                _LOGGER.warning("Smart Energy Planner source errors: %s", source_errors)
-                self._schedule_source_error_retry()
-            else:
-                self._cancel_source_error_retry()
 
             current_price = _coerce_float(price_state.state) if price_state else None
-            export_price_formula = self._export_price_formula()
             export_current_price = (
                 _coerce_float(export_price_state.state)
                 if export_price_state
-                else self._derive_export_price(current_price, export_price_formula)
+                else current_price
             )
             price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
             windows = self._extract_price_windows(
@@ -397,21 +276,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_resolution,
                 include_past=True,
             )
-            if export_price_state:
-                export_windows = self._extract_price_windows(
-                    export_price_state.attributes,
-                    export_current_price,
-                    price_resolution,
-                )
-                all_export_windows = self._extract_price_windows(
-                    export_price_state.attributes,
-                    export_current_price,
-                    price_resolution,
-                    include_past=True,
-                )
-            else:
-                export_windows = self._derive_export_price_windows(windows, export_price_formula)
-                all_export_windows = self._derive_export_price_windows(all_windows, export_price_formula)
+            export_windows = self._extract_price_windows(
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_current_price,
+                price_resolution,
+            )
+            all_export_windows = self._extract_price_windows(
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
+                export_current_price,
+                price_resolution,
+                include_past=True,
+            )
             battery_switch_windows = self._build_battery_switch_windows(
                 attributes=price_state.attributes if price_state else {},
                 current_price=current_price,
@@ -423,7 +298,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 windows,
             )
             export_price_average = self._extract_price_average(
-                export_price_state.attributes if export_price_state else {},
+                export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
                 export_windows,
             )
 
@@ -549,48 +424,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["room_temperature_sensor"] = "invalid_temperature_value"
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
-            if (
-                planner_kind == PLANNER_KIND_BATTERY
-                and battery_soc_state is not None
-                and battery_soc_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN, "")
-                and battery_soc_percent is None
-            ):
-                source_status["battery_soc_sensor"] = (
-                    f"invalid_battery_soc_value ({battery_soc_sensor}: state={battery_soc_state.state!r})"
-                )
-
-            # Re-check after late-discovered overrides (e.g. no_total_energy_history_yet
-            # is set above, after the initial retry decision at the top of this method).
-            late_source_errors = self._collect_source_errors(source_status)
-            if late_source_errors:
-                if late_source_errors != source_errors:
-                    _LOGGER.warning("Smart Energy Planner late source errors: %s", late_source_errors)
-                self._schedule_source_error_retry()
-            elif not source_errors:
-                self._cancel_source_error_retry()
+            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_state and battery_soc_percent is None:
+                source_status["battery_soc_sensor"] = "invalid_battery_soc_value"
 
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 total_energy_daily_average = 0.0
                 non_heating_daily_average = 0.0
                 heating_estimate = 0.0
-                hourly_demand_table: dict[str, float] = {}
+                historical_hourly_usage: dict[datetime, float] = {}
             else:
                 non_heating_daily_average = total_energy_daily_average
                 heating_estimate = 0.0
-                hourly_demand_table = {}
-                if total_energy_sensor and total_energy_state:
-                    current_energy = _coerce_float(total_energy_state.state)
-                    if current_energy is not None:
-                        hourly_demand_table = await self._async_update_hourly_demand_table(
-                            current_value=current_energy,
-                            now=now,
-                        )
-                    else:
-                        hourly_demand_table = dict(
-                            (self.hass.data.get(RUNTIME_STATE, {})
-                             .get(self.config_entry.entry_id, {})
-                             .get("hourly_demand_table") or {})
-                        )
+                historical_hourly_usage = await self._async_get_hourly_energy_usage(total_energy_sensor) if total_energy_sensor else {}
 
             cooling_profile = await self._async_estimate_room_cooling_profile(
                 room_temperature_sensor=room_temperature_sensor,
@@ -603,58 +448,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
-
-            # Apply EMA (α=0.2) to smooth hours_to_eco and suppress per-refresh noise.
-            raw_eco_hours = cooling_profile.get("hours_to_eco")
-            if raw_eco_hours is not None and planner_kind == PLANNER_KIND_THERMOSTAT:
-                _rs = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-                    self.config_entry.entry_id, {}
-                )
-                last_smoothed = _coerce_float(_rs.get("smoothed_eco_hours"))
-                smoothed = (
-                    round(last_smoothed + (raw_eco_hours - last_smoothed) * 0.2, 2)
-                    if last_smoothed is not None
-                    else round(raw_eco_hours, 2)
-                )
-                _rs["smoothed_eco_hours"] = smoothed
-                cooling_profile["hours_to_eco"] = smoothed
-
-            # Eco window duration = time to cool from the CURRENT room temperature to the
-            # eco setpoint, so the scheduled eco block always covers the full cool-down
-            # starting from wherever the room actually is right now.
-            cooling_hours_from_current: float | None = None
-            if (
-                planner_kind == PLANNER_KIND_THERMOSTAT
-                and room_temperature is not None
-                and thermostat_eco_setpoint is not None
-            ):
-                if room_temperature <= thermostat_eco_setpoint:
-                    cooling_hours_from_current = 0.0
-                else:
-                    _cur_delta = room_temperature - thermostat_eco_setpoint
-                    _last_rate = cooling_profile.get("last_observed_rate_c_per_hour")
-                    _last_delta_t = cooling_profile.get("last_observed_delta_temp_c")
-                    _cur_delta_t = (
-                        room_temperature - outdoor_temperature
-                        if outdoor_temperature is not None else None
-                    )
-                    if (
-                        _last_rate is not None and _last_rate > 0
-                        and _last_delta_t is not None and _last_delta_t > 0
-                        and _cur_delta_t is not None and _cur_delta_t > 0
-                    ):
-                        _adjusted_rate = _last_rate * (_cur_delta_t / _last_delta_t)
-                        cooling_hours_from_current = round(
-                            min(_cur_delta / max(_adjusted_rate, 0.01), _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
-                        )
-                    else:
-                        _model_hours = cooling_profile.get("hours_to_eco")
-                        _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
-                        _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
-                        if _model_hours is not None and _cooldown_delta > 0:
-                            cooling_hours_from_current = round(
-                                min((_cur_delta / _cooldown_delta) * _model_hours, _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
-                            )
 
             try:
                 result = self._build_plan(
@@ -675,13 +468,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
                     total_energy_daily_average_kwh=total_energy_daily_average,
                     non_heating_daily_average_kwh=non_heating_daily_average,
-                    hourly_demand_table=hourly_demand_table,
+                    historical_hourly_usage=historical_hourly_usage,
                     room_temperature_c=room_temperature,
                     thermostat_setpoint_c=thermostat_setpoint,
                     thermostat_cool_setpoint_c=thermostat_cool_setpoint,
                     thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
                     thermostat_eco_setpoint_c=thermostat_eco_setpoint,
-                    room_cooling_hours_to_eco=cooling_hours_from_current if cooling_hours_from_current is not None else cooling_profile.get("hours_to_eco"),
+                    room_cooling_hours_to_eco=cooling_profile["hours_to_eco"],
                     room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
                     cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
                     battery_soc_percent=battery_soc_percent,
@@ -713,8 +506,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 result.room_cooling_rate_c_per_hour = cooling_profile["cooling_rate_c_per_hour"]
                 result.cooling_reference_outdoor_temp_c = cooling_profile["reference_outdoor_temp_c"]
                 result.rationale = "thermostat planning degraded after runtime error; using normal mode"
-            if cooling_hours_from_current is not None:
-                result.room_cooling_hours_to_eco = cooling_hours_from_current
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
@@ -729,9 +520,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return result
         except Exception as err:
             _LOGGER.exception("Planner update failed")
-            # Always schedule a retry when an unexpected exception occurs so the
-            # integration can recover without a manual reload.
-            self._schedule_source_error_retry()
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
             if planner_kind == PLANNER_KIND_THERMOSTAT:
                 fallback_status = self._unknown_source_status(planner_kind)
@@ -913,18 +701,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not entity_id:
             return "not_configured"
         if state is None:
-            parts = [p.lower() for p in entity_id.replace(".", "_").split("_") if len(p) > 2]
-            # Use first two significant parts + last part for broadest matching
-            keywords = list({*parts[1:3], parts[-1]} if parts else set())
-            similar = sorted(
-                s.entity_id
-                for s in self.hass.states.async_all()
-                if any(kw in s.entity_id.lower() for kw in keywords)
-            )[:10]
-            hint = f" | similar: {similar}" if similar else " | no similar entities in state machine"
-            return f"entity_not_found ({entity_id}){hint}"
+            return "entity_not_found"
         if state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
-            return f"entity_unavailable ({entity_id})"
+            return "entity_unavailable"
         return "ok"
 
     def _unknown_source_status(self, planner_kind: str) -> dict[str, str]:
@@ -1001,66 +780,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         runtime_state["battery_profit_last_updated"] = now
         await self._async_persist_runtime_state(runtime_state)
 
-    async def _async_update_hourly_demand_table(
-        self,
-        *,
-        current_value: float,
-        now: datetime,
-    ) -> dict[str, float]:
-        """Maintain a 168-slot (7 × 24) EMA table of hourly energy consumption.
-
-        Each slot key is str(weekday * 24 + hour).  When the hour changes the
-        delta between the current reading and the reading at the previous hour
-        boundary is applied with alpha=0.2:
-            new = old + (delta - old) * 0.2
-        Values are capped at 10 kWh/h before the update to guard against
-        sensor spikes or meter rollovers.
-        """
-        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-            self.config_entry.entry_id, {}
-        )
-        table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
-        last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
-        last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
-        last_ts_raw = runtime_state.get("hourly_demand_last_ts")
-        current_hour_key = now.weekday() * 24 + now.hour
-        changed = False
-
-        if last_value is None or last_hour_key is None:
-            # First call: store the baseline without updating any slot.
-            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
-            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
-            runtime_state["hourly_demand_last_ts"] = now.isoformat()
-            changed = True
-        elif last_hour_key != current_hour_key:
-            # The hour has turned: compute consumption of the completed hour.
-            last_ts = dt_util.parse_datetime(last_ts_raw) if last_ts_raw else None
-            elapsed_hours = (
-                max(0.1, (now - last_ts).total_seconds() / 3600) if last_ts else 1.0
-            )
-            delta = current_value - last_value
-            # If HA was down for more than one hour normalise to per-hour.
-            hourly_delta = delta / elapsed_hours if elapsed_hours > 1.5 else delta
-            # Cap and reject negatives (meter reset / rollover).
-            if 0.0 <= hourly_delta <= 10.0:
-                slot = str(last_hour_key)
-                existing = _coerce_float(table.get(slot))
-                if existing is None:
-                    table[slot] = round(hourly_delta, 4)
-                else:
-                    table[slot] = round(existing + (hourly_delta - existing) * 0.2, 4)
-            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
-            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
-            runtime_state["hourly_demand_last_ts"] = now.isoformat()
-            runtime_state["hourly_demand_table"] = table
-            changed = True
-
-        if changed:
-            runtime_state["hourly_demand_table"] = table
-            await self._async_persist_runtime_state(runtime_state)
-
-        return table
-
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
         data = await store.async_load() or {}
@@ -1080,11 +799,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
-            "hourly_demand_table": runtime_state.get("hourly_demand_table", {}),
-            "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
-            "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
-            "hourly_demand_last_ts": runtime_state.get("hourly_demand_last_ts"),
-            "smoothed_eco_hours": runtime_state.get("smoothed_eco_hours"),
         }
         await store.async_save(data)
 
@@ -1106,7 +820,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     no_attributes=True,
                 )
 
-            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
+            history_result = await self.hass.async_add_executor_job(_load_history)
         except Exception:
             return 0.0
 
@@ -1156,7 +870,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     no_attributes=True,
                 )
 
-            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
+            history_result = await self.hass.async_add_executor_job(_load_history)
         except Exception:
             return {}
 
@@ -1264,14 +978,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "hours_to_eco": None,
                 "cooling_rate_c_per_hour": None,
                 "reference_outdoor_temp_c": outdoor_temperature_c,
-                "last_observed_rate_c_per_hour": None,
-                "last_observed_delta_temp_c": None,
             }
-
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        cooling_model = runtime_state.get("cooling_model", {})
-        last_observed_rate = _coerce_float(cooling_model.get("last_observed_drop_c_per_hour"))
-        last_observed_delta = _coerce_float(cooling_model.get("last_delta_temp_c"))
 
         cooldown_reference_temperature = max(room_temperature_c, thermostat_setpoint_c)
         cooldown_delta = max(cooldown_reference_temperature - thermostat_eco_setpoint_c, 0.3)
@@ -1286,8 +993,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "hours_to_eco": round(hours_to_eco, 2),
             "cooling_rate_c_per_hour": round(estimated_rate, 3),
             "reference_outdoor_temp_c": reference_outdoor,
-            "last_observed_rate_c_per_hour": last_observed_rate,
-            "last_observed_delta_temp_c": last_observed_delta,
         }
 
     def _estimate_cooling_profile_from_model(
@@ -1315,12 +1020,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if learned_factor is not None and learned_samples > 0:
             delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            # Cap the stored factor to a physically plausible range.  The model
-            # can accumulate a corrupted (too-high) factor from early short
-            # partial sessions with high apparent cooling rates; clamping it
-            # prevents those artifacts from permanently dominating the estimate.
-            clamped_factor = min(learned_factor, 10.0 * _THERMOSTAT_FALLBACK_COOLING_FACTOR)
-            learned_rate = max(0.03, min(2.0, clamped_factor * delta_temp))
+            learned_rate = max(0.03, min(2.0, learned_factor * delta_temp))
             blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
             estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
             estimated_hours = min(
@@ -1332,57 +1032,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return estimated_rate, estimated_hours
 
         return fallback_rate, fallback_hours
-
-    def _find_next_valley_start(
-        self,
-        windows: list[PlannerWindow],
-        now: datetime,
-        average_price: float,
-    ) -> datetime | None:
-        """Return the start of the first true price valley after the next expensive period.
-
-        A valley is a contiguous plateau of equal-price windows where:
-        - every window in the plateau has price <= average_price
-        - the window immediately before the plateau is strictly more expensive
-        - the window immediately after the plateau is strictly more expensive
-          (or the plateau reaches the end of available data)
-
-        The search first waits for at least one expensive window (price > average_price)
-        so we skip any current cheap period and find the NEXT valley.
-        """
-        future = sorted(
-            [w for w in windows if w.end > now],
-            key=lambda w: w.start,
-        )
-        n = len(future)
-        saw_expensive = False
-        i = 0
-        while i < n:
-            if not saw_expensive:
-                if future[i].price > average_price:
-                    saw_expensive = True
-                i += 1
-                continue
-            p = future[i].price
-            if p > average_price:
-                i += 1
-                continue
-            # Cheap window after expensive — check left boundary
-            prev_price = future[i - 1].price if i > 0 else float("inf")
-            if prev_price <= p:
-                i += 1
-                continue
-            # Find the end of the equal-price plateau
-            j = i
-            while j + 1 < n and future[j + 1].price == p:
-                j += 1
-            # Check right boundary (end of data counts as infinite price)
-            next_price = future[j + 1].price if j + 1 < n else float("inf")
-            if next_price <= p:
-                i = j + 1
-                continue
-            return future[i].start
-        return None
 
     def _select_most_expensive_window_block(
         self,
@@ -1647,7 +1296,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         lookback_average_kwh: float,
         total_energy_daily_average_kwh: float,
         non_heating_daily_average_kwh: float,
-        hourly_demand_table: dict[str, float],
+        historical_hourly_usage: dict[datetime, float],
         room_temperature_c: float | None,
         thermostat_setpoint_c: float | None,
         thermostat_cool_setpoint_c: float | None,
@@ -1703,7 +1352,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
-            hourly_demand_table=hourly_demand_table,
+            historical_hourly_usage=historical_hourly_usage,
             horizon_end=planning_horizon_end,
         )
         estimated_total_home_demand_kwh = round(
@@ -1771,11 +1420,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             try:
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
                     eco_windows = self._select_thermostat_peak_eco_windows(
-                        windows=all_windows,
+                        windows=windows,
                         now=now,
                         cooldown_hours=eco_duration_hours,
                         average_price=average_price,
-                        expensive_threshold=eco_expensive_threshold,
+                        expensive_threshold=expensive_threshold,
                     )
                 else:
                     eco_windows = self._select_expensive_peak_blocks(
@@ -1793,52 +1442,53 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     raise
         if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
             source_errors = [*source_errors, thermostat_planning_error]
+        # Only relevant for thermostat planners; battery planners have no room sensor
+        eco_temp_reached = (
+            planner_kind == PLANNER_KIND_THERMOSTAT
+            and room_temperature_c is not None
+            and thermostat_eco_setpoint_c is not None
+            and room_temperature_c <= thermostat_eco_setpoint_c + 0.1
+        )
         active_eco_window = next(
             (window for window in eco_windows if window["start"] <= now < window["end"]),
             None,
         )
-        # Lock the eco window once entered so that mid-session price updates
-        # (e.g. day-ahead prices arriving at ~13:00) cannot silently switch to
-        # a different window and break the active eco session.
-        if self._locked_eco_window is not None:
-            locked_end = cast(datetime, self._locked_eco_window["end"])
-            room_reached_eco = (
-                planner_kind == PLANNER_KIND_THERMOSTAT
-                and room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_temperature_c <= thermostat_eco_setpoint_c
-            )
-            if now >= locked_end or room_reached_eco:
-                self._locked_eco_window = None  # window expired or room cooled enough
-            else:
-                active_eco_window = self._locked_eco_window  # keep running window
-        if self._locked_eco_window is None and active_eco_window is not None:
-            self._locked_eco_window = active_eco_window  # latch new window
-
+        # Clear the early-exit latch only when the window it was set for has ended.
+        # Do NOT reset it when the eco window boundaries shift due to replanning
+        # (e.g. cooldown_hours changing with room temperature) — resetting on every
+        # end-time change was the root cause of rapid eco↔normal oscillation: the
+        # latch fired, eco exited, the planner produced a window with a slightly
+        # different end, the latch reset, eco re-entered, repeat every 15 minutes.
+        if self._eco_early_exit_until is not None and now >= self._eco_early_exit_until:
+            self._eco_early_exit_until = None
+        # Once the room reaches the eco setpoint inside an active eco window, latch
+        # eco off for the rest of that window.  The room has used its stored floor
+        # heat; normal heating resumes to maintain comfort.  The latch prevents
+        # rapid oscillation between eco and normal every update cycle.
+        if eco_temp_reached and active_eco_window is not None and self._eco_early_exit_until is None:
+            self._eco_early_exit_until = cast(datetime, active_eco_window["end"])
         preheat_minutes = int(
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
         # Preheat ends exactly when the eco window begins (window["start"]), so the
         # room warms up before eco drops the setpoint — not during it.
-        # With multiple eco peaks, clamp each preheat start to not overlap with the
-        # preceding eco window — otherwise preheat for peak N+1 suppresses eco for peak N.
-        sorted_eco_for_preheat = sorted(eco_windows, key=lambda w: w["start"])
-        preheat_windows = []
-        for idx, eco_win in enumerate(sorted_eco_for_preheat):
-            if preheat_minutes <= 0:
-                break
-            eco_start = cast(datetime, eco_win["start"])
-            raw_start = eco_start - timedelta(minutes=preheat_minutes)
-            prev_eco_end = cast(datetime, sorted_eco_for_preheat[idx - 1]["end"]) if idx > 0 else None
-            clamped_start = max(
-                raw_start,
-                now.replace(hour=0, minute=0, second=0, microsecond=0),
-                *(([prev_eco_end]) if prev_eco_end is not None else []),
-            )
-            if clamped_start < eco_start and eco_start > now:
-                preheat_windows.append(
-                    {"start": clamped_start, "end": eco_start, "average_price": eco_win["average_price"]}
-                )
+        preheat_windows = [
+            {
+                "start": max(
+                    cast(datetime, window["start"]) - timedelta(minutes=preheat_minutes),
+                    now.replace(hour=0, minute=0, second=0, microsecond=0),
+                ),
+                "end": cast(datetime, window["start"]),
+                "average_price": window["average_price"],
+            }
+            for window in eco_windows
+            if preheat_minutes > 0
+        ]
+        preheat_windows = [
+            window
+            for window in preheat_windows
+            if window["end"] > now
+        ]
         preheat_window = next(
             (
                 window
@@ -1848,124 +1498,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
-        # ── Step 1: resolve an existing lock ────────────────────────────────
-        # Lock preheat once it activates so that eco-window drift (caused by
-        # EMA updates to hours_to_eco) cannot push the preheat-window start
-        # past NOW and revert the mode to "normal" mid-preheat.  The lock is
-        # released as soon as eco starts (locked_eco_window is set) or the
-        # locked end-time is reached.
-        if self._locked_preheat_end is not None:
-            if self._locked_eco_window is not None:
-                # Eco started — normal end of preheat session.
-                self._locked_preheat_end = None
-                self._preheat_expired_at = None
-            elif now >= self._locked_preheat_end:
-                # Timeout without eco starting: record the expiry timestamp so
-                # we can suppress a back-to-back session (see Step 2 below).
-                self._preheat_expired_at = self._locked_preheat_end
-                self._locked_preheat_end = None
-            else:
-                preheat_active_now = True  # hold preheat mode across planning ticks
-        # ── Step 2: suppress back-to-back sessions ──────────────────────────
-        # When the previous preheat session timed out without eco starting
-        # (e.g. day-ahead prices arriving at 13:00 shifted the eco window
-        # 2 h forward) a new preheat window may start at exactly the moment
-        # the old one expired.  Without this guard that would double the total
-        # preheat duration.  Suppress any preheat window whose start ≤ the
-        # recorded expiry; the suppression is lifted once eco starts.
-        if self._preheat_expired_at is not None:
-            if self._locked_eco_window is not None:
-                self._preheat_expired_at = None  # eco arrived — fresh cycle
-            elif preheat_active_now and any(
-                w["start"] <= self._preheat_expired_at
-                for w in preheat_windows
-                if w["start"] <= now < w["end"]
-            ):
-                preheat_active_now = False
-        # ── Step 3: latch a new lock for this session ────────────────────────
-        if preheat_active_now and self._locked_preheat_end is None:
-            preheat_eco_start = next(
-                (cast(datetime, w["end"]) for w in preheat_windows if w["start"] <= now < w["end"]),
-                None,
-            )
-            if preheat_eco_start is not None:
-                self._locked_preheat_end = preheat_eco_start
-        # Never preheat while a locked eco session is running: preheating would
-        # counteract the active eco session AND break eco_active_now via the
-        # preheat_active_now condition.  The preheat for the NEXT eco cycle is
-        # applied naturally once the locked window expires.
-        if self._locked_eco_window is not None:
-            preheat_active_now = False
 
-        # Eco continues for the full planned window regardless of individual cheap
-        # price slots within it — interrupting eco mid-window for a cheap slot
-        # prevents the room from ever cooling to eco temperature.
-        # Eco may only be interrupted early when no proper cheap valley remains
-        # after the eco block ends.  A valley requires at least 4 cheap windows.
-        next_valley_reachable = True
-        if active_eco_window is not None:
-            eco_end_ts = cast(datetime, active_eco_window["end"])
-            windows_after_eco = [w for w in all_windows if w.start >= eco_end_ts]
-            # Only evaluate when enough post-eco data exists; if the eco window
-            # extends to or beyond the price-data horizon, assume a valley is
-            # reachable rather than prematurely breaking eco.
-            if len(windows_after_eco) >= 8:
-                # The room is already cooling during eco, so the cooling-time
-                # offset is NOT applied here — using now + time_to_eco would
-                # push the search window 18 h into the future while the room is
-                # already cooling, causing eco to break prematurely.
-                # Instead, require at least 4 consecutive cheap windows after
-                # eco ends (= a proper valley, as requested by the user).
-                cheap_reachable = [
-                    w for w in all_windows
-                    if w.start >= eco_end_ts and w.price <= average_price
-                ]
-                next_valley_reachable = len(cheap_reachable) >= 4
+        # Eco is only active when:
+        # - inside an active eco window
+        # - the current price slot is expensive (≥ average, with a small tolerance to
+        #   prevent oscillation when the price is right on the boundary)
+        # - the room has not yet reached the eco setpoint (no latch set)
+        # - preheat is not active (preheat takes priority so the floor stores heat
+        #   before eco begins, even when the price is already above average)
         eco_active_now = (
             active_eco_window is not None
+            and current_price is not None
+            and current_price >= average_price - 0.01
+            and not eco_temp_reached
+            and self._eco_early_exit_until is None
             and not preheat_active_now
-            and next_valley_reachable
         )
-        # Dynamic permanent-eco: instead of a fixed 18-hour cap, check whether
-        # the room can actually cool to eco setpoint before the next cheap valley.
-        # The "next valley" is the first cheap window (price <= average) that
-        # follows the next upcoming expensive period.  If the remaining cooling
-        # time (from the CURRENT room temperature, not the setpoint) exceeds
-        # hours_to_next_valley, the room won't reach eco setpoint in time — so
-        # force eco continuously.  Once the room has cooled enough the condition
-        # stops being met and normal scheduling resumes.
-        if planner_kind == PLANNER_KIND_THERMOSTAT and eco_duration_hours > 0:
-            # Compute remaining time to reach eco setpoint from the actual current
-            # room temperature rather than from the (higher) setpoint temperature.
-            # This prevents forcing eco when the room is already close to eco temp.
-            if (
-                room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_cooling_rate_c_per_hour is not None
-                and room_cooling_rate_c_per_hour > 0
-                and room_temperature_c > thermostat_eco_setpoint_c
-            ):
-                _current_delta = room_temperature_c - thermostat_eco_setpoint_c
-                _eco_hours_from_current = _current_delta / room_cooling_rate_c_per_hour
-            elif (
-                room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_temperature_c <= thermostat_eco_setpoint_c
-            ):
-                _eco_hours_from_current = 0.0  # room already at or below eco temp
-            else:
-                _eco_hours_from_current = eco_duration_hours  # fallback to setpoint-based
-            _next_valley_start = self._find_next_valley_start(
-                all_windows, now, average_price
-            )
-            if _next_valley_start is not None:
-                hours_to_next_valley = max(
-                    0.0, (_next_valley_start - now).total_seconds() / 3600
-                )
-                if _eco_hours_from_current > hours_to_next_valley:
-                    eco_active_now = True
-                    preheat_active_now = False
-                    self._locked_preheat_end = None
         eco_window = (
             active_eco_window
             if eco_active_now
@@ -2003,10 +1551,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
         )
-        charge_safety_margin = max(
-            0.0,
-            min(0.5, float(self._config.get(CONF_BATTERY_CHARGE_SAFETY_MARGIN, DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN)) / 100.0),
-        )
         planned_solar_charge_windows, planned_grid_charge_windows = self._plan_charge_windows_for_horizon(
             slots=energy_balance_slots,
             now=now,
@@ -2014,7 +1558,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
             battery_min_profit=battery_min_profit,
-            charge_safety_margin=charge_safety_margin,
         )
         next_planned_solar_charge_start = min(
             (
@@ -2158,14 +1701,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score += 6
             rationale_parts.append(
                 "preheating is active so the floor can store heat before the upcoming eco window"
-            )
-        elif planner_kind == PLANNER_KIND_THERMOSTAT and cheap_now and any(
-            cast(datetime, w["start"]) > now for w in eco_windows
-        ):
-            heat_pump_strategy = "normal"
-            score += 4
-            rationale_parts.append(
-                "price is cheap now and an eco window is upcoming: good time to preheat the floor"
             )
         elif cheap_now and (best_solar_is_now or solar_covers_today):
             heat_pump_strategy = "normal"
@@ -2341,18 +1876,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         non_heating_daily_average_kwh: float,
         heating_estimate_kwh: float,
-        hourly_demand_table: dict[str, float] | None = None,
+        historical_hourly_usage: dict[datetime, float] | None = None,
         horizon_end: datetime | None = None,
     ) -> list[dict[str, str | float]]:
-        """Build an hourly demand forecast from the 168-slot EMA table.
-
-        Each slot key is str(weekday * 24 + hour).  Falls back to
-        max(0.4, daily_average / 24) for slots not yet in the table.
-        """
+        """Build a simple hourly demand forecast for the visible planning horizon."""
         base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
-        fallback_hourly = max(0.4, base_hourly)
-        table = hourly_demand_table or {}
+        empty_slot_hourly = max(0.4, base_hourly)
+        historical_hourly_usage = historical_hourly_usage or {}
 
+        # Higher heating share during morning and evening hours.
         heating_profile = [
             0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
             0.06, 0.07, 0.06, 0.045, 0.035, 0.03,
@@ -2365,22 +1897,44 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         horizon_end = horizon_end or (today_start + timedelta(days=1))
         day_count = max(1, (horizon_end.date() - today_start.date()).days + 1)
 
+        hourly_average_by_hour: dict[int, float] = {}
+        for hour in range(24):
+            hour_values = [
+                usage_kwh
+                for slot_start, usage_kwh in historical_hourly_usage.items()
+                if slot_start.hour == hour
+            ]
+            if hour_values:
+                hourly_average_by_hour[hour] = statistics.fmean(hour_values)
+
         forecast: list[dict[str, str | float]] = []
         for day_offset in range(day_count):
             day_start = today_start + timedelta(days=day_offset)
             for hour in range(24):
                 slot_start = day_start + timedelta(hours=hour)
-                slot_key = str(slot_start.weekday() * 24 + hour)
-                table_value = _coerce_float(table.get(slot_key))
-                historical_hourly = (
-                    min(table_value, 3.0) if table_value is not None else fallback_hourly
+                slot_end = slot_start + timedelta(hours=1)
+                previous_week_usage = historical_hourly_usage.get(slot_start - timedelta(days=7))
+                previous_week_previous_hour_usage = historical_hourly_usage.get(
+                    slot_start - timedelta(days=7, hours=1)
                 )
+                hour_average = hourly_average_by_hour.get(hour)
+                if previous_week_usage is not None and previous_week_previous_hour_usage is not None:
+                    historical_hourly = previous_week_previous_hour_usage + (
+                        (previous_week_usage - previous_week_previous_hour_usage) * 0.2
+                    )
+                elif previous_week_usage is not None:
+                    historical_hourly = previous_week_usage
+                elif hour_average is not None:
+                    historical_hourly = hour_average
+                else:
+                    historical_hourly = empty_slot_hourly
+                historical_hourly = min(3.0, max(0.0, historical_hourly))
                 heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
                 total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
                 forecast.append(
                     {
                         "start": slot_start.isoformat(),
-                        "end": (slot_start + timedelta(hours=1)).isoformat(),
+                        "end": slot_end.isoformat(),
                         "estimated_kwh": total_hourly,
                     }
                 )
@@ -2689,7 +2243,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
         battery_min_profit: float,
-        charge_safety_margin: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2697,19 +2250,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
+        # Target: fill exactly what is currently empty.  When negative-price
+        # grid charging can cover the full remaining space it exhausts the
+        # target first, so solar is skipped (battery stays accu_uit before
+        # the neg-price window and solar goes to home demand instead).
+        # When neg-price alone is insufficient, solar fills the remainder.
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        # Inflate the planning target by the safety margin so the selection loop
-        # picks more and earlier solar slots as a buffer against solar underperformance.
-        # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
-        # and stops; when solar falls short the extra selected slots cover the gap.
-        planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
-        target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
+        target_charge_kwh = current_remaining_capacity_kwh
 
+        has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
             max_charge_kw=max_charge_kw,
             minimum_slots=1,
         )
+
+        # Nothing to plan if the battery is already effectively full.
+        if current_remaining_capacity_kwh < 0.1:
+            return planned_solar_charge_windows, planned_grid_charge_windows
 
         # Split the planning horizon at midnight so that cheaper neg-price slots
         # tomorrow do not displace charging opportunities that must happen today
@@ -2735,38 +2293,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             6,
         )
 
+        # Current cycle: fill only today's deficit (battery may not be empty).
         current_grid_limit_kwh = max(
             0.0,
-            round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
-
-        # Discharge cycle tracking: once the battery is well-charged (SOC >= 70%)
-        # the daily charge cycle is considered complete and the discharge cycle begins.
-        # During a discharge cycle, suppress current-cycle grid charging to prevent
-        # brief laden_van_net windows from interrupting an active discharge session.
-        # The cycle resets when an active charge phase resumes or the battery is
-        # critically low (safety valve for winter / no-solar scenarios).
-        usable_soc_fraction = (
-            current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
-        )
-        if self._active_charge_phase_end is not None and self._active_charge_phase_end > now:
-            # Charge phase is actively running — not a discharge cycle.
-            self._discharge_session_started = False
-        elif usable_soc_fraction < 0.15:
-            # Safety valve: battery nearly empty — allow grid charging regardless.
-            self._discharge_session_started = False
-        elif usable_soc_fraction >= 0.70:
-            # Charge cycle complete; discharge cycle begins (or continues).
-            self._discharge_session_started = True
-        # Between 15 % and 70 %: flag coasts — maintains state from previous tick.
-
-        if self._discharge_session_started:
-            current_grid_limit_kwh = 0.0
-
-        # Next cycle: battery assumed empty — must fill full planning capacity.
+        # Next cycle: assume battery is discharged to empty before midnight.
         next_grid_limit_kwh = max(
             0.0,
-            round(planning_capacity_kwh - next_cycle_solar_kwh, 6),
+            round(usable_capacity_kwh - next_cycle_solar_kwh, 6),
         )
         # Combined gate for candidate building: add a grid candidate if either
         # cycle still has a gap that solar alone cannot fill.
@@ -2807,32 +2342,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "effective_price": round(float(slot["import_price"]), 6),
                     }
                 )
-                # If there's remaining slot capacity after solar and the import price
-                # here beats the next peak, allow grid to top-up the remainder.
-                # Non-solar slots with cheaper prices are selected first (kind=2 sorted
-                # by effective_price), so this only kicks in when no better option exists.
-                remaining_after_solar_kwh = slot_capacity_kwh - solar_charge_kwh
-                if grid_charge_limit_kwh > 0 and remaining_after_solar_kwh > 0:
-                    solar_slot_peak_price = self._calculate_next_battery_peak_price(
-                        future_slots,
-                        slot["end"],
-                        price_key="import_price",
-                    )
-                    if (
-                        solar_slot_peak_price is not None
-                        and solar_slot_peak_price - float(slot["import_price"]) >= battery_min_profit
-                    ):
-                        charge_candidates.append(
-                            {
-                                "kind": "grid",
-                                "start": slot["start"],
-                                "end": slot["end"],
-                                "charge_kwh": round(
-                                    min(remaining_after_solar_kwh, grid_charge_limit_kwh), 6
-                                ),
-                                "effective_price": round(float(slot["import_price"]), 6),
-                            }
-                        )
+                # Solar slots are never grid-charged — skip grid candidate for this slot.
                 continue
 
             if grid_charge_limit_kwh <= 0 or (
@@ -2877,8 +2387,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         next_candidates = [c for c in charge_candidates if c["start"] >= cycle_end]
 
         # ── Current-cycle selection (today) ──────────────────────────────────
-        # Solar slots are sorted cheapest-price first; we greedily select them
-        # until the battery is full — no tier filter.
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
         neg_grid_charged_kwh = 0.0
@@ -2928,15 +2436,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # ── Next-cycle selection (tomorrow) ──────────────────────────────────
         # Battery is assumed discharged to empty before midnight; plan to refill
         # it using tomorrow's candidates, price-sorted within each kind.
-        next_target_kwh = planning_capacity_kwh
+        next_target_kwh = usable_capacity_kwh
         next_charged_kwh = 0.0
         next_charged_grid_kwh = 0.0
         next_neg_grid_charged_kwh = 0.0
         for candidate in sorted(next_candidates, key=_selection_sort_key):
             if next_charged_kwh >= next_target_kwh:
                 break
-            # Next-cycle: no tier filter for solar — we need to fill the full
-            # battery and should use all productive solar hours, cheapest first.
             candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
                 candidate_charge_kwh = min(
@@ -2988,69 +2494,59 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 }
             )
 
-        # Once a solar charge block has started, keep the inverter in
-        # laden_met_zonne_energie for the rest of that productive solar period.
-        # The economic selector above may pick only the cheapest productive slots;
-        # without this continuity pass the public strategy can alternate between
-        # accu_uit and laden_met_zonne_energie while the user still sees one solar
-        # charge window.  Starting at the first selected solar slot (not the last)
-        # fills any productive gaps inside the same daylight period and also keeps
-        # the existing tail extension until the first post-solar deficit slot.
+        # Extend the solar charge window to cover until the first discharge slot that
+        # comes AFTER the last selected solar slot, so the battery stays in laden mode
+        # rather than going idle between the planned peak charge window and the start
+        # of the evening discharge.  The global first_discharge_slot_start may be
+        # today's evening (before tomorrow's solar), so we compute the cutoff relative
+        # to last_selected_solar_end instead.
         if planned_solar_charge_windows:
-            first_selected_solar_start = min(
+            last_selected_solar_end = max(
                 (
-                    cast(datetime, slot["start"])
+                    slot["end"]
                     for slot in future_slots
                     if slot["start"] in selected_solar_charge_by_start
                 ),
                 default=None,
             )
-            if first_selected_solar_start is not None:
-                # First slot after the selected block starts where solar goes
-                # negative (evening).  Until then every productive solar slot is
-                # part of the active charge window once charging has begun.
+            if last_selected_solar_end is not None:
+                # First slot after the selected window where solar goes negative (evening).
                 post_solar_discharge_start = next(
                     (
                         slot["start"]
                         for slot in future_slots
-                        if slot["start"] >= first_selected_solar_start
+                        if slot["start"] >= last_selected_solar_end
                         and float(slot.get("net_solar_kwh", 0)) < -0.05
                     ),
                     None,
                 )
-                solar_charge_period_end = post_solar_discharge_start or max(
-                    (cast(datetime, slot["end"]) for slot in future_slots),
-                    default=first_selected_solar_start,
-                )
-                for slot in future_slots:
-                    slot_start = cast(datetime, slot["start"])
-                    if slot_start < first_selected_solar_start:
-                        continue
-                    if slot_start >= solar_charge_period_end:
-                        break
-                    if slot_start not in productive_solar_slot_starts:
-                        continue
-                    if slot_start in selected_solar_charge_by_start:
-                        continue
-                    extension_charge_kwh = min(
-                        max_charge_kw * float(slot["hours"]),
-                        max(0.0, float(slot["net_solar_kwh"])),
-                    )
-                    if extension_charge_kwh <= 0:
-                        continue
-                    planned_solar_charge_windows.append(
-                        {
-                            "start": slot_start.isoformat(),
-                            "end": cast(datetime, slot["end"]).isoformat(),
-                            "price": round(
-                                float(slot["export_price"])
-                                if has_export_price_sensor
-                                else float(slot["import_price"]) - 0.15,
-                                6,
-                            ),
-                            "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
-                        }
-                    )
+                if post_solar_discharge_start is not None:
+                    for slot in future_slots:
+                        if slot["start"] < last_selected_solar_end:
+                            continue
+                        if slot["start"] >= post_solar_discharge_start:
+                            break
+                        if slot["start"] not in productive_solar_slot_starts:
+                            continue
+                        extension_charge_kwh = min(
+                            max_charge_kw * float(slot["hours"]),
+                            max(0.0, float(slot["net_solar_kwh"])),
+                        )
+                        if extension_charge_kwh <= 0:
+                            continue
+                        planned_solar_charge_windows.append(
+                            {
+                                "start": slot["start"].isoformat(),
+                                "end": slot["end"].isoformat(),
+                                "price": round(
+                                    float(slot["export_price"])
+                                    if has_export_price_sensor
+                                    else float(slot["import_price"]) - 0.15,
+                                    6,
+                                ),
+                                "usable_hours": round(extension_charge_kwh / max_charge_kw, 3),
+                            }
+                        )
 
         for slot in future_slots:
             slot_charge_kwh = float(selected_grid_charge_by_start.get(slot["start"], 0.0))
@@ -3419,19 +2915,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode = "accu_uit"
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
-        if active_charge_phase_end is not None and active_charge_phase_end > now:
-            # The charge phase is still running (or was running when the plan was
-            # last evaluated).  Re-inject it as a cluster anchored at *now* so that
-            # the current slot stays in charge mode even when the new planning run
-            # does not (re-)select that slot — e.g. because the battery is nearly
-            # full and the solar window is skipped by the capacity gate.
-            # Safety: _active_charge_phase_end is only written while we are inside
-            # an active charge window, so it can never carry a stale value from a
-            # different day/cycle (it is cleared by _update_active_charge_phase_state
-            # the moment active_charge_phase becomes None).
+        if (
+            active_charge_phase_end is not None
+            and active_charge_phase_end > now
+            and any(w["start"] <= now < w["end"] for w in normalized_windows)
+        ):
             normalized_windows.append({"start": now, "end": active_charge_phase_end})
             normalized_windows.sort(key=lambda window: window["start"])
         else:
+            # Stale persisted window is not relevant; discard its mode so it cannot
+            # bleed into charge_phase_mode and label future slots (e.g. night grid
+            # charge windows) with the wrong mode (e.g. laden_met_zonne_energie).
             active_charge_phase_mode = "accu_uit"
 
         clusters: list[dict[str, datetime]] = []
@@ -3458,8 +2952,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> tuple[str, float, datetime]:
         charge_end = cast(datetime, charge_window["end"])
         usable_hours = float(charge_window["usable_hours"])
-        charge_kwh = float(charge_window.get("charge_kwh", 0.0))
-        sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
+        sim_usable_energy_kwh = usable_capacity_kwh
         if slot["start"] <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
@@ -3478,13 +2971,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         now: datetime,
         active_charge_phase: dict[str, datetime] | None,
-        charge_phase_clusters: list[dict[str, datetime]],
         current_mode: str,
         last_charge_mode: str,
         active_charge_phase_mode: str,
     ) -> None:
         if active_charge_phase is not None and active_charge_phase["start"] <= now < active_charge_phase["end"]:
-            locked_mode = (
+            self._active_charge_phase_end = active_charge_phase["end"]
+            self._active_charge_phase_mode = (
                 current_mode
                 if current_mode in ("laden_met_zonne_energie", "laden_van_net")
                 else (
@@ -3493,25 +2986,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     else active_charge_phase_mode
                 )
             )
-            if locked_mode in ("laden_met_zonne_energie", "laden_van_net"):
-                # Once a charge command has become active, keep the battery in a
-                # charge mode until the planned charge session has completed.
-                # Replanning can otherwise drop the current slot when SOC/solar
-                # changes, which makes automations bounce between accu_uit and
-                # charging.  The lock is intentionally limited to the current
-                # calendar-day cycle so tomorrow's charge plan does not keep the
-                # inverter charging overnight.
-                cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                self._active_charge_phase_end = max(
-                    (
-                        cluster["end"]
-                        for cluster in charge_phase_clusters
-                        if cluster["end"] > now and cluster["start"] < cycle_end
-                    ),
-                    default=active_charge_phase["end"],
-                )
-                self._active_charge_phase_mode = locked_mode
-                return
+            return
 
         self._active_charge_phase_end = None
         self._active_charge_phase_mode = "accu_uit"
@@ -3595,8 +3070,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot_start = slot["start"]
             charge_window_handled = False
             for charge_lookup, charge_mode, price_key in (
-                (grid_charge_starts,  "laden_van_net",           "import_price"),
                 (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
+                (grid_charge_starts,  "laden_van_net",           "import_price"),
             ):
                 if slot_start not in charge_lookup:
                     continue
@@ -3651,37 +3126,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
             )
-            # Surplus = battery energy minus what is actually planned to discharge
-            # for home demand (NOT total segment demand).  The segment may span
-            # until the next charge window (e.g. 06:00-12:00) while the battery
-            # only covers the expensive early hours; the remaining energy would
-            # otherwise sit idle and represents genuine export surplus.
-            total_planned_discharge_kwh = sum(planned_discharge_kwh.values())
-            # Plan export for any genuine surplus: battery energy above what the
-            # discharge plan needs.  The within_export_window gate (8 h before
-            # the next charge) prevents depleting the battery too early.
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
                 available_energy_kwh=sim_usable_energy_kwh,
-                total_segment_demand_kwh=total_planned_discharge_kwh,
+                total_segment_demand_kwh=total_segment_demand_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
-            has_export_surplus = sim_usable_energy_kwh > total_planned_discharge_kwh
-
-            # Export to grid is only allowed within 8 hours before the next
-            # planned charge phase.  Exporting earlier risks draining the
-            # battery so much that home demand can't be covered until the
-            # next charge window.  When no charge is scheduled the battery
-            # won't be refilled, so export proceeds freely.
-            _next_charge_after_segment = min(
-                (c["start"] for c in charge_phase_clusters if segment_slots and c["start"] >= segment_slots[-1]["end"]),
-                default=None,
-            )
-            _export_allowed_from = (
-                _next_charge_after_segment - timedelta(hours=8)
-                if _next_charge_after_segment is not None
-                else None
-            )
+            has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
             # total planned discharge for all segment slots that start AFTER s.
@@ -3696,10 +3147,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
-                within_export_window = (
-                    _export_allowed_from is not None
-                    and segment_slot_start >= _export_allowed_from
-                )
                 segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
                 within_charge_phase = (
                     any(
@@ -3725,7 +3172,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # done, so the full evening discharge happens in one uninterrupted
                 # session rather than draining partially between neg-price windows.
                 more_todays_charge_ahead = any(
-                    cluster["end"] > segment_slot_end and cluster["start"] < cycle_end
+                    cluster["start"] > segment_slot_end and cluster["start"] < cycle_end
                     for cluster in charge_phase_clusters
                 )
                 suppress_discharge = (
@@ -3741,10 +3188,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
                     and not suppress_discharge
-                    and not within_charge_phase
                 ):
                     last_charge_mode = "accu_uit"
-                    if segment_export_kwh > 0 and within_export_window:
+                    if segment_export_kwh > 0:
                         # Export surplus on top of home-demand discharge: drain both
                         # at the most expensive slot inside the discharge window.
                         mode = "ontladen_naar_net"
@@ -3762,7 +3208,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     mode = charge_phase_mode
                 elif hold_charge_mode:
                     mode = "laden_met_zonne_energie"
-                elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0 and within_export_window:
+                elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_export_kwh)
@@ -3777,7 +3223,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and slot_solar_kwh >= 0
                         and segment_end_index < len(slots)
                         and float(segment_slot["export_price"]) >= average_export_price
-                        and within_export_window
                     ):
                         mode = "ontladen_naar_net"
                         last_charge_mode = "accu_uit"
@@ -3801,7 +3246,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._update_active_charge_phase_state(
             now=now,
             active_charge_phase=active_charge_phase,
-            charge_phase_clusters=charge_phase_clusters,
             current_mode=current_mode,
             last_charge_mode=last_charge_mode,
             active_charge_phase_mode=active_charge_phase_mode,
@@ -4235,43 +3679,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             windows = self._aggregate_price_windows_to_hourly(windows)
 
         return sorted(windows, key=lambda item: item.start)
-
-    def _export_price_formula(self) -> str:
-        """Return the configured export price formula used without a dedicated export sensor."""
-
-        formula = self._config.get(CONF_EXPORT_PRICE_FORMULA, DEFAULT_EXPORT_PRICE_FORMULA)
-        return str(formula or DEFAULT_EXPORT_PRICE_FORMULA)
-
-    def _derive_export_price(self, import_price: float | None, formula: str) -> float | None:
-        """Calculate export price from import price and the configured formula."""
-
-        if import_price is None:
-            return None
-        try:
-            return float(_safe_eval_price_formula(formula, price=import_price))
-        except (SyntaxError, TypeError, ValueError, ZeroDivisionError) as err:
-            _LOGGER.warning(
-                "Invalid export price formula %r; falling back to import price %.6f: %s",
-                formula,
-                import_price,
-                err,
-            )
-            return import_price
-
-    def _derive_export_price_windows(
-        self,
-        windows: list[PlannerWindow],
-        formula: str,
-    ) -> list[PlannerWindow]:
-        """Build export price windows from import price windows using the formula."""
-
-        derived: list[PlannerWindow] = []
-        for window in windows:
-            derived_price = self._derive_export_price(window.price, formula)
-            if derived_price is None:
-                continue
-            derived.append(PlannerWindow(start=window.start, end=window.end, price=derived_price))
-        return derived
 
     def _extract_price_average(
         self,
