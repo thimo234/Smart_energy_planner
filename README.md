@@ -16,9 +16,8 @@ You can now add the integration multiple times and choose a separate planner typ
 
 - Installable through HACS as a custom repository
 - Full UI configuration through a config flow
-- Reads hourly Nord Pool price blocks from an existing import-price sensor
+- Reads hourly Nord Pool price blocks from an existing sensor
 - Supports Nord Pool quarter-hour price blocks from `raw_today` and `raw_tomorrow`
-- Can calculate export prices from the import-price sensor with a configurable formula such as `price - 0.11`
 - Uses Solcast daily forecast and `detailedHourly` production windows
 - Adds optional battery-aware strategy recommendations
 
@@ -32,8 +31,7 @@ Add the integration from the Home Assistant UI and choose one of these planner t
 You can add the integration multiple times if you want one standalone battery planner and one standalone thermostat planner.
 Depending on the selected planner type, configure:
 
-- Energy/import price sensor
-- Optional export price sensor, or an export price calculation such as `price - 0.11`, `11`, `11 cent`, or `max(price - 0.11, 0)` when you only have one Nord Pool sensor
+- Energy price sensor
 - Solcast forecast sensor for today
 - Outdoor temperature sensor
 - Room temperature sensor

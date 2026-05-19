@@ -35,9 +35,7 @@
           "battery_min_soc_percent": "Minimum battery state of charge (%)",
           "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
-          "battery_max_discharge_kw": "Max discharge power (kW)",
-          "battery_charge_safety_margin": "Solar charge safety margin % (0 = off, 20 = plan 20% extra to buffer solar forecast errors)",
-          "export_price_formula": "Export price calculation (use price, e.g. price - 0.11 or 11 cents)"
+          "battery_max_discharge_kw": "Max discharge power (kW)"
         }
       }
     }
@@ -71,9 +69,7 @@
           "battery_min_soc_percent": "Minimum battery state of charge (%)",
           "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
-          "battery_max_discharge_kw": "Max discharge power (kW)",
-          "battery_charge_safety_margin": "Solar charge safety margin % (0 = off, 20 = plan 20% extra to buffer solar forecast errors)",
-          "export_price_formula": "Export price calculation (use price, e.g. price - 0.11 or 11 cents)"
+          "battery_max_discharge_kw": "Max discharge power (kW)"
         }
       }
     }

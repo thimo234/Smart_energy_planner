@@ -35,8 +35,7 @@
           "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
           "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
-          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
-          "export_price_formula": "Terugleverprijs berekening (gebruik price, bijv. price - 0.11 of 11 cent)"
+          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
         }
       }
     }
@@ -70,8 +69,7 @@
           "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
           "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
-          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
-          "export_price_formula": "Terugleverprijs berekening (gebruik price, bijv. price - 0.11 of 11 cent)"
+          "battery_max_discharge_kw": "Max ontlaadvermogen (kW)"
         }
       }
     }
