@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_ENABLED,
+    CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_SOC_PERCENT,
@@ -43,6 +44,7 @@ from .const import (
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
+    DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
@@ -1927,6 +1929,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
         )
+        charge_safety_margin = max(
+            0.0,
+            min(0.5, float(self._config.get(CONF_BATTERY_CHARGE_SAFETY_MARGIN, DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN)) / 100.0),
+        )
         planned_solar_charge_windows, planned_grid_charge_windows = self._plan_charge_windows_for_horizon(
             slots=energy_balance_slots,
             now=now,
@@ -1934,6 +1940,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
             battery_min_profit=battery_min_profit,
+            charge_safety_margin=charge_safety_margin,
         )
         next_planned_solar_charge_start = min(
             (
@@ -2608,6 +2615,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
         battery_min_profit: float,
+        charge_safety_margin: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2615,10 +2623,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
-        # Current cycle: only charge what the battery actually needs right now.
-        # Next cycle uses next_target_kwh = usable_capacity_kwh (empty-start assumption).
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        target_charge_kwh = current_remaining_capacity_kwh
+        # Inflate the planning target by the safety margin so the selection loop
+        # picks more and earlier solar slots as a buffer against solar underperformance.
+        # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
+        # and stops; when solar falls short the extra selected slots cover the gap.
+        planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
+        target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
 
         has_export_price_sensor = bool(self._config.get(CONF_EXPORT_PRICE_SENSOR))
         productive_solar_slot_starts = self._select_contiguous_productive_solar_slot_starts(
@@ -2651,10 +2662,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             6,
         )
 
-        # Current cycle: fill only today's actual deficit.
         current_grid_limit_kwh = max(
             0.0,
-            round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
         # Discharge cycle tracking: once the battery is well-charged (SOC >= 70%)
@@ -2680,10 +2690,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if self._discharge_session_started:
             current_grid_limit_kwh = 0.0
 
-        # Next cycle: battery assumed empty — must fill full capacity.
+        # Next cycle: battery assumed empty — must fill full planning capacity.
         next_grid_limit_kwh = max(
             0.0,
-            round(usable_capacity_kwh - next_cycle_solar_kwh, 6),
+            round(planning_capacity_kwh - next_cycle_solar_kwh, 6),
         )
         # Combined gate for candidate building: add a grid candidate if either
         # cycle still has a gap that solar alone cannot fill.
@@ -2845,7 +2855,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # ── Next-cycle selection (tomorrow) ──────────────────────────────────
         # Battery is assumed discharged to empty before midnight; plan to refill
         # it using tomorrow's candidates, price-sorted within each kind.
-        next_target_kwh = usable_capacity_kwh
+        next_target_kwh = planning_capacity_kwh
         next_charged_kwh = 0.0
         next_charged_grid_kwh = 0.0
         next_neg_grid_charged_kwh = 0.0
