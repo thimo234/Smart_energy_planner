@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .battery_planner import normalize_full_battery_charge_mode
 from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
 from .coordinator import SmartEnergyPlannerCoordinator
 from .planner_result import PlannerResult
@@ -214,6 +215,20 @@ class BatteryStrategySensor(BatteryPlannerSensor):
         entry: ConfigEntry,
     ) -> None:
         super().__init__(coordinator, entry, "battery_strategy", "Battery Strategy", "battery_strategy")
+
+    @property
+    def native_value(self):
+        data: PlannerResult = self.coordinator.data
+        return normalize_full_battery_charge_mode(
+            mode=data.battery_strategy,
+            usable_energy_kwh=getattr(data, "battery_energy_available_kwh", 0.0),
+            usable_capacity_kwh=max(
+                0.0,
+                getattr(data, "battery_total_energy_kwh", 0.0)
+                + getattr(data, "battery_remaining_capacity_kwh", 0.0)
+                - (getattr(data, "battery_total_energy_kwh", 0.0) - getattr(data, "battery_energy_available_kwh", 0.0)),
+            ),
+        )
 
 
 class BatteryProfitSensor(PlannerSensor):
