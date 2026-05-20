@@ -1,4 +1,4 @@
-"""Coordinator for Smart Energy Planner."""
+﻿"""Coordinator for Smart Energy Planner."""
 
 from __future__ import annotations
 
@@ -17,6 +17,19 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
+from .battery_forecast import (
+    build_energy_balance_slots,
+    build_fallback_solar_windows,
+    build_fallback_solar_windows_for_day,
+    build_hourly_home_demand_forecast,
+    extract_solar_windows,
+    get_solar_day_end,
+    merge_solar_windows,
+    sum_remaining_home_demand_until,
+    sum_remaining_solar_until,
+    select_best_solar_window,
+)
+from .battery_models import SolarWindow
 from .battery_planner import (
     build_battery_mode_schedule,
     build_charge_window_lookup,
@@ -26,6 +39,13 @@ from .battery_planner import (
     plan_segment_discharge_kwh,
     select_contiguous_productive_solar_slot_starts,
     summarize_battery_cycles,
+)
+from .thermostat_planner import (
+    THERMOSTAT_MAX_COOLDOWN_HOURS,
+    estimate_cooling_profile_from_model,
+    find_next_valley_start,
+    select_expensive_peak_blocks,
+    select_thermostat_peak_eco_windows,
 )
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
@@ -74,14 +94,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
-_THERMOSTAT_ECO_MERGE_GAP = timedelta(hours=1)
-_THERMOSTAT_FALLBACK_COOLING_FACTOR = 0.04
-_THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS = 2.0
-_THERMOSTAT_MAX_COOLDOWN_HOURS = 18.0
-# Number of completed eco sessions after which the learned cooling factor is
-# fully trusted. Below this number the planner blends the learned rate with a
-# conservative fallback.
-_THERMOSTAT_COOLING_LEARN_SAMPLES = 3
 # Minimum absolute change (kWh) in the tracked battery energy before the profit
 # tracker updates the cost basis. Changes below this are treated as sensor
 # noise, but the baseline is still persisted so we don't lose precision across
@@ -94,15 +106,6 @@ class PlannerWindow:
     start: datetime
     end: datetime
     price: float
-
-
-@dataclass(slots=True)
-class SolarWindow:
-    start: datetime
-    end: datetime
-    forecast_kwh: float
-    forecast_kwh_p10: float | None
-    forecast_kwh_p90: float | None
 
 
 @dataclass(slots=True)
@@ -216,7 +219,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     def _schedule_source_error_retry(self) -> None:
         if self._source_error_retry_unsub is not None:
             return
-        # Self-repeating interval — fires every 30s while there are source
+        # Self-repeating interval â€” fires every 30s while there are source
         # errors and stops only when _cancel_source_error_retry runs.  This
         # is robust against any code path failing to reschedule a one-shot
         # timer (e.g. an unexpected exception inside _async_update_data).
@@ -406,16 +409,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             thermostat_cool_setpoint = self._get_manual_cool_temperature()
             thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
             thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
-            solar_windows = self._extract_solar_windows(solar_state.attributes if solar_state else {})
+            solar_windows = extract_solar_windows(solar_state.attributes if solar_state else {})
             solar_windows.extend(
-                self._extract_solar_windows(solar_tomorrow_state.attributes if solar_tomorrow_state else {})
+                extract_solar_windows(solar_tomorrow_state.attributes if solar_tomorrow_state else {})
             )
-            all_solar_windows = self._extract_solar_windows(
+            all_solar_windows = extract_solar_windows(
                 solar_state.attributes if solar_state else {},
                 include_past=True,
             )
             all_solar_windows.extend(
-                self._extract_solar_windows(
+                extract_solar_windows(
                     solar_tomorrow_state.attributes if solar_tomorrow_state else {},
                     include_past=True,
                 )
@@ -424,7 +427,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_state.attributes.get("analysis", {}).get("confidence") if solar_state else None
             )
             if planner_kind == PLANNER_KIND_BATTERY and not solar_windows and solar_forecast and solar_forecast > 0:
-                fallback_today_windows = self._build_fallback_solar_windows(solar_forecast)
+                fallback_today_windows = build_fallback_solar_windows(solar_forecast)
                 solar_windows = [*solar_windows, *fallback_today_windows]
                 all_solar_windows = [*all_solar_windows, *fallback_today_windows]
             if (
@@ -434,14 +437,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and solar_tomorrow_forecast
                 and solar_tomorrow_forecast > 0
             ):
-                fallback_tomorrow_windows = self._build_fallback_solar_windows_for_day(
+                fallback_tomorrow_windows = build_fallback_solar_windows_for_day(
                     solar_tomorrow_forecast,
                     day_offset=1,
                 )
                 solar_windows.extend(fallback_tomorrow_windows)
                 all_solar_windows.extend(fallback_tomorrow_windows)
-            solar_windows = self._merge_solar_windows(solar_windows)
-            all_solar_windows = self._merge_solar_windows(all_solar_windows)
+            solar_windows = merge_solar_windows(solar_windows)
+            all_solar_windows = merge_solar_windows(all_solar_windows)
             if planner_kind == PLANNER_KIND_BATTERY:
                 battery_price_horizon_end = max(
                     [window.end for window in [*all_windows, *all_solar_windows]],
@@ -540,7 +543,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 thermostat_eco_setpoint_c=thermostat_eco_setpoint,
             )
 
-            # Apply EMA (α=0.2) to smooth hours_to_eco and suppress per-refresh noise.
+            # Apply EMA (Î±=0.2) to smooth hours_to_eco and suppress per-refresh noise.
             raw_eco_hours = cooling_profile.get("hours_to_eco")
             if raw_eco_hours is not None and planner_kind == PLANNER_KIND_THERMOSTAT:
                 _rs = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
@@ -581,7 +584,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     ):
                         _adjusted_rate = _last_rate * (_cur_delta_t / _last_delta_t)
                         cooling_hours_from_current = round(
-                            min(_cur_delta / max(_adjusted_rate, 0.01), _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
+                            min(_cur_delta / max(_adjusted_rate, 0.01), THERMOSTAT_MAX_COOLDOWN_HOURS), 2
                         )
                     else:
                         _model_hours = cooling_profile.get("hours_to_eco")
@@ -589,7 +592,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
                         if _model_hours is not None and _cooldown_delta > 0:
                             cooling_hours_from_current = round(
-                                min((_cur_delta / _cooldown_delta) * _model_hours, _THERMOSTAT_MAX_COOLDOWN_HOURS), 2
+                                min((_cur_delta / _cooldown_delta) * _model_hours, THERMOSTAT_MAX_COOLDOWN_HOURS), 2
                             )
 
             try:
@@ -943,7 +946,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_value: float,
         now: datetime,
     ) -> dict[str, float]:
-        """Maintain a 168-slot (7 × 24) EMA table of hourly energy consumption.
+        """Maintain a 168-slot (7 Ã— 24) EMA table of hourly energy consumption.
 
         Each slot key is str(weekday * 24 + hour).  When the hour changes the
         delta between the current reading and the reading at the previous hour
@@ -1211,7 +1214,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         cooldown_reference_temperature = max(room_temperature_c, thermostat_setpoint_c)
         cooldown_delta = max(cooldown_reference_temperature - thermostat_eco_setpoint_c, 0.3)
-        estimated_rate, hours_to_eco = self._estimate_cooling_profile_from_model(
+        estimated_rate, hours_to_eco = estimate_cooling_profile_from_model(
+            cooling_model=cooling_model,
             outdoor_temperature_c=outdoor_temperature_c,
             room_temperature_c=cooldown_reference_temperature,
             cooldown_delta_c=cooldown_delta,
@@ -1225,343 +1229,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "last_observed_rate_c_per_hour": last_observed_rate,
             "last_observed_delta_temp_c": last_observed_delta,
         }
-
-    def _estimate_cooling_profile_from_model(
-        self,
-        *,
-        outdoor_temperature_c: float,
-        room_temperature_c: float,
-        cooldown_delta_c: float,
-    ) -> tuple[float, float]:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        cooling_model = runtime_state.get("cooling_model", {})
-        learned_factor = _coerce_float(cooling_model.get("rolling_cooling_factor"))
-        learned_samples = int(_coerce_float(cooling_model.get("eco_sample_count"), default=0.0) or 0)
-        last_eco_duration_hours = _coerce_float(cooling_model.get("last_eco_duration_hours"))
-        delta_temp = max(room_temperature_c - outdoor_temperature_c, 1.0)
-
-        # Floor heating cools down much slower than the old generic fallback
-        # assumed. Use a more conservative base model and start blending in the
-        # learned factor as soon as any completed eco session exists.
-        fallback_rate = max(0.03, delta_temp * _THERMOSTAT_FALLBACK_COOLING_FACTOR)
-        fallback_hours = min(
-            _THERMOSTAT_MAX_COOLDOWN_HOURS,
-            max(_THERMOSTAT_MIN_FALLBACK_COOLDOWN_HOURS, cooldown_delta_c / fallback_rate),
-        )
-
-        if learned_factor is not None and learned_samples > 0:
-            delta_temp = max(room_temperature_c - outdoor_temperature_c, 0.5)
-            # Cap the stored factor to a physically plausible range.  The model
-            # can accumulate a corrupted (too-high) factor from early short
-            # partial sessions with high apparent cooling rates; clamping it
-            # prevents those artifacts from permanently dominating the estimate.
-            clamped_factor = min(learned_factor, 10.0 * _THERMOSTAT_FALLBACK_COOLING_FACTOR)
-            learned_rate = max(0.03, min(2.0, clamped_factor * delta_temp))
-            blend = min(1.0, learned_samples / float(_THERMOSTAT_COOLING_LEARN_SAMPLES))
-            estimated_rate = (fallback_rate * (1.0 - blend)) + (learned_rate * blend)
-            estimated_hours = min(
-                _THERMOSTAT_MAX_COOLDOWN_HOURS,
-                max(1.0, cooldown_delta_c / max(estimated_rate, 0.03)),
-            )
-            if last_eco_duration_hours is not None:
-                estimated_hours = max(estimated_hours, min(_THERMOSTAT_MAX_COOLDOWN_HOURS, last_eco_duration_hours))
-            return estimated_rate, estimated_hours
-
-        return fallback_rate, fallback_hours
-
-    def _find_next_valley_start(
-        self,
-        windows: list[PlannerWindow],
-        now: datetime,
-        average_price: float,
-    ) -> datetime | None:
-        """Return the start of the first true price valley after the next expensive period.
-
-        A valley is a contiguous plateau of equal-price windows where:
-        - every window in the plateau has price <= average_price
-        - the window immediately before the plateau is strictly more expensive
-        - the window immediately after the plateau is strictly more expensive
-          (or the plateau reaches the end of available data)
-
-        The search first waits for at least one expensive window (price > average_price)
-        so we skip any current cheap period and find the NEXT valley.
-        """
-        future = sorted(
-            [w for w in windows if w.end > now],
-            key=lambda w: w.start,
-        )
-        n = len(future)
-        saw_expensive = False
-        i = 0
-        while i < n:
-            if not saw_expensive:
-                if future[i].price > average_price:
-                    saw_expensive = True
-                i += 1
-                continue
-            p = future[i].price
-            if p > average_price:
-                i += 1
-                continue
-            # Cheap window after expensive — check left boundary
-            prev_price = future[i - 1].price if i > 0 else float("inf")
-            if prev_price <= p:
-                i += 1
-                continue
-            # Find the end of the equal-price plateau
-            j = i
-            while j + 1 < n and future[j + 1].price == p:
-                j += 1
-            # Check right boundary (end of data counts as infinite price)
-            next_price = future[j + 1].price if j + 1 < n else float("inf")
-            if next_price <= p:
-                i = j + 1
-                continue
-            return future[i].start
-        return None
-
-    def _select_most_expensive_window_block(
-        self,
-        *,
-        windows: list[PlannerWindow],
-        now: datetime,
-        duration_hours: float,
-    ) -> dict[str, datetime | float] | None:
-        if duration_hours <= 0:
-            return None
-
-        eligible_windows = [window for window in windows if window.end > now]
-        if not eligible_windows:
-            return None
-
-        best_block: dict[str, datetime | float] | None = None
-        for start_index, start_window in enumerate(eligible_windows):
-            block_start = max(start_window.start, now)
-            accumulated_hours = 0.0
-            weighted_price = 0.0
-            block_end = block_start
-
-            for window in eligible_windows[start_index:]:
-                usable_start = max(window.start, block_end if block_end > window.start else window.start)
-                usable_end = window.end
-                usable_hours = (usable_end - usable_start).total_seconds() / 3600
-                if usable_hours <= 0:
-                    continue
-                take_hours = min(usable_hours, duration_hours - accumulated_hours)
-                weighted_price += window.price * take_hours
-                accumulated_hours += take_hours
-                block_end = usable_start + timedelta(hours=take_hours)
-                if accumulated_hours >= duration_hours:
-                    average_price = weighted_price / accumulated_hours
-                    candidate = {"start": block_start, "end": block_end, "average_price": average_price}
-                    if best_block is None or average_price > float(best_block["average_price"]):
-                        best_block = candidate
-                    break
-
-        return best_block
-
-    def _select_expensive_peak_blocks(
-        self,
-        *,
-        windows: list[PlannerWindow],
-        now: datetime,
-        duration_hours: float,
-        expensive_threshold: float,
-    ) -> list[dict[str, datetime | float]]:
-        """Select one eco block for each distinct expensive price peak."""
-        eligible_windows = [
-            window
-            for window in windows
-            if window.end > now and window.price >= expensive_threshold
-        ]
-        if not eligible_windows:
-            return []
-
-        grouped_windows: list[list[PlannerWindow]] = []
-        current_group: list[PlannerWindow] = []
-        for window in eligible_windows:
-            if not current_group:
-                current_group = [window]
-                continue
-            previous = current_group[-1]
-            if window.start <= previous.end:
-                current_group.append(window)
-            else:
-                grouped_windows.append(current_group)
-                current_group = [window]
-        if current_group:
-            grouped_windows.append(current_group)
-
-        peak_blocks: list[dict[str, datetime | float]] = []
-        for group in grouped_windows:
-            group_start = max(group[0].start, now)
-            group_end = group[-1].end
-            group_hours = max((group_end - group_start).total_seconds() / 3600, 0.0)
-            if group_hours <= 0:
-                continue
-
-            if duration_hours > 0 and group_hours > duration_hours:
-                selected = self._select_most_expensive_window_block(
-                    windows=group,
-                    now=now,
-                    duration_hours=duration_hours,
-                )
-                if selected is not None:
-                    peak_blocks.append(selected)
-                continue
-
-            weighted_price = 0.0
-            total_hours = 0.0
-            for window in group:
-                usable_start = max(window.start, now)
-                usable_hours = max((window.end - usable_start).total_seconds() / 3600, 0.0)
-                if usable_hours <= 0:
-                    continue
-                weighted_price += window.price * usable_hours
-                total_hours += usable_hours
-            if total_hours <= 0:
-                continue
-            peak_blocks.append(
-                {
-                    "start": group_start,
-                    "end": group_end,
-                    "average_price": weighted_price / total_hours,
-                }
-            )
-
-        return sorted(peak_blocks, key=lambda item: item["start"])
-
-    def _select_thermostat_peak_eco_windows(
-        self,
-        *,
-        windows: list[PlannerWindow],
-        now: datetime,
-        cooldown_hours: float,
-        average_price: float,
-        expensive_threshold: float,
-    ) -> list[dict[str, datetime | float]]:
-        """Plan an eco window per price peak: the most expensive contiguous block of
-        cooldown_hours within each peak.
-
-        The block is computed from the peak's own start (not clipped to now) so it
-        stays stable across planning ticks and doesn't reset the eco-early-exit latch.
-        Windows that started up to cooldown_hours ago are included so an ongoing block
-        is detected correctly when we are already partway through it.
-        """
-        if cooldown_hours <= 0:
-            return []
-
-        # Look back up to cooldown_hours so an eco block that started before now is
-        # still detected while we are inside it.
-        lookback_start = now - timedelta(hours=cooldown_hours)
-        eligible_windows = [
-            window
-            for window in windows
-            if window.end > lookback_start and window.price >= expensive_threshold
-        ]
-        if not eligible_windows:
-            return []
-
-        # Group consecutive expensive windows into distinct price peaks.
-        grouped_windows: list[list[PlannerWindow]] = []
-        current_group: list[PlannerWindow] = []
-        for window in eligible_windows:
-            if not current_group:
-                current_group = [window]
-                continue
-            if window.start <= current_group[-1].end:
-                current_group.append(window)
-            else:
-                grouped_windows.append(current_group)
-                current_group = [window]
-        if current_group:
-            grouped_windows.append(current_group)
-
-        eco_windows: list[dict[str, datetime | float]] = []
-        for group in grouped_windows:
-            group_start = group[0].start
-            group_end = group[-1].end
-            if group_end <= now:
-                continue
-
-            group_hours = (group_end - group_start).total_seconds() / 3600
-            if group_hours <= 0:
-                continue
-
-            if group_hours > cooldown_hours:
-                # Sliding-window search: find the contiguous block of exactly
-                # cooldown_hours with the highest average price.  Block start is
-                # taken from the window's own timestamp (not clipped to now) so the
-                # result is the same on every planning tick while we are inside it.
-                best_block: dict[str, datetime | float] | None = None
-                for start_index, start_window in enumerate(group):
-                    block_start = start_window.start
-                    accumulated_hours = 0.0
-                    weighted_price = 0.0
-                    block_end = block_start
-                    for window in group[start_index:]:
-                        usable_start = max(window.start, block_end)
-                        usable_hours = (window.end - usable_start).total_seconds() / 3600
-                        if usable_hours <= 0:
-                            continue
-                        take_hours = min(usable_hours, cooldown_hours - accumulated_hours)
-                        weighted_price += window.price * take_hours
-                        accumulated_hours += take_hours
-                        block_end = usable_start + timedelta(hours=take_hours)
-                        if accumulated_hours >= cooldown_hours:
-                            avg_p = weighted_price / accumulated_hours
-                            if best_block is None or avg_p > float(best_block["average_price"]):
-                                best_block = {
-                                    "start": block_start,
-                                    "end": block_end,
-                                    "average_price": avg_p,
-                                }
-                            break
-                if best_block is None:
-                    continue
-                eco_start = cast(datetime, best_block["start"])
-                eco_end = cast(datetime, best_block["end"])
-                avg_price_val = float(best_block["average_price"])
-            else:
-                # Short peak — use the whole group.
-                weighted_price = 0.0
-                total_hours = 0.0
-                for window in group:
-                    wh = (window.end - window.start).total_seconds() / 3600
-                    weighted_price += window.price * wh
-                    total_hours += wh
-                if total_hours <= 0:
-                    continue
-                eco_start = group_start
-                eco_end = group_end
-                avg_price_val = weighted_price / total_hours
-
-            if eco_end <= now:
-                continue
-
-            eco_windows.append(
-                {"start": eco_start, "end": eco_end, "average_price": avg_price_val}
-            )
-
-        if not eco_windows:
-            return []
-
-        merged_windows: list[dict[str, datetime | float]] = []
-        for window in sorted(eco_windows, key=lambda item: item["start"]):
-            if not merged_windows:
-                merged_windows.append(window)
-                continue
-            previous = merged_windows[-1]
-            if window["start"] <= previous["end"] + _THERMOSTAT_ECO_MERGE_GAP:
-                previous["end"] = max(previous["end"], window["end"])
-                previous["average_price"] = max(
-                    float(previous["average_price"]),
-                    float(window["average_price"]),
-                )
-            else:
-                merged_windows.append(window)
-
-        return merged_windows
 
     def _build_plan(
         self,
@@ -1631,12 +1298,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         today_solar_windows = [window for window in solar_windows if window.start.date() == now.date()]
         future_solar_windows = [window for window in solar_windows if window.start.date() > now.date()]
-        best_solar_window = self._select_best_solar_window(today_solar_windows or solar_windows)
+        best_solar_window = select_best_solar_window(today_solar_windows or solar_windows)
         planning_horizon_end = max(
             [window.end for window in [*all_windows, *all_solar_windows]],
             default=now + timedelta(days=1),
         )
-        estimated_hourly_home_demand = self._build_hourly_home_demand_forecast(
+        estimated_hourly_home_demand = build_hourly_home_demand_forecast(
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
             hourly_demand_table=hourly_demand_table,
@@ -1651,10 +1318,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             2,
         )
-        sunset_time = self._get_solar_day_end(today_solar_windows)
-        planning_horizon_solar_end = self._get_solar_day_end(solar_windows)
-        remaining_solar_until_sunset = self._sum_remaining_solar_until(today_solar_windows, now, sunset_time)
-        remaining_home_demand_until_sunset = self._sum_remaining_home_demand_until(
+        sunset_time = get_solar_day_end(today_solar_windows)
+        planning_horizon_solar_end = get_solar_day_end(solar_windows)
+        remaining_solar_until_sunset = sum_remaining_solar_until(today_solar_windows, now, sunset_time)
+        remaining_home_demand_until_sunset = sum_remaining_home_demand_until(
             estimated_hourly_home_demand, now, sunset_time
         )
         projected_solar_surplus_until_sunset = max(
@@ -1673,7 +1340,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in windows if window.price <= cheap_threshold), cheapest),
         )
         solar_covers_today = (
-            self._sum_remaining_solar_until(today_solar_windows, now, sunset_time) >= remaining_home_demand_until_sunset
+            sum_remaining_solar_until(today_solar_windows, now, sunset_time) >= remaining_home_demand_until_sunset
             and estimated_total_home_demand_kwh > 0
         )
         cheap_now = current_price is not None and current_price <= cheap_threshold
@@ -1706,15 +1373,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if price_signal_available:
             try:
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    eco_windows = self._select_thermostat_peak_eco_windows(
+                    eco_windows = select_thermostat_peak_eco_windows(
                         windows=all_windows,
                         now=now,
                         cooldown_hours=eco_duration_hours,
-                        average_price=average_price,
                         expensive_threshold=eco_expensive_threshold,
                     )
                 else:
-                    eco_windows = self._select_expensive_peak_blocks(
+                    eco_windows = select_expensive_peak_blocks(
                         windows=windows,
                         now=now,
                         duration_hours=eco_duration_hours,
@@ -1755,9 +1421,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
         )
         # Preheat ends exactly when the eco window begins (window["start"]), so the
-        # room warms up before eco drops the setpoint — not during it.
+        # room warms up before eco drops the setpoint â€” not during it.
         # With multiple eco peaks, clamp each preheat start to not overlap with the
-        # preceding eco window — otherwise preheat for peak N+1 suppresses eco for peak N.
+        # preceding eco window â€” otherwise preheat for peak N+1 suppresses eco for peak N.
         sorted_eco_for_preheat = sorted(eco_windows, key=lambda w: w["start"])
         preheat_windows = []
         for idx, eco_win in enumerate(sorted_eco_for_preheat):
@@ -1784,7 +1450,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             next((window for window in preheat_windows if window["start"] > now), None),
         )
         preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
-        # ── Step 1: resolve an existing lock ────────────────────────────────
+        # â”€â”€ Step 1: resolve an existing lock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Lock preheat once it activates so that eco-window drift (caused by
         # EMA updates to hours_to_eco) cannot push the preheat-window start
         # past NOW and revert the mode to "normal" mid-preheat.  The lock is
@@ -1792,7 +1458,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # locked end-time is reached.
         if self._locked_preheat_end is not None:
             if self._locked_eco_window is not None:
-                # Eco started — normal end of preheat session.
+                # Eco started â€” normal end of preheat session.
                 self._locked_preheat_end = None
                 self._preheat_expired_at = None
             elif now >= self._locked_preheat_end:
@@ -1802,23 +1468,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 self._locked_preheat_end = None
             else:
                 preheat_active_now = True  # hold preheat mode across planning ticks
-        # ── Step 2: suppress back-to-back sessions ──────────────────────────
+        # â”€â”€ Step 2: suppress back-to-back sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # When the previous preheat session timed out without eco starting
         # (e.g. day-ahead prices arriving at 13:00 shifted the eco window
         # 2 h forward) a new preheat window may start at exactly the moment
         # the old one expired.  Without this guard that would double the total
-        # preheat duration.  Suppress any preheat window whose start ≤ the
+        # preheat duration.  Suppress any preheat window whose start â‰¤ the
         # recorded expiry; the suppression is lifted once eco starts.
         if self._preheat_expired_at is not None:
             if self._locked_eco_window is not None:
-                self._preheat_expired_at = None  # eco arrived — fresh cycle
+                self._preheat_expired_at = None  # eco arrived â€” fresh cycle
             elif preheat_active_now and any(
                 w["start"] <= self._preheat_expired_at
                 for w in preheat_windows
                 if w["start"] <= now < w["end"]
             ):
                 preheat_active_now = False
-        # ── Step 3: latch a new lock for this session ────────────────────────
+        # â”€â”€ Step 3: latch a new lock for this session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if preheat_active_now and self._locked_preheat_end is None:
             preheat_eco_start = next(
                 (cast(datetime, w["end"]) for w in preheat_windows if w["start"] <= now < w["end"]),
@@ -1834,7 +1500,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             preheat_active_now = False
 
         # Eco continues for the full planned window regardless of individual cheap
-        # price slots within it — interrupting eco mid-window for a cheap slot
+        # price slots within it â€” interrupting eco mid-window for a cheap slot
         # prevents the room from ever cooling to eco temperature.
         # Eco may only be interrupted early when no proper cheap valley remains
         # after the eco block ends.  A valley requires at least 4 cheap windows.
@@ -1847,7 +1513,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # reachable rather than prematurely breaking eco.
             if len(windows_after_eco) >= 8:
                 # The room is already cooling during eco, so the cooling-time
-                # offset is NOT applied here — using now + time_to_eco would
+                # offset is NOT applied here â€” using now + time_to_eco would
                 # push the search window 18 h into the future while the room is
                 # already cooling, causing eco to break prematurely.
                 # Instead, require at least 4 consecutive cheap windows after
@@ -1867,7 +1533,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # The "next valley" is the first cheap window (price <= average) that
         # follows the next upcoming expensive period.  If the remaining cooling
         # time (from the CURRENT room temperature, not the setpoint) exceeds
-        # hours_to_next_valley, the room won't reach eco setpoint in time — so
+        # hours_to_next_valley, the room won't reach eco setpoint in time â€” so
         # force eco continuously.  Once the room has cooled enough the condition
         # stops being met and normal scheduling resumes.
         if planner_kind == PLANNER_KIND_THERMOSTAT and eco_duration_hours > 0:
@@ -1891,7 +1557,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 _eco_hours_from_current = 0.0  # room already at or below eco temp
             else:
                 _eco_hours_from_current = eco_duration_hours  # fallback to setpoint-based
-            _next_valley_start = self._find_next_valley_start(
+            _next_valley_start = find_next_valley_start(
                 all_windows, now, average_price
             )
             if _next_valley_start is not None:
@@ -1932,7 +1598,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_battery_capacity_kwh = max(0.0, round(battery_capacity - minimum_battery_reserve_kwh, 3))
         remaining_usable_capacity_kwh = max(0.0, round(usable_battery_capacity_kwh - battery_energy_available_kwh, 3))
         target_battery_full_by_sunset = battery_enabled and remaining_usable_capacity_kwh > 0
-        energy_balance_slots = self._build_energy_balance_slots(
+        energy_balance_slots = build_energy_balance_slots(
             price_windows=battery_switch_windows or all_windows,
             export_price_windows=all_export_windows or export_windows or all_windows,
             solar_windows=all_solar_windows,
@@ -1977,7 +1643,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             default=None,
         )
         home_demand_until_next_charge_kwh = round(
-            self._sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
+            sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
         )
         # No energy reservation: the battery drains to empty at the end of every
@@ -2272,247 +1938,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale=rationale,
         )
 
-    def _build_hourly_home_demand_forecast(
-        self,
-        *,
-        non_heating_daily_average_kwh: float,
-        heating_estimate_kwh: float,
-        hourly_demand_table: dict[str, float] | None = None,
-        horizon_end: datetime | None = None,
-    ) -> list[dict[str, str | float]]:
-        """Build an hourly demand forecast from the 168-slot EMA table.
-
-        Each slot key is str(weekday * 24 + hour).  Falls back to
-        max(0.4, daily_average / 24) for slots not yet in the table.
-        """
-        base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
-        fallback_hourly = max(0.4, base_hourly)
-        table = hourly_demand_table or {}
-
-        heating_profile = [
-            0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
-            0.06, 0.07, 0.06, 0.045, 0.035, 0.03,
-            0.025, 0.025, 0.025, 0.03, 0.04, 0.055,
-            0.07, 0.075, 0.065, 0.05, 0.04, 0.035,
-        ]
-        profile_sum = sum(heating_profile) or 1.0
-        now = dt_util.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        horizon_end = horizon_end or (today_start + timedelta(days=1))
-        day_count = max(1, (horizon_end.date() - today_start.date()).days + 1)
-
-        forecast: list[dict[str, str | float]] = []
-        for day_offset in range(day_count):
-            day_start = today_start + timedelta(days=day_offset)
-            for hour in range(24):
-                slot_start = day_start + timedelta(hours=hour)
-                slot_key = str(slot_start.weekday() * 24 + hour)
-                table_value = _coerce_float(table.get(slot_key))
-                historical_hourly = (
-                    min(table_value, 3.0) if table_value is not None else fallback_hourly
-                )
-                heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
-                total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
-                forecast.append(
-                    {
-                        "start": slot_start.isoformat(),
-                        "end": (slot_start + timedelta(hours=1)).isoformat(),
-                        "estimated_kwh": total_hourly,
-                    }
-                )
-
-        return forecast
-
-    def _get_solar_day_end(self, solar_windows: list[SolarWindow]) -> datetime | None:
-        productive_windows = [window for window in solar_windows if window.forecast_kwh > 0]
-        if not productive_windows:
-            return None
-        return max(window.end for window in productive_windows)
-
-    def _build_fallback_solar_windows(self, daily_forecast_kwh: float) -> list[SolarWindow]:
-        """Approximate hourly solar windows when only the daily forecast total is available."""
-        return self._build_fallback_solar_windows_for_day(daily_forecast_kwh, day_offset=0)
-
-    def _build_fallback_solar_windows_for_day(
-        self,
-        daily_forecast_kwh: float,
-        *,
-        day_offset: int,
-    ) -> list[SolarWindow]:
-        """Approximate hourly solar windows when only the daily forecast total is available."""
-        if daily_forecast_kwh <= 0:
-            return []
-
-        now = dt_util.now()
-        day_start = (now + timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
-        hourly_weights = [
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.02, 0.05, 0.09, 0.13, 0.16,
-            0.17, 0.15, 0.11, 0.07, 0.04, 0.01,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        ]
-        weight_sum = sum(hourly_weights) or 1.0
-        windows: list[SolarWindow] = []
-
-        for hour, weight in enumerate(hourly_weights):
-            if weight <= 0:
-                continue
-            start = day_start + timedelta(hours=hour)
-            end = start + timedelta(hours=1)
-            if day_offset == 0 and end <= now:
-                continue
-            forecast_kwh = round(daily_forecast_kwh * (weight / weight_sum), 3)
-            windows.append(
-                SolarWindow(
-                    start=start,
-                    end=end,
-                    forecast_kwh=forecast_kwh,
-                    forecast_kwh_p10=None,
-                    forecast_kwh_p90=None,
-                )
-            )
-
-        return windows
-
-    def _sum_remaining_solar_until(
-        self,
-        solar_windows: list[SolarWindow],
-        now: datetime,
-        until: datetime | None,
-    ) -> float:
-        if until is None:
-            return 0.0
-        total = 0.0
-        for window in solar_windows:
-            overlap_hours = self._overlap_hours(window.start, window.end, now, until)
-            if overlap_hours <= 0:
-                continue
-            window_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
-            total += window.forecast_kwh * (overlap_hours / window_hours)
-        return total
-
-    def _sum_remaining_home_demand_until(
-        self,
-        hourly_demand: list[dict[str, str | float]],
-        now: datetime,
-        until: datetime | None,
-    ) -> float:
-        if until is None:
-            return 0.0
-        total = 0.0
-        for slot in hourly_demand:
-            start = dt_util.parse_datetime(str(slot.get("start")))
-            end = dt_util.parse_datetime(str(slot.get("end")))
-            estimated_kwh = _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
-            if start is None or end is None:
-                continue
-            overlap_hours = self._overlap_hours(start, end, now, until)
-            if overlap_hours <= 0:
-                continue
-            slot_hours = max((end - start).total_seconds() / 3600, 0.0001)
-            total += estimated_kwh * (overlap_hours / slot_hours)
-        return total
-
-    def _remaining_day_solar_covers_demand(
-        self,
-        *,
-        slots: list[dict[str, Any]],
-        start: datetime,
-    ) -> bool:
-        day_end = (start + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        remaining_solar_kwh = 0.0
-        remaining_demand_kwh = 0.0
-
-        for slot in slots:
-            slot_start = cast(datetime, slot["start"])
-            slot_end = cast(datetime, slot["end"])
-            overlap_hours = self._overlap_hours(slot_start, slot_end, start, day_end)
-            if overlap_hours <= 0:
-                continue
-            slot_hours = max((slot_end - slot_start).total_seconds() / 3600, 0.0001)
-            remaining_solar_kwh += float(slot["solar_kwh"]) * (overlap_hours / slot_hours)
-            remaining_demand_kwh += float(slot["demand_kwh"]) * (overlap_hours / slot_hours)
-
-        return remaining_solar_kwh >= remaining_demand_kwh - 1e-6
-
-    def _build_energy_balance_slots(
-        self,
-        *,
-        price_windows: list[PlannerWindow],
-        export_price_windows: list[PlannerWindow],
-        solar_windows: list[SolarWindow],
-        hourly_demand: list[dict[str, str | float]],
-        horizon_start: datetime,
-    ) -> list[dict[str, Any]]:
-        slots: list[dict[str, Any]] = []
-        for window in price_windows:
-            if window.end <= horizon_start:
-                continue
-            slot_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
-            demand_kwh = 0.0
-            for demand_slot in hourly_demand:
-                demand_start = dt_util.parse_datetime(str(demand_slot.get("start")))
-                demand_end = dt_util.parse_datetime(str(demand_slot.get("end")))
-                estimated_kwh = _coerce_float(demand_slot.get("estimated_kwh"), default=0.0) or 0.0
-                if demand_start is None or demand_end is None:
-                    continue
-                overlap_hours = self._overlap_hours(window.start, window.end, demand_start, demand_end)
-                if overlap_hours <= 0:
-                    continue
-                demand_slot_hours = max((demand_end - demand_start).total_seconds() / 3600, 0.0001)
-                demand_kwh += estimated_kwh * (overlap_hours / demand_slot_hours)
-
-            solar_kwh = 0.0
-            for solar_window in solar_windows:
-                overlap_hours = self._overlap_hours(window.start, window.end, solar_window.start, solar_window.end)
-                if overlap_hours <= 0:
-                    continue
-                solar_slot_hours = max((solar_window.end - solar_window.start).total_seconds() / 3600, 0.0001)
-                solar_kwh += float(solar_window.forecast_kwh) * (overlap_hours / solar_slot_hours)
-            net_solar_kwh = round(solar_kwh - demand_kwh, 3)
-            export_price = self._match_window_price(
-                start=window.start,
-                end=window.end,
-                windows=export_price_windows,
-                default=window.price,
-            )
-            slots.append(
-                {
-                    "start": window.start,
-                    "end": window.end,
-                    "price": window.price,
-                    "import_price": window.price,
-                    "export_price": export_price,
-                    "hours": slot_hours,
-                    "solar_kwh": round(solar_kwh, 3),
-                    "demand_kwh": round(demand_kwh, 3),
-                    "net_solar_kwh": net_solar_kwh,
-                }
-            )
-
-        return slots
-
-    def _match_window_price(
-        self,
-        *,
-        start: datetime,
-        end: datetime,
-        windows: list[PlannerWindow],
-        default: float,
-    ) -> float:
-        weighted_price = 0.0
-        weighted_hours = 0.0
-        for window in windows:
-            overlap_hours = self._overlap_hours(start, end, window.start, window.end)
-            if overlap_hours <= 0:
-                continue
-            weighted_price += float(window.price) * overlap_hours
-            weighted_hours += overlap_hours
-
-        if weighted_hours <= 0:
-            return round(default, 6)
-        return round(weighted_price / weighted_hours, 6)
-
     def _build_battery_switch_windows(
         self,
         *,
@@ -2687,20 +2112,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
         )
         if self._active_charge_phase_end is not None and self._active_charge_phase_end > now:
-            # Charge phase is actively running — not a discharge cycle.
+            # Charge phase is actively running â€” not a discharge cycle.
             self._discharge_session_started = False
         elif usable_soc_fraction < 0.15:
-            # Safety valve: battery nearly empty — allow grid charging regardless.
+            # Safety valve: battery nearly empty â€” allow grid charging regardless.
             self._discharge_session_started = False
         elif usable_soc_fraction >= 0.70:
             # Charge cycle complete; discharge cycle begins (or continues).
             self._discharge_session_started = True
-        # Between 15 % and 70 %: flag coasts — maintains state from previous tick.
+        # Between 15 % and 70 %: flag coasts â€” maintains state from previous tick.
 
         if self._discharge_session_started:
             current_grid_limit_kwh = 0.0
 
-        # Next cycle: battery assumed empty — must fill full planning capacity.
+        # Next cycle: battery assumed empty â€” must fill full planning capacity.
         next_grid_limit_kwh = max(
             0.0,
             round(planning_capacity_kwh - next_cycle_solar_kwh, 6),
@@ -2715,7 +2140,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for slot in future_slots:
             slot_capacity_kwh = max_charge_kw * float(slot["hours"])
 
-            # Negative import price: grid pays us to consume — always charge from
+            # Negative import price: grid pays us to consume â€” always charge from
             # the grid at full rate regardless of solar or profit margin.
             if float(slot["import_price"]) < 0:
                 charge_candidates.append(
@@ -2813,9 +2238,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_candidates = [c for c in charge_candidates if c["start"] < cycle_end]
         next_candidates = [c for c in charge_candidates if c["start"] >= cycle_end]
 
-        # ── Current-cycle selection (today) ──────────────────────────────────
+        # â”€â”€ Current-cycle selection (today) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Solar slots are sorted cheapest-price first; we greedily select them
-        # until the battery is full — no tier filter.
+        # until the battery is full â€” no tier filter.
         charged_kwh = 0.0
         charged_grid_kwh = 0.0
         neg_grid_charged_kwh = 0.0
@@ -2862,7 +2287,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     if start < first_neg_start:
                         del selected_solar_charge_by_start[start]
 
-        # ── Next-cycle selection (tomorrow) ──────────────────────────────────
+        # â”€â”€ Next-cycle selection (tomorrow) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Battery is assumed discharged to empty before midnight; plan to refill
         # it using tomorrow's candidates, price-sorted within each kind.
         next_target_kwh = planning_capacity_kwh
@@ -2872,7 +2297,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         for candidate in sorted(next_candidates, key=_selection_sort_key):
             if next_charged_kwh >= next_target_kwh:
                 break
-            # Next-cycle: no tier filter for solar — we need to fill the full
+            # Next-cycle: no tier filter for solar â€” we need to fill the full
             # battery and should use all productive solar hours, cheapest first.
             candidate_charge_kwh = float(candidate["charge_kwh"])
             if candidate["kind"] == "grid":
@@ -3045,7 +2470,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # The charge phase is still running (or was running when the plan was
             # last evaluated).  Re-inject it as a cluster anchored at *now* so that
             # the current slot stays in charge mode even when the new planning run
-            # does not (re-)select that slot — e.g. because the battery is nearly
+            # does not (re-)select that slot â€” e.g. because the battery is nearly
             # full and the solar window is skipped by the capacity gate.
             # Safety: _active_charge_phase_end is only written while we are inside
             # an active charge window, so it can never carry a stale value from a
@@ -3216,14 +2641,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             segment_slots = slots[slot_index:segment_end_index]
             before_first_charge_phase = (
-                first_charge_phase_start is None  # no charge windows → drain freely, no price gating
+                first_charge_phase_start is None  # no charge windows â†’ drain freely, no price gating
                 or (
                     bool(segment_slots)
                     and segment_slots[0]["start"] < first_charge_phase_start
                 )
             )
             # Distribute battery capacity across the most expensive deficit hours
-            # first (highest price → next highest → ... until battery empty).
+            # first (highest price â†’ next highest â†’ ... until battery empty).
             discharge_budget_kwh = sim_usable_energy_kwh
             planned_discharge_kwh = plan_segment_discharge_kwh(
                 slots=segment_slots,
@@ -3402,8 +2827,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return {}
 
         # Only export if the battery holds more energy than the total home demand
-        # in this segment.  When demand ≥ battery, all energy goes to own use and
-        # the solar merely displaces grid draw — no genuine surplus exists.
+        # in this segment.  When demand â‰¥ battery, all energy goes to own use and
+        # the solar merely displaces grid draw â€” no genuine surplus exists.
         required_export_kwh = max(0.0, available_energy_kwh - total_segment_demand_kwh)
         if required_export_kwh <= 0:
             return {}
@@ -3505,7 +2930,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if usable_hours <= 0 or solar_window.forecast_kwh <= 0:
                 continue
 
-            demand_kwh = self._sum_remaining_home_demand_until(
+            demand_kwh = sum_remaining_home_demand_until(
                 hourly_demand,
                 max(now, solar_window.start),
                 min(solar_window.end, until),
@@ -3813,64 +3238,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             )
         return sorted(aggregated, key=lambda item: item.start)
-
-    def _extract_solar_windows(
-        self,
-        attributes: dict[str, Any],
-        *,
-        include_past: bool = False,
-    ) -> list[SolarWindow]:
-        raw_entries = attributes.get("detailedHourly", [])
-        windows: list[SolarWindow] = []
-        for entry in raw_entries:
-            start_raw = entry.get("period_start")
-            if not isinstance(start_raw, str):
-                continue
-            start = dt_util.parse_datetime(start_raw)
-            if start is None:
-                continue
-            end = start + timedelta(hours=1)
-            if not include_past and end <= dt_util.now():
-                continue
-            windows.append(
-                SolarWindow(
-                    start=start,
-                    end=end,
-                    forecast_kwh=_coerce_float(entry.get("pv_estimate"), default=0.0) or 0.0,
-                    forecast_kwh_p10=_coerce_float(entry.get("pv_estimate10")),
-                    forecast_kwh_p90=_coerce_float(entry.get("pv_estimate90")),
-                )
-            )
-        return self._merge_solar_windows(windows)
-
-    def _merge_solar_windows(self, windows: list[SolarWindow]) -> list[SolarWindow]:
-        """Deduplicate solar windows by time range and keep the strongest forecast."""
-        merged: dict[tuple[datetime, datetime], SolarWindow] = {}
-        for window in sorted(windows, key=lambda item: item.start):
-            key = (window.start, window.end)
-            previous = merged.get(key)
-            if previous is None:
-                merged[key] = window
-                continue
-            merged[key] = SolarWindow(
-                start=window.start,
-                end=window.end,
-                forecast_kwh=max(previous.forecast_kwh, window.forecast_kwh),
-                forecast_kwh_p10=window.forecast_kwh_p10
-                if window.forecast_kwh_p10 is not None
-                else previous.forecast_kwh_p10,
-                forecast_kwh_p90=window.forecast_kwh_p90
-                if window.forecast_kwh_p90 is not None
-                else previous.forecast_kwh_p90,
-            )
-
-        return sorted(merged.values(), key=lambda item: item.start)
-
-    def _select_best_solar_window(self, windows: list[SolarWindow]) -> SolarWindow | None:
-        productive_windows = [window for window in windows if window.forecast_kwh > 0]
-        if not productive_windows:
-            return None
-        return max(productive_windows, key=lambda item: item.forecast_kwh)
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:

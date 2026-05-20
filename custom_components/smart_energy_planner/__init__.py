@@ -58,7 +58,11 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
-from .coordinator import SmartEnergyPlannerCoordinator, _THERMOSTAT_FALLBACK_COOLING_FACTOR, _THERMOSTAT_MAX_COOLDOWN_HOURS
+from .coordinator import SmartEnergyPlannerCoordinator
+from .thermostat_planner import (
+    THERMOSTAT_FALLBACK_COOLING_FACTOR as _THERMOSTAT_FALLBACK_COOLING_FACTOR,
+    THERMOSTAT_MAX_COOLDOWN_HOURS as _THERMOSTAT_MAX_COOLDOWN_HOURS,
+)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 
