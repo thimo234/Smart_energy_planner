@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 import statistics
@@ -91,6 +90,15 @@ from .const import (
     STORAGE_KEY,
     STORAGE_VERSION,
 )
+from .price_helpers import (
+    aggregate_price_windows_to_hourly,
+    build_neutral_price_windows,
+    extend_price_window_tail,
+    extract_price_average,
+    extract_price_windows,
+)
+from .price_models import PlannerWindow
+from .planner_result import PlannerResult
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
@@ -99,98 +107,6 @@ _HISTORY_LOOKBACK_DAYS = 7
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
-
-
-@dataclass(slots=True)
-class PlannerWindow:
-    start: datetime
-    end: datetime
-    price: float
-
-
-@dataclass(slots=True)
-class PlannerResult:
-    planner_kind: str
-    status: str
-    score: int
-    recommendation: str
-    battery_strategy: str
-    heat_pump_strategy: str
-    heating_estimate_kwh: float
-    solar_forecast_kwh: float
-    current_price: float | None
-    price_spread: float
-    next_window_start: str | None
-    next_window_end: str | None
-    next_window_price: float | None
-    best_solar_window_start: str | None
-    best_solar_window_end: str | None
-    best_solar_window_kwh: float | None
-    solcast_confidence: float | None
-    lookback_daily_average_kwh: float
-    total_energy_daily_average_kwh: float
-    non_heating_daily_average_kwh: float
-    estimated_total_home_demand_kwh: float
-    estimated_hourly_home_demand: list[dict[str, str | float]]
-    projected_remaining_solar_until_sunset_kwh: float
-    projected_remaining_home_demand_until_sunset_kwh: float
-    projected_solar_surplus_until_sunset_kwh: float
-    grid_charge_needed_until_sunset_kwh: float
-    battery_charge_hours_needed_until_sunset: float
-    target_battery_full_by_sunset: bool
-    planned_grid_charge_windows: list[dict[str, str | float]]
-    planned_solar_charge_windows: list[dict[str, str | float]]
-    planned_battery_mode_schedule: list[dict[str, str]]
-    battery_soc_percent: float | None
-    battery_min_soc_percent: float
-    battery_total_energy_kwh: float
-    battery_energy_available_kwh: float
-    battery_remaining_capacity_kwh: float
-    next_charge_opportunity_start: str | None
-    next_charge_window_start: str | None
-    next_charge_window_end: str | None
-    next_charge_window_hours: float
-    following_charge_window_start: str | None
-    following_charge_window_end: str | None
-    following_charge_window_hours: float
-    next_discharge_window_start: str | None
-    next_discharge_window_end: str | None
-    next_discharge_window_hours: float
-    next_idle_window_start: str | None
-    current_relevant_battery_window_start: str | None
-    current_relevant_battery_window_end: str | None
-    current_relevant_battery_window_mode: str | None
-    current_relevant_battery_window_expected_demand_kwh: float
-    current_relevant_battery_window_expected_solar_kwh: float
-    home_demand_until_next_charge_kwh: float
-    battery_reserved_energy_kwh: float
-    battery_energy_available_for_discharge_kwh: float
-    battery_exportable_energy_kwh: float
-    battery_room_needed_for_solar_kwh: float
-    battery_charge_hours_needed_total: float
-    battery_full_discharge_hours: float
-    battery_simulated_remaining_kwh_after_discharge: float
-    next_high_price_window_start: str | None
-    next_high_price_window_price: float | None
-    room_temperature_c: float | None
-    thermostat_setpoint_c: float | None
-    thermostat_cool_setpoint_c: float | None
-    thermostat_preheat_setpoint_c: float | None
-    thermostat_eco_setpoint_c: float | None
-    room_cooling_hours_to_eco: float | None
-    room_cooling_rate_c_per_hour: float | None
-    cooling_reference_outdoor_temp_c: float | None
-    planned_eco_window_start: str | None
-    planned_eco_window_end: str | None
-    planned_eco_windows: list[dict[str, str | float]]
-    planned_preheat_window_start: str | None
-    planned_preheat_window_end: str | None
-    planned_preheat_windows: list[dict[str, str | float]]
-    battery_min_profit_per_kwh: float
-    price_resolution: str
-    source_status: dict[str, str]
-    source_errors: list[str]
-    rationale: str
 
 
 class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
@@ -329,23 +245,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 else current_price
             )
             price_resolution = str(self._config.get(CONF_PRICE_RESOLUTION, PRICE_RESOLUTION_HOURLY))
-            windows = self._extract_price_windows(
+            windows = extract_price_windows(
                 price_state.attributes if price_state else {},
                 current_price,
                 price_resolution,
             )
-            all_windows = self._extract_price_windows(
+            all_windows = extract_price_windows(
                 price_state.attributes if price_state else {},
                 current_price,
                 price_resolution,
                 include_past=True,
             )
-            export_windows = self._extract_price_windows(
+            export_windows = extract_price_windows(
                 export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
                 export_current_price,
                 price_resolution,
             )
-            all_export_windows = self._extract_price_windows(
+            all_export_windows = extract_price_windows(
                 export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
                 export_current_price,
                 price_resolution,
@@ -357,11 +273,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 price_resolution=price_resolution,
                 include_past=True,
             )
-            price_average = self._extract_price_average(
+            price_average = extract_price_average(
                 price_state.attributes if price_state else {},
                 windows,
             )
-            export_price_average = self._extract_price_average(
+            export_price_average = extract_price_average(
                 export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
                 export_windows,
             )
@@ -369,9 +285,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if not price_state:
                 source_status["price_sensor"] = "waiting_for_price_sensor"
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    windows = self._build_neutral_price_windows(current_price)
+                    windows = build_neutral_price_windows(current_price)
                 else:
-                    neutral_windows = self._build_neutral_price_windows(current_price, hours=48)
+                    neutral_windows = build_neutral_price_windows(current_price, hours=48)
                     windows = list(neutral_windows)
                     all_windows = list(neutral_windows)
                     export_windows = list(neutral_windows)
@@ -381,9 +297,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
                 if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    windows = self._build_neutral_price_windows(current_price)
+                    windows = build_neutral_price_windows(current_price)
                 else:
-                    neutral_windows = self._build_neutral_price_windows(current_price, hours=48)
+                    neutral_windows = build_neutral_price_windows(current_price, hours=48)
                     windows = list(neutral_windows)
                     all_windows = list(neutral_windows)
                     export_windows = list(neutral_windows)
@@ -450,17 +366,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     [window.end for window in [*all_windows, *all_solar_windows]],
                     default=now + timedelta(days=1),
                 )
-                all_windows = self._extend_price_window_tail(
+                all_windows = extend_price_window_tail(
                     windows=all_windows,
                     horizon_end=battery_price_horizon_end,
                     fallback_price=current_price,
                 )
-                all_export_windows = self._extend_price_window_tail(
+                all_export_windows = extend_price_window_tail(
                     windows=all_export_windows,
                     horizon_end=battery_price_horizon_end,
                     fallback_price=export_current_price,
                 )
-                battery_switch_windows = self._extend_price_window_tail(
+                battery_switch_windows = extend_price_window_tail(
                     windows=battery_switch_windows,
                     horizon_end=battery_price_horizon_end,
                     fallback_price=current_price,
@@ -1913,30 +1829,29 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cooling_reference_outdoor_temp_c=cooling_reference_outdoor_temp_c,
             planned_eco_window_start=eco_window["start"].isoformat() if eco_window else None,
             planned_eco_window_end=eco_window["end"].isoformat() if eco_window else None,
-            planned_eco_windows=[
-                {
-                    "start": str(window["start"].isoformat()),
-                    "end": str(window["end"].isoformat()),
-                    "average_price": round(float(window["average_price"]), 6),
-                }
-                for window in eco_windows
-            ],
+            planned_eco_windows=self._serialize_planned_price_windows(eco_windows),
             planned_preheat_window_start=preheat_window["start"].isoformat() if preheat_window else None,
             planned_preheat_window_end=preheat_window["end"].isoformat() if preheat_window else None,
-            planned_preheat_windows=[
-                {
-                    "start": str(window["start"].isoformat()),
-                    "end": str(window["end"].isoformat()),
-                    "average_price": round(float(window["average_price"]), 6),
-                }
-                for window in preheat_windows
-            ],
+            planned_preheat_windows=self._serialize_planned_price_windows(preheat_windows),
             battery_min_profit_per_kwh=battery_min_profit,
             price_resolution=price_resolution,
             source_status=source_status,
             source_errors=source_errors,
             rationale=rationale,
         )
+
+    def _serialize_planned_price_windows(
+        self,
+        windows: list[dict[str, datetime | float]],
+    ) -> list[dict[str, str | float]]:
+        return [
+            {
+                "start": cast(datetime, window["start"]).isoformat(),
+                "end": cast(datetime, window["end"]).isoformat(),
+                "average_price": round(float(window["average_price"]), 6),
+            }
+            for window in windows
+        ]
 
     def _build_battery_switch_windows(
         self,
@@ -1946,7 +1861,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         price_resolution: str,
         include_past: bool = False,
     ) -> list[PlannerWindow]:
-        raw_windows = self._extract_price_windows(
+        raw_windows = extract_price_windows(
             attributes,
             current_price,
             "__battery_switch__",
@@ -1957,7 +1872,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if price_resolution != PRICE_RESOLUTION_HOURLY:
             return raw_windows
 
-        hourly_windows = self._aggregate_price_windows_to_hourly(raw_windows)
+        hourly_windows = aggregate_price_windows_to_hourly(raw_windows)
         hourly_price_by_start = {
             window.start: window.price
             for window in hourly_windows
@@ -3048,196 +2963,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if overlap_end <= overlap_start:
             return 0.0
         return (overlap_end - overlap_start).total_seconds() / 3600
-
-    def _extract_price_windows(
-        self,
-        attributes: dict[str, Any],
-        current_price: float | None,
-        price_resolution: str,
-        *,
-        include_past: bool = False,
-    ) -> list[PlannerWindow]:
-        now = dt_util.now()
-        raw_entries = list(attributes.get("raw_today", [])) + list(attributes.get("raw_tomorrow", []))
-        windows: list[PlannerWindow] = []
-        active_window: PlannerWindow | None = None
-
-        for entry in raw_entries:
-            start_raw = entry.get("start")
-            end_raw = entry.get("end")
-            price_raw = entry.get("value")
-            if start_raw is None or end_raw is None or price_raw is None:
-                continue
-            try:
-                start = dt_util.parse_datetime(start_raw)
-                end = dt_util.parse_datetime(end_raw)
-                price = float(price_raw)
-            except (TypeError, ValueError):
-                continue
-            if start is None or end is None:
-                continue
-            if start <= now < end:
-                active_window = PlannerWindow(start=start, end=end, price=price)
-            if not include_past and end <= now:
-                continue
-            windows.append(PlannerWindow(start=start, end=end, price=price))
-
-        if not windows:
-            windows = self._extract_price_windows_from_series(attributes, now, include_past=include_past)
-
-        if active_window and not any(w.start == active_window.start and w.end == active_window.end for w in windows):
-            windows.insert(0, active_window)
-
-        if not windows and current_price is not None:
-            windows.append(PlannerWindow(start=now, end=now + timedelta(hours=1), price=current_price))
-
-        if price_resolution == PRICE_RESOLUTION_HOURLY:
-            windows = self._aggregate_price_windows_to_hourly(windows)
-
-        return sorted(windows, key=lambda item: item.start)
-
-    def _extract_price_average(
-        self,
-        attributes: dict[str, Any],
-        windows: list[PlannerWindow],
-    ) -> float | None:
-        """Prefer the source sensor daily average, then fall back to the mean."""
-        for key in ("average", "mean"):
-            value = _coerce_float(attributes.get(key))
-            if value is not None:
-                return value
-        if not windows:
-            return None
-        return sum(window.price for window in windows) / len(windows)
-
-    def _extract_price_windows_from_series(
-        self,
-        attributes: dict[str, Any],
-        now: datetime,
-        *,
-        include_past: bool = False,
-    ) -> list[PlannerWindow]:
-        """Build price windows from today/tomorrow lists when raw entries are unavailable."""
-        today_values = attributes.get("today")
-        tomorrow_values = attributes.get("tomorrow")
-        if not isinstance(today_values, list):
-            return []
-
-        today_windows = self._series_to_price_windows(today_values, now.replace(hour=0, minute=0, second=0, microsecond=0))
-        tomorrow_windows: list[PlannerWindow] = []
-        if isinstance(tomorrow_values, list) and tomorrow_values:
-            tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            tomorrow_windows = self._series_to_price_windows(tomorrow_values, tomorrow_start)
-
-        if include_past:
-            return [*today_windows, *tomorrow_windows]
-        return [window for window in [*today_windows, *tomorrow_windows] if window.end > now]
-
-    def _series_to_price_windows(
-        self,
-        values: list[Any],
-        start_time: datetime,
-    ) -> list[PlannerWindow]:
-        """Convert a list of prices into planner windows."""
-        if not values:
-            return []
-
-        interval_minutes = self._infer_series_interval_minutes(len(values))
-        if interval_minutes is None:
-            return []
-
-        windows: list[PlannerWindow] = []
-        interval = timedelta(minutes=interval_minutes)
-        for index, raw_value in enumerate(values):
-            price = _coerce_float(raw_value)
-            if price is None:
-                continue
-            start = start_time + (interval * index)
-            end = start + interval
-            windows.append(PlannerWindow(start=start, end=end, price=price))
-        return windows
-
-    def _infer_series_interval_minutes(self, item_count: int) -> int | None:
-        """Infer interval size from the number of prices in a daily list."""
-        if item_count == 24:
-            return 60
-        if item_count == 48:
-            return 30
-        if item_count == 96:
-            return 15
-        return None
-
-    def _build_neutral_price_windows(
-        self,
-        current_price: float | None,
-        *,
-        hours: int = 1,
-    ) -> list[PlannerWindow]:
-        """Build flat windows so planning can continue without price data."""
-        now = dt_util.now()
-        neutral_price = current_price if current_price is not None else 0.0
-        window_count = max(1, hours)
-        return [
-            PlannerWindow(
-                start=now + timedelta(hours=index),
-                end=now + timedelta(hours=index + 1),
-                price=neutral_price,
-            )
-            for index in range(window_count)
-        ]
-
-    def _extend_price_window_tail(
-        self,
-        *,
-        windows: list[PlannerWindow],
-        horizon_end: datetime,
-        fallback_price: float | None,
-    ) -> list[PlannerWindow]:
-        if not windows:
-            return windows
-
-        extended_windows = sorted(windows, key=lambda item: item.start)
-        last_window = extended_windows[-1]
-        if last_window.end >= horizon_end:
-            return extended_windows
-
-        interval = last_window.end - last_window.start
-        if interval <= timedelta(0):
-            interval = timedelta(hours=1)
-        fill_price = last_window.price if last_window.price is not None else (fallback_price or 0.0)
-        tail_start = last_window.end
-        while tail_start < horizon_end:
-            tail_end = min(tail_start + interval, horizon_end)
-            extended_windows.append(
-                PlannerWindow(
-                    start=tail_start,
-                    end=tail_end,
-                    price=fill_price,
-                )
-            )
-            tail_start = tail_end
-
-        return extended_windows
-
-    def _aggregate_price_windows_to_hourly(self, windows: list[PlannerWindow]) -> list[PlannerWindow]:
-        if not windows:
-            return windows
-        grouped: dict[datetime, list[PlannerWindow]] = {}
-        for window in windows:
-            hour_start = window.start.replace(minute=0, second=0, microsecond=0)
-            grouped.setdefault(hour_start, []).append(window)
-
-        aggregated: list[PlannerWindow] = []
-        for hour_start, grouped_windows in grouped.items():
-            grouped_windows = sorted(grouped_windows, key=lambda item: item.start)
-            aggregated.append(
-                PlannerWindow(
-                    start=hour_start,
-                    end=max(window.end for window in grouped_windows),
-                    price=round(sum(window.price for window in grouped_windows) / len(grouped_windows), 6),
-                )
-            )
-        return sorted(aggregated, key=lambda item: item.start)
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:

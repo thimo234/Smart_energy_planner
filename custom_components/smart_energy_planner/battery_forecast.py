@@ -5,9 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.util import dt as dt_util
-
 from .battery_models import SolarWindow
 
 
@@ -31,7 +28,7 @@ def build_hourly_home_demand_forecast(
         0.07, 0.075, 0.065, 0.05, 0.04, 0.035,
     ]
     profile_sum = sum(heating_profile) or 1.0
-    now = dt_util.now()
+    now = datetime.now().astimezone()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     horizon_end = horizon_end or (today_start + timedelta(days=1))
     day_count = max(1, (horizon_end.date() - today_start.date()).days + 1)
@@ -80,7 +77,7 @@ def build_fallback_solar_windows_for_day(
     if daily_forecast_kwh <= 0:
         return []
 
-    now = dt_util.now()
+    now = datetime.now().astimezone()
     day_start = (now + timedelta(days=day_offset)).replace(hour=0, minute=0, second=0, microsecond=0)
     hourly_weights = [
         0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -123,11 +120,11 @@ def extract_solar_windows(
         start_raw = entry.get("period_start")
         if not isinstance(start_raw, str):
             continue
-        start = dt_util.parse_datetime(start_raw)
+        start = _parse_datetime(start_raw)
         if start is None:
             continue
         end = start + timedelta(hours=1)
-        if not include_past and end <= dt_util.now():
+        if not include_past and end <= datetime.now().astimezone():
             continue
         windows.append(
             SolarWindow(
@@ -199,8 +196,8 @@ def sum_remaining_home_demand_until(
         return 0.0
     total = 0.0
     for slot in hourly_demand:
-        start = dt_util.parse_datetime(str(slot.get("start")))
-        end = dt_util.parse_datetime(str(slot.get("end")))
+        start = _parse_datetime(slot.get("start"))
+        end = _parse_datetime(slot.get("end"))
         estimated_kwh = _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
         if start is None or end is None:
             continue
@@ -249,8 +246,8 @@ def build_energy_balance_slots(
         slot_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
         demand_kwh = 0.0
         for demand_slot in hourly_demand:
-            demand_start = dt_util.parse_datetime(str(demand_slot.get("start")))
-            demand_end = dt_util.parse_datetime(str(demand_slot.get("end")))
+            demand_start = _parse_datetime(demand_slot.get("start"))
+            demand_end = _parse_datetime(demand_slot.get("end"))
             estimated_kwh = _coerce_float(demand_slot.get("estimated_kwh"), default=0.0) or 0.0
             if demand_start is None or demand_end is None:
                 continue
@@ -328,9 +325,20 @@ def _overlap_hours(
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:
-    if value in (None, STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
+    if value in (None, "unknown", "unavailable", ""):
         return default
     try:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None

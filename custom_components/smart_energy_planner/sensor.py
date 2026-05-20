@@ -10,7 +10,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
-from .coordinator import PlannerResult, SmartEnergyPlannerCoordinator
+from .coordinator import SmartEnergyPlannerCoordinator
+from .planner_result import PlannerResult
 
 _BATTERY_STRATEGY_OPTIONS = [
     "accu_uit",
