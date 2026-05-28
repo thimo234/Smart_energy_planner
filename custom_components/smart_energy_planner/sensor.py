@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .battery_planner import normalize_full_battery_charge_mode
 from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
@@ -23,9 +26,24 @@ _BATTERY_STRATEGY_OPTIONS = [
 ]
 
 
+_FULL_BATTERY_EARLY_DISCHARGE_LOOKAHEAD_HOURS = 3.0
+
+
 def _planner_entity_name(entry: ConfigEntry, suffix: str) -> str:
     """Build a readable entity name from the planner entry title."""
     return f"{entry.title} {suffix}".strip()
+
+
+def _parse_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.astimezone()
 
 
 async def async_setup_entry(
@@ -219,16 +237,30 @@ class BatteryStrategySensor(BatteryPlannerSensor):
     @property
     def native_value(self):
         data: PlannerResult = self.coordinator.data
-        return normalize_full_battery_charge_mode(
-            mode=data.battery_strategy,
-            usable_energy_kwh=getattr(data, "battery_energy_available_kwh", 0.0),
-            usable_capacity_kwh=max(
-                0.0,
-                getattr(data, "battery_total_energy_kwh", 0.0)
-                + getattr(data, "battery_remaining_capacity_kwh", 0.0)
-                - (getattr(data, "battery_total_energy_kwh", 0.0) - getattr(data, "battery_energy_available_kwh", 0.0)),
-            ),
+        usable_energy_kwh = getattr(data, "battery_energy_available_kwh", 0.0)
+        usable_capacity_kwh = max(
+            0.0,
+            getattr(data, "battery_total_energy_kwh", 0.0)
+            + getattr(data, "battery_remaining_capacity_kwh", 0.0)
+            - (getattr(data, "battery_total_energy_kwh", 0.0) - usable_energy_kwh),
         )
+        normalized_mode = normalize_full_battery_charge_mode(
+            mode=data.battery_strategy,
+            usable_energy_kwh=usable_energy_kwh,
+            usable_capacity_kwh=usable_capacity_kwh,
+        )
+
+        battery_is_physically_full = getattr(data, "battery_remaining_capacity_kwh", 0.0) <= 0.05
+        if battery_is_physically_full and normalized_mode in ("laden_van_net", "laden_met_zonne_energie"):
+            now = dt_util.now()
+            next_discharge_start = _parse_datetime(getattr(data, "next_discharge_window_start", None))
+            next_discharge_end = _parse_datetime(getattr(data, "next_discharge_window_end", None))
+            if next_discharge_start is not None and (next_discharge_end is None or now < next_discharge_end):
+                hours_until_discharge = (next_discharge_start - now).total_seconds() / 3600
+                if 0.0 <= hours_until_discharge <= _FULL_BATTERY_EARLY_DISCHARGE_LOOKAHEAD_HOURS:
+                    return "ontladen"
+
+        return normalized_mode
 
 
 class BatteryProfitSensor(PlannerSensor):
