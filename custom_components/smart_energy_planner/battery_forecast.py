@@ -8,6 +8,9 @@ from typing import Any, cast
 from .battery_models import SolarWindow
 
 
+DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN = 0.20
+
+
 def build_hourly_home_demand_forecast(
     *,
     non_heating_daily_average_kwh: float,
@@ -238,7 +241,15 @@ def build_energy_balance_slots(
     solar_windows: list[SolarWindow],
     hourly_demand: list[dict[str, str | float]],
     horizon_start: datetime,
+    demand_safety_margin: float = DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
 ) -> list[dict[str, Any]]:
+    """Build battery planning slots and apply a demand safety margin.
+
+    The margin is applied before net solar is calculated, so both charge planning
+    and discharge planning account for the same extra expected home demand.
+    """
+
+    demand_multiplier = 1.0 + max(0.0, min(1.0, float(demand_safety_margin)))
     slots: list[dict[str, Any]] = []
     for window in price_windows:
         if window.end <= horizon_start:
@@ -256,6 +267,8 @@ def build_energy_balance_slots(
                 continue
             demand_slot_hours = max((demand_end - demand_start).total_seconds() / 3600, 0.0001)
             demand_kwh += estimated_kwh * (overlap_hours / demand_slot_hours)
+
+        demand_kwh *= demand_multiplier
 
         solar_kwh = 0.0
         for solar_window in solar_windows:
