@@ -8,6 +8,6 @@
   "integration_type": "service",
   "iot_class": "calculated",
   "requirements": [],
-  "version": "0.2.18",
+  "version": "0.2.19",
   "icon": "mdi:home-lightning-bolt-outline"
 }
