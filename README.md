@@ -105,8 +105,10 @@ In the visual editor you only need to select the planner sensor. The card reads
 `upcoming_energy_price_windows`, `estimated_hourly_home_demand`, and
 `planned_battery_mode_schedule` from that selected planner entity. By default
 the graph starts one hour before the current hour and continues to the last
-known energy price. Add `hours_to_show` only if you want to cap the visible
-horizon.
+known energy price. Add `max_hours_to_show` only if you want to cap the visible
+horizon. The integration registers the Lovelace resource automatically in
+storage mode as `/smart_energy_planner/smart-energy-planner-card.js?v=<version>`.
+YAML-mode dashboards still need a manual resource entry.
 
 ## HACS
 

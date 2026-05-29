@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -69,6 +70,14 @@ from .thermostat_planner import (
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
+_CARD_FILENAME = "smart-energy-planner-card.js"
+_MANIFEST_PATH = Path(__file__).parent / "manifest.json"
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Set up integration-level resources."""
+    await _async_register_frontend(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -270,19 +279,80 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Register the bundled Lovelace card as a static frontend resource."""
     registered_key = f"{DOMAIN}_frontend_registered"
-    if hass.data.get(registered_key):
+    if not hass.data.get(registered_key):
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    _CARD_STATIC_URL,
+                    str(_CARD_STATIC_PATH),
+                    cache_headers=False,
+                )
+            ]
+        )
+        hass.data[registered_key] = True
+
+    await _async_register_lovelace_resource(hass)
+
+
+async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0) -> None:
+    """Add or update the Lovelace resource when Home Assistant uses storage mode."""
+    lovelace = hass.data.get("lovelace")
+    if lovelace is None or not getattr(lovelace, "resources", None):
+        if retry < 6:
+            async_call_later(hass, 5, lambda _now: hass.async_create_task(
+                _async_register_lovelace_resource(hass, retry + 1)
+            ))
         return
 
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                _CARD_STATIC_URL,
-                str(_CARD_STATIC_PATH),
-                cache_headers=False,
+    if getattr(lovelace, "mode", None) != "storage":
+        return
+
+    resources = lovelace.resources
+    if not getattr(resources, "loaded", True):
+        if retry < 6:
+            async_call_later(hass, 5, lambda _now: hass.async_create_task(
+                _async_register_lovelace_resource(hass, retry + 1)
+            ))
+        return
+
+    if not hasattr(resources, "async_items"):
+        return
+
+    base_url = f"{_CARD_STATIC_URL}/{_CARD_FILENAME}"
+    versioned_url = f"{base_url}?v={_integration_version()}"
+    existing = [
+        item
+        for item in resources.async_items()
+        if str(item.get("url", "")).split("?", maxsplit=1)[0] == base_url
+    ]
+
+    for item in existing:
+        if item.get("url") != versioned_url and hasattr(resources, "async_update_item"):
+            await resources.async_update_item(
+                item["id"],
+                {
+                    "res_type": "module",
+                    "url": versioned_url,
+                },
             )
-        ]
-    )
-    hass.data[registered_key] = True
+        return
+
+    if hasattr(resources, "async_create_item"):
+        await resources.async_create_item(
+            {
+                "res_type": "module",
+                "url": versioned_url,
+            }
+        )
+
+
+def _integration_version() -> str:
+    """Return the manifest version for frontend cache busting."""
+    try:
+        with _MANIFEST_PATH.open(encoding="utf-8") as manifest_file:
+            return str(json.load(manifest_file).get("version", "0"))
+    except (OSError, ValueError, TypeError):
+        return "0"
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

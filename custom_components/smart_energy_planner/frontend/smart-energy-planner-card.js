@@ -106,7 +106,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   getHorizonEnd(priceWindows, horizonStart) {
-    const configuredHours = this.parseNumber(this.config.hours_to_show);
+    const configuredHours = this.parseNumber(this.config.max_hours_to_show);
     if (configuredHours !== undefined && configuredHours > 0) {
       return new Date(horizonStart.getTime() + configuredHours * 60 * 60 * 1000);
     }
@@ -906,6 +906,9 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
       ...this.config,
       ...changedConfig,
     };
+    delete this.config.price_entity;
+    delete this.config.demand_entity;
+    delete this.config.hours_to_show;
     this.dispatchEvent(
       new CustomEvent("config-changed", {
         bubbles: true,
