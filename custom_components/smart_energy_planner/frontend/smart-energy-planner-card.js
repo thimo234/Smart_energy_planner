@@ -79,7 +79,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       <ha-card>
         <div class="card">
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
-          ${this.renderSummary(priceWindows, now)}
+          ${this.renderSummary(priceWindows, demandPoints, solarPoints, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
@@ -137,27 +137,39 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return Math.ceil(960 + ((horizonHours - 12) * 76));
   }
 
-  renderSummary(priceWindows, now) {
+  renderSummary(priceWindows, demandPoints, solarPoints, now) {
     const prices = priceWindows.map((window) => window.price);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
-    const currentWindow = priceWindows.find((window) => window.start <= now && window.end > now);
-    const currentPrice = currentWindow?.price ?? priceWindows[0]?.price;
+    const currentValues = this.selectionValues(now, priceWindows, demandPoints, solarPoints);
 
     return `
       <div class="summary">
         <div class="metric">
-          <span>Nu</span>
-          <strong>${this.formatNumber(currentPrice)}</strong>
+          <span>Tijd</span>
+          <strong data-selected-time>Nu</strong>
         </div>
         <div class="metric">
+          <span>Prijs</span>
+          <strong data-selected-price>${this.formatSelectedValue(currentValues.price)}</strong>
+        </div>
+        <div class="metric">
+          <span>Verbruik</span>
+          <strong data-selected-demand>${this.formatSelectedValue(currentValues.demand)}</strong>
+        </div>
+        <div class="metric">
+          <span>Zon</span>
+          <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
+        </div>
+        <div class="metric compact">
           <span>Min</span>
           <strong>${this.formatNumber(minPrice)}</strong>
         </div>
-        <div class="metric">
+        <div class="metric compact">
           <span>Max</span>
           <strong>${this.formatNumber(maxPrice)}</strong>
         </div>
+        <button class="reset-selection" type="button" data-reset-selection>Nu</button>
       </div>
     `;
   }
@@ -197,11 +209,24 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const lowThreshold = minPrice + ((maxPrice - minPrice) * 0.33);
     const highThreshold = minPrice + ((maxPrice - minPrice) * 0.66);
     const nowInRange = now >= horizonStart && now <= horizonEnd;
+    const nowValues = this.selectionValues(now, priceWindows, demandPoints, solarPoints);
+    const nowX = nowInRange ? x(now) : x(priceWindows[0]?.start || horizonStart);
 
     return `
       <div class="chart-wrap">
         <div class="chart-scroll">
-          <svg class="chart" style="${width > 960 ? `width:${width}px` : "width:100%"}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
+          <svg
+            class="chart"
+            style="${width > 960 ? `width:${width}px` : "width:100%"}"
+            viewBox="0 0 ${width} ${height}"
+            role="img"
+            aria-label="Energy price planning chart"
+            data-now-time="Nu"
+            data-now-x="${nowX.toFixed(2)}"
+            data-now-price="${this.formatSelectedValue(nowValues.price)}"
+            data-now-demand="${this.formatSelectedValue(nowValues.demand)}"
+            data-now-solar="${this.formatSelectedValue(nowValues.solar, "0.00")}"
+          >
             <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
             ${priceTicks.map((tick) => `
               <line x1="${pad.left}" y1="${yPrice(tick)}" x2="${width - pad.right}" y2="${yPrice(tick)}" class="grid"></line>
@@ -211,13 +236,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
               <line x1="${x(tick)}" y1="${pad.top}" x2="${x(tick)}" y2="${height - pad.bottom}" class="grid vertical"></line>
               <text x="${x(tick)}" y="${height - 12}" class="axis label-center">${this.formatTime(tick)}</text>
             `).join("")}
-            <text x="${pad.left}" y="${height - 4}" class="axis axis-muted">Prijs</text>
+            <text x="${pad.left}" y="${height - 4}" class="axis axis-muted">&euro;</text>
             ${priceWindows.map((window) => {
               const xStart = x(window.start);
               const xEnd = x(window.end);
               const barWidth = Math.max(8, xEnd - xStart - 2);
               const yValue = yPrice(window.price);
               const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
+              const selectTime = new Date((window.start.getTime() + window.end.getTime()) / 2);
+              const values = this.selectionValues(selectTime, priceWindows, demandPoints, solarPoints);
               return `
                 <rect
                   x="${(xStart + 1).toFixed(2)}"
@@ -226,17 +253,43 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   height="${barHeight.toFixed(2)}"
                   rx="7"
                   class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
+                  data-selection-time="${this.escape(this.formatTime(selectTime))}"
+                  data-selection-x="${((xStart + xEnd) / 2).toFixed(2)}"
+                  data-selected-price="${this.formatSelectedValue(values.price)}"
+                  data-selected-demand="${this.formatSelectedValue(values.demand)}"
+                  data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
                 ></rect>
               `;
             }).join("")}
             ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
             ${solarPath ? `<path d="${solarPath}" class="solar-line"></path>` : ""}
             ${demandPoints.map((point) => `
-              <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="demand-dot"></circle>
+              <circle
+                cx="${x(point.time).toFixed(2)}"
+                cy="${yDemand(point.value).toFixed(2)}"
+                r="4"
+                class="demand-dot"
+                data-selection-time="${this.escape(this.formatTime(point.time))}"
+                data-selection-x="${x(point.time).toFixed(2)}"
+                data-selected-price="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).price)}"
+                data-selected-demand="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).demand)}"
+                data-selected-solar="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).solar, "0.00")}"
+              ></circle>
             `).join("")}
             ${solarPoints.map((point) => `
-              <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="solar-dot"></circle>
+              <circle
+                cx="${x(point.time).toFixed(2)}"
+                cy="${yDemand(point.value).toFixed(2)}"
+                r="4"
+                class="solar-dot"
+                data-selection-time="${this.escape(this.formatTime(point.time))}"
+                data-selection-x="${x(point.time).toFixed(2)}"
+                data-selected-price="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).price)}"
+                data-selected-demand="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).demand)}"
+                data-selected-solar="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).solar, "0.00")}"
+              ></circle>
             `).join("")}
+            <line x1="${nowX.toFixed(2)}" y1="${pad.top}" x2="${nowX.toFixed(2)}" y2="${height - pad.bottom}" class="selection-line"></line>
             ${nowInRange ? `
               <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
               <text x="${(x(now) + 8).toFixed(2)}" y="${pad.top + 16}" class="now-label">Nu</text>
@@ -580,6 +633,31 @@ class SmartEnergyPlannerCard extends HTMLElement {
     );
   }
 
+  selectionValues(time, priceWindows, demandPoints, solarPoints) {
+    const priceWindow = priceWindows.find((window) => window.start <= time && window.end > time);
+    return {
+      price: priceWindow?.price,
+      demand: this.nearestPoint(demandPoints, time)?.value,
+      solar: this.nearestPoint(solarPoints, time)?.value,
+    };
+  }
+
+  nearestPoint(points, time) {
+    const maxDistance = 45 * 60 * 1000;
+    let nearest;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    points.forEach((point) => {
+      const distance = Math.abs(point.time.getTime() - time.getTime());
+      if (distance < nearestDistance) {
+        nearest = point;
+        nearestDistance = distance;
+      }
+    });
+
+    return nearestDistance <= maxDistance ? nearest : undefined;
+  }
+
   priceClass(price, lowThreshold, highThreshold) {
     if (price <= lowThreshold) {
       return "price-low";
@@ -613,6 +691,13 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return Number(value).toFixed(2);
   }
 
+  formatSelectedValue(value, fallback = "-") {
+    if (value === undefined || value === null || Number.isNaN(Number(value))) {
+      return fallback;
+    }
+    return this.formatNumber(value);
+  }
+
   escape(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -636,6 +721,43 @@ class SmartEnergyPlannerCard extends HTMLElement {
     }
     this._lastHtml = html;
     this.innerHTML = html;
+    this.attachSelectionHandlers();
+  }
+
+  attachSelectionHandlers() {
+    const selectedTime = this.querySelector("[data-selected-time]");
+    const selectedPrice = this.querySelector("[data-selected-price]");
+    const selectedDemand = this.querySelector("[data-selected-demand]");
+    const selectedSolar = this.querySelector("[data-selected-solar]");
+    const selectionLine = this.querySelector(".selection-line");
+    const chart = this.querySelector(".chart");
+
+    if (!selectedTime || !selectedPrice || !selectedDemand || !selectedSolar || !selectionLine) {
+      return;
+    }
+
+    const applySelection = (dataset) => {
+      selectedTime.textContent = dataset.selectionTime || dataset.nowTime || "Nu";
+      selectedPrice.textContent = dataset.selectedPrice || dataset.nowPrice || "-";
+      selectedDemand.textContent = dataset.selectedDemand || dataset.nowDemand || "-";
+      selectedSolar.textContent = dataset.selectedSolar || dataset.nowSolar || "0.00";
+
+      const selectedX = Number(dataset.selectionX || dataset.nowX);
+      if (Number.isFinite(selectedX)) {
+        selectionLine.setAttribute("x1", selectedX.toFixed(2));
+        selectionLine.setAttribute("x2", selectedX.toFixed(2));
+      }
+    };
+
+    this.querySelectorAll("[data-selection-time]").forEach((element) => {
+      element.addEventListener("click", () => applySelection(element.dataset));
+    });
+
+    this.querySelector("[data-reset-selection]")?.addEventListener("click", () => {
+      if (chart) {
+        applySelection(chart.dataset);
+      }
+    });
   }
 
   renderStyles() {
@@ -674,7 +796,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .summary {
           display: grid;
           gap: 5px;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(7, minmax(0, 1fr));
           margin: 0 0 3px;
         }
         .metric {
@@ -696,6 +818,22 @@ class SmartEnergyPlannerCard extends HTMLElement {
           line-height: 1.25;
           margin-top: 2px;
           overflow-wrap: anywhere;
+        }
+        .metric.compact strong {
+          font-size: 15px;
+        }
+        .reset-selection {
+          align-self: stretch;
+          background: rgba(0, 0, 0, 0.16);
+          border: 0;
+          border-radius: 6px;
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font: inherit;
+          font-size: 13px;
+          font-weight: 700;
+          min-width: 0;
+          padding: 5px 7px;
         }
         .mode-current strong {
           font-size: 16px;
@@ -777,6 +915,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           text-anchor: middle;
         }
         .price-bar {
+          cursor: pointer;
           opacity: 0.58;
         }
         .demand-line {
@@ -795,14 +934,21 @@ class SmartEnergyPlannerCard extends HTMLElement {
           stroke-width: 5;
         }
         .demand-dot {
+          cursor: pointer;
           fill: #ab47bc;
           stroke: var(--card-background-color);
           stroke-width: 2;
         }
         .solar-dot {
+          cursor: pointer;
           fill: #fdd835;
           stroke: var(--card-background-color);
           stroke-width: 2;
+        }
+        .selection-line {
+          stroke: var(--primary-text-color);
+          stroke-linecap: round;
+          stroke-width: 2.5;
         }
         .now-line {
           stroke: var(--primary-text-color);
@@ -935,7 +1081,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         @media (max-width: 520px) {
           .summary {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
           }
           .mode-box {
             font-size: 10px;
