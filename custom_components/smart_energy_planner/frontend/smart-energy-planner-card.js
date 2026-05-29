@@ -82,7 +82,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
               <div class="subtitle">${this.formatRange(horizonStart, horizonEnd)}</div>
             </div>
           </div>
-          ${this.renderSummary(priceWindows, plannerState, now)}
+          ${this.renderSummary(priceWindows, now)}
           ${this.renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
@@ -129,7 +129,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return Math.ceil(960 + ((horizonHours - 36) * 30));
   }
 
-  renderSummary(priceWindows, plannerState, now) {
+  renderSummary(priceWindows, now) {
     const prices = priceWindows.map((window) => window.price);
     const minPrice = Math.min(...prices);
     const maxPrice = Math.max(...prices);
@@ -149,10 +149,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
         <div class="metric">
           <span>Max</span>
           <strong>${this.formatNumber(maxPrice)}</strong>
-        </div>
-        <div class="metric mode-current">
-          <span>Planner</span>
-          <strong>${this.modeLabel(plannerState?.state || "accu_uit")}</strong>
         </div>
       </div>
     `;
@@ -238,7 +234,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth) {
     const horizonMs = horizonEnd.getTime() - horizonStart.getTime();
-    const currentMode = String(plannerState?.state || "accu_uit");
+    const currentMode = this.currentMode(plannerState, modeBands, now);
     const nowInRange = now >= horizonStart && now <= horizonEnd;
     const nowLeft = nowInRange ? ((now.getTime() - horizonStart.getTime()) / horizonMs) * 100 : 0;
     return `
@@ -280,11 +276,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     return `
       <div class="legend">
-        <span class="swatch price-low"></span><span>Lage prijs</span>
-        <span class="swatch price-mid"></span><span>Midden</span>
-        <span class="swatch price-high"></span><span>Hoge prijs</span>
-        <span class="legend-line demand"></span><span>Verbruik</span>
-        <span class="legend-line now"></span><span>Nu</span>
         ${modes.map(([mode, label]) => `
           <span class="swatch mode-${this.modeClass(mode)}"></span><span>${label}</span>
         `).join("")}
@@ -417,10 +408,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     const activeBeforeStart = [...schedule].reverse().find((item) => item.at <= horizonStart);
     const future = schedule.filter((item) => item.at > horizonStart && item.at < horizonEnd);
+    const fallbackMode = this.currentMode(plannerState, [], horizonStart);
     return [
-      { at: horizonStart, mode: activeBeforeStart?.mode || String(plannerState?.state || "accu_uit") },
+      { at: horizonStart, mode: activeBeforeStart?.mode || fallbackMode },
       ...future,
-      { at: horizonEnd, mode: future.at(-1)?.mode || activeBeforeStart?.mode || String(plannerState?.state || "accu_uit") },
+      { at: horizonEnd, mode: future.at(-1)?.mode || activeBeforeStart?.mode || fallbackMode },
     ];
   }
 
@@ -531,6 +523,20 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return labels[String(mode)] || String(mode || "Onbekend").replaceAll("_", " ");
   }
 
+  currentMode(plannerState, modeBands, now) {
+    const activeBand = modeBands.find((band) => band.start <= now && band.end > now);
+    if (activeBand?.mode) {
+      return activeBand.mode;
+    }
+
+    const attributes = plannerState?.attributes || {};
+    return String(
+      attributes.current_relevant_battery_window_mode
+        || attributes.battery_strategy
+        || "accu_uit",
+    );
+  }
+
   priceClass(price, lowThreshold, highThreshold) {
     if (price <= lowThreshold) {
       return "price-low";
@@ -620,7 +626,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .summary {
           display: grid;
           gap: 8px;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           margin: 0 0 10px;
         }
         .metric {
@@ -694,14 +700,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .demand-line {
           fill: none;
-          stroke: var(--warning-color, #f39c12);
+          stroke: #00bcd4;
           stroke-dasharray: 6 6;
           stroke-linecap: round;
           stroke-linejoin: round;
           stroke-width: 3;
         }
         .demand-dot {
-          fill: var(--warning-color, #f39c12);
+          fill: #00bcd4;
           stroke: var(--card-background-color);
           stroke-width: 2;
         }
@@ -841,7 +847,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           border-top: 3px solid var(--primary-color);
         }
         .legend-line.demand {
-          border-top: 3px dashed var(--warning-color, #f39c12);
+          border-top: 3px dashed #00bcd4;
         }
         .legend-line.now {
           border-top: 3px dashed var(--primary-text-color);
