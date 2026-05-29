@@ -131,10 +131,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   chartWidth(priceWindows, horizonStart, horizonEnd) {
     const horizonHours = Math.max(1, (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000));
-    if (horizonHours <= 12) {
-      return 960;
-    }
-    return Math.ceil(960 + ((horizonHours - 12) * 76));
+    const mockupWidth = 66 + 58 + (horizonHours * 50);
+    return Math.max(700, Math.ceil(mockupWidth));
   }
 
   renderSummary(priceWindows, demandPoints, solarPoints, now) {
@@ -176,8 +174,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth) {
     const width = chartWidth;
-    const height = 250;
-    const pad = { top: 10, right: 58, bottom: 34, left: 58 };
+    const height = 270;
+    const pad = { top: 26, right: 58, bottom: 68, left: 66 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const priceValues = priceWindows.flatMap((window) => [window.price]);
@@ -217,7 +215,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         <div class="chart-scroll">
           <svg
             class="chart"
-            style="${width > 960 ? `width:${width}px` : "width:100%"}"
+            style="width:${width}px;min-width:700px;"
             viewBox="0 0 ${width} ${height}"
             role="img"
             aria-label="Energy price planning chart"
@@ -234,9 +232,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
             `).join("")}
             ${ticks.map((tick) => `
               <line x1="${x(tick)}" y1="${pad.top}" x2="${x(tick)}" y2="${height - pad.bottom}" class="grid vertical"></line>
-              <text x="${x(tick)}" y="${height - 12}" class="axis label-center">${this.formatTime(tick)}</text>
+              <text x="${x(tick)}" y="${height - 45}" class="axis label-center">${this.formatTime(tick)}</text>
             `).join("")}
-            <text x="${pad.left}" y="${height - 4}" class="axis axis-muted">&euro;</text>
+            <text x="${pad.left - 14}" y="${height - 20}" class="axis axis-muted label-right">&euro;</text>
             ${priceWindows.map((window) => {
               const xStart = x(window.start);
               const xEnd = x(window.end);
@@ -301,7 +299,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
             ${energyTicks.map((tick) => `
               <text x="8" y="${yDemand(tick) + 4}" class="axis">${this.formatNumber(tick)}</text>
             `).join("")}
-            <text x="8" y="${height - 4}" class="axis axis-muted">kWh</text>
+            <text x="8" y="${height - 33}" class="axis axis-muted">kWh</text>
           </svg>
         </div>
       </div>
@@ -320,7 +318,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <strong class="mode-pill mode-${this.modeClass(currentMode)}">${this.modeLabel(currentMode)}</strong>
         </div>
         <div class="mode-scroll">
-          <div class="mode-track" style="${chartWidth > 960 ? `width:${chartWidth}px` : "width:100%"}">
+          <div class="mode-track" style="width:${chartWidth}px;min-width:700px;">
             ${modeBands.map((band) => {
               const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
               const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
@@ -854,13 +852,29 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .chart-scroll,
         .mode-scroll {
-          -ms-overflow-style: none;
           overflow-x: auto;
           overflow-y: hidden;
-          scrollbar-width: none;
           -webkit-overflow-scrolling: touch;
         }
-        .chart-scroll::-webkit-scrollbar,
+        .chart-scroll {
+          scrollbar-color: rgba(255, 255, 255, 0.55) rgba(255, 255, 255, 0.16);
+          scrollbar-width: thin;
+        }
+        .chart-scroll::-webkit-scrollbar {
+          height: 10px;
+        }
+        .chart-scroll::-webkit-scrollbar-track {
+          background: rgba(255, 255, 255, 0.16);
+          border-radius: 999px;
+        }
+        .chart-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.55);
+          border-radius: 999px;
+        }
+        .mode-scroll {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
         .mode-scroll::-webkit-scrollbar {
           display: none;
         }
@@ -869,7 +883,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .kwh-axis {
           background: linear-gradient(90deg, rgba(0, 0, 0, 0), var(--card-background-color, rgba(0, 0, 0, 0.82)) 34%);
-          bottom: 0;
+          bottom: 10px;
           pointer-events: none;
           position: absolute;
           right: 0;
@@ -884,7 +898,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .chart {
           display: block;
           height: auto;
-          min-height: 186px;
           overflow: visible;
         }
         .chart-bg {
@@ -1082,6 +1095,13 @@ class SmartEnergyPlannerCard extends HTMLElement {
         @media (max-width: 520px) {
           .summary {
             grid-template-columns: repeat(4, minmax(0, 1fr));
+          }
+          .chart-scroll {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+          }
+          .chart-scroll::-webkit-scrollbar {
+            display: none;
           }
           .mode-box {
             font-size: 10px;
