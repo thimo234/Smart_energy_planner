@@ -646,6 +646,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             lookback_daily_average_kwh=0.0,
             total_energy_daily_average_kwh=0.0,
             non_heating_daily_average_kwh=0.0,
+            upcoming_energy_price_windows=[],
             estimated_total_home_demand_kwh=0.0,
             estimated_hourly_home_demand=[],
             projected_remaining_solar_until_sunset_kwh=0.0,
@@ -1779,6 +1780,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             lookback_daily_average_kwh=lookback_average_kwh,
             total_energy_daily_average_kwh=round(total_energy_daily_average_kwh, 2),
             non_heating_daily_average_kwh=round(non_heating_daily_average_kwh, 2),
+            upcoming_energy_price_windows=self._serialize_price_windows(
+                all_windows,
+                now=now,
+                horizon_end=planning_horizon_end,
+            ),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
             projected_remaining_solar_until_sunset_kwh=round(remaining_solar_until_sunset, 3),
@@ -1863,6 +1869,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "average_price": round(float(window["average_price"]), 6),
             }
             for window in windows
+        ]
+
+    def _serialize_price_windows(
+        self,
+        windows: list[PlannerWindow],
+        *,
+        now: datetime,
+        horizon_end: datetime,
+    ) -> list[dict[str, str | float]]:
+        return [
+            {
+                "start": max(window.start, now).isoformat(),
+                "end": min(window.end, horizon_end).isoformat(),
+                "price": round(float(window.price), 6),
+            }
+            for window in windows
+            if window.end > now and window.start < horizon_end
         ]
 
     def _battery_demand_safety_margin(self) -> float:

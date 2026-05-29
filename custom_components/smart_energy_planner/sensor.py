@@ -191,6 +191,8 @@ class BatteryPlannerSensor(PlannerSensor):
             "next_high_price_window_start": getattr(data, "next_high_price_window_start", None),
             "next_high_price_window_price": getattr(data, "next_high_price_window_price", None),
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
+            "upcoming_energy_price_windows": getattr(data, "upcoming_energy_price_windows", []),
+            "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
             "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,

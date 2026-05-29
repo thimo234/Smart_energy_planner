@@ -5,30 +5,23 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   static getStubConfig(hass) {
     const states = Object.keys(hass?.states || {});
-    const priceEntity = states.find((entityId) => {
-      const attributes = hass.states[entityId]?.attributes || {};
-      return Array.isArray(attributes.raw_today) || Array.isArray(attributes.raw_tomorrow);
-    });
-    const demandEntity = states.find((entityId) => {
-      const attributes = hass.states[entityId]?.attributes || {};
-      return Array.isArray(attributes.estimated_hourly_home_demand);
-    });
     const plannerEntity = states.find((entityId) => {
       const attributes = hass.states[entityId]?.attributes || {};
-      return Array.isArray(attributes.planned_battery_mode_schedule);
+      return (
+        Array.isArray(attributes.planned_battery_mode_schedule)
+        && Array.isArray(attributes.upcoming_energy_price_windows)
+      );
     });
 
     return {
-      price_entity: priceEntity || "sensor.energy_price",
-      demand_entity: demandEntity || "sensor.smart_energy_planner_estimated_home_demand_today",
       planner_entity: plannerEntity || "sensor.smart_energy_planner_battery_strategy",
       hours_to_show: 24,
     };
   }
 
   setConfig(config) {
-    if (!config.price_entity) {
-      throw new Error("price_entity is required");
+    if (!config.planner_entity) {
+      throw new Error("planner_entity is required");
     }
     this.config = {
       title: "Energieprijs planning",
@@ -52,27 +45,27 @@ class SmartEnergyPlannerCard extends HTMLElement {
       return;
     }
 
-    const priceState = this._hass.states[this.config.price_entity];
+    const plannerState = this._hass.states[this.config.planner_entity];
+    const priceState = this.config.price_entity
+      ? this._hass.states[this.config.price_entity]
+      : undefined;
     const demandState = this.config.demand_entity
       ? this._hass.states[this.config.demand_entity]
       : undefined;
-    const plannerState = this.config.planner_entity
-      ? this._hass.states[this.config.planner_entity]
-      : undefined;
 
-    if (!priceState) {
-      this.innerHTML = this.renderError(`Price entity not found: ${this.config.price_entity}`);
+    if (!plannerState) {
+      this.innerHTML = this.renderError(`Planner entity not found: ${this.config.planner_entity}`);
       return;
     }
 
     const now = new Date();
     const horizonEnd = new Date(now.getTime() + Number(this.config.hours_to_show) * 60 * 60 * 1000);
-    const priceWindows = this.extractPriceWindows(priceState, now, horizonEnd);
-    const demandPoints = this.extractDemandPoints(demandState, now, horizonEnd);
+    const priceWindows = this.extractPriceWindows(plannerState, priceState, now, horizonEnd);
+    const demandPoints = this.extractDemandPoints(plannerState, demandState, now, horizonEnd);
     const modeSchedule = this.extractModeSchedule(plannerState, now, horizonEnd);
 
     if (!priceWindows.length) {
-      this.innerHTML = this.renderError("No price windows found on raw_today/raw_tomorrow");
+      this.innerHTML = this.renderError("No price windows found on the selected planner");
       return;
     }
 
@@ -182,8 +175,28 @@ class SmartEnergyPlannerCard extends HTMLElement {
     `;
   }
 
-  extractPriceWindows(priceState, horizonStart, horizonEnd) {
-    const attributes = priceState.attributes || {};
+  extractPriceWindows(plannerState, priceState, horizonStart, horizonEnd) {
+    const plannerWindows = plannerState?.attributes?.upcoming_energy_price_windows;
+    if (Array.isArray(plannerWindows)) {
+      return plannerWindows
+        .map((entry) => {
+          const start = this.parseDate(entry.start);
+          const end = this.parseDate(entry.end);
+          const price = this.parseNumber(entry.price);
+          if (!start || !end || price === undefined || end <= horizonStart || start >= horizonEnd) {
+            return undefined;
+          }
+          return {
+            start: new Date(Math.max(start.getTime(), horizonStart.getTime())),
+            end: new Date(Math.min(end.getTime(), horizonEnd.getTime())),
+            price,
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.start - b.start);
+    }
+
+    const attributes = priceState?.attributes || {};
     const rawToday = Array.isArray(attributes.raw_today) ? attributes.raw_today : [];
     const rawTomorrow = Array.isArray(attributes.raw_tomorrow) ? attributes.raw_tomorrow : [];
     const raw = [...rawToday, ...rawTomorrow];
@@ -233,8 +246,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return { start, end, price };
   }
 
-  extractDemandPoints(demandState, horizonStart, horizonEnd) {
-    const raw = demandState?.attributes?.estimated_hourly_home_demand;
+  extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd) {
+    const raw = plannerState?.attributes?.estimated_hourly_home_demand
+      || demandState?.attributes?.estimated_hourly_home_demand;
     if (!Array.isArray(raw)) {
       return [];
     }
@@ -544,7 +558,66 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 }
 
+class SmartEnergyPlannerCardEditor extends HTMLElement {
+  setConfig(config) {
+    this.config = {
+      hours_to_show: 24,
+      ...config,
+    };
+    this.render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this.render();
+  }
+
+  render() {
+    if (!this._hass || !this.config) {
+      return;
+    }
+
+    this.innerHTML = `
+      <div class="editor">
+        <ha-entity-picker
+          label="Planner"
+          domain-filter="sensor"
+          allow-custom-entity
+        ></ha-entity-picker>
+      </div>
+      <style>
+        .editor {
+          display: grid;
+          gap: 16px;
+        }
+      </style>
+    `;
+
+    const picker = this.querySelector("ha-entity-picker");
+    picker.hass = this._hass;
+    picker.value = this.config.planner_entity || "";
+    picker.addEventListener("value-changed", (event) => {
+      this.updateConfig({ planner_entity: event.detail.value });
+    });
+  }
+
+  updateConfig(changedConfig) {
+    this.config = {
+      ...this.config,
+      ...changedConfig,
+    };
+    this.dispatchEvent(
+      new CustomEvent("config-changed", {
+        bubbles: true,
+        composed: true,
+        detail: { config: this.config },
+      }),
+    );
+  }
+}
+
 customElements.define("smart-energy-planner-card", SmartEnergyPlannerCard);
+customElements.define("smart-energy-planner-card-editor", SmartEnergyPlannerCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({

@@ -98,15 +98,13 @@ Then add the card:
 ```yaml
 type: custom:smart-energy-planner-card
 title: Energieprijs planning
-price_entity: sensor.your_energy_price_sensor
-demand_entity: sensor.smart_energy_planner_estimated_home_demand_today
 planner_entity: sensor.smart_energy_planner_battery_strategy
 hours_to_show: 24
 ```
 
-The card reads `raw_today`/`raw_tomorrow` from the price sensor,
-`estimated_hourly_home_demand` from the demand sensor, and
-`planned_battery_mode_schedule` from the battery strategy sensor.
+In the visual editor you only need to select the planner sensor. The card reads
+`upcoming_energy_price_windows`, `estimated_hourly_home_demand`, and
+`planned_battery_mode_schedule` from that selected planner entity.
 
 ## HACS
 

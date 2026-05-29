@@ -27,6 +27,7 @@ class PlannerResult:
     lookback_daily_average_kwh: float
     total_energy_daily_average_kwh: float
     non_heating_daily_average_kwh: float
+    upcoming_energy_price_windows: list[dict[str, str | float]]
     estimated_total_home_demand_kwh: float
     estimated_hourly_home_demand: list[dict[str, str | float]]
     projected_remaining_solar_until_sunset_kwh: float
