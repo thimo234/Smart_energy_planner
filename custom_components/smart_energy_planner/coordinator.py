@@ -48,6 +48,7 @@ from .thermostat_planner import (
 )
 from .const import (
     CONF_BATTERY_CAPACITY_KWH,
+    CONF_BATTERY_DEMAND_SAFETY_MARGIN,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_MAX_CHARGE_KW,
@@ -72,6 +73,7 @@ from .const import (
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_CAPACITY_KWH,
+    DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
@@ -1225,6 +1227,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand_table=hourly_demand_table,
             horizon_end=planning_horizon_end,
         )
+        demand_safety_margin = (
+            self._battery_demand_safety_margin()
+            if planner_kind == PLANNER_KIND_BATTERY
+            else 0.0
+        )
+        estimated_hourly_home_demand = self._apply_hourly_demand_safety_margin(
+            estimated_hourly_home_demand,
+            demand_safety_margin=demand_safety_margin,
+        )
         estimated_total_home_demand_kwh = round(
             sum(
                 float(slot["estimated_kwh"])
@@ -1520,6 +1531,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solar_windows=all_solar_windows,
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
+            demand_safety_margin=0.0,
         )
         charge_safety_margin = max(
             0.0,
@@ -1851,6 +1863,39 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "average_price": round(float(window["average_price"]), 6),
             }
             for window in windows
+        ]
+
+    def _battery_demand_safety_margin(self) -> float:
+        configured_margin = _coerce_float(
+            self._config.get(CONF_BATTERY_DEMAND_SAFETY_MARGIN),
+            DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
+        )
+        configured_margin = (
+            DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN
+            if configured_margin is None
+            else configured_margin
+        )
+        return max(0.0, min(1.0, configured_margin / 100.0))
+
+    def _apply_hourly_demand_safety_margin(
+        self,
+        hourly_demand: list[dict[str, str | float]],
+        *,
+        demand_safety_margin: float,
+    ) -> list[dict[str, str | float]]:
+        if demand_safety_margin <= 0:
+            return hourly_demand
+
+        demand_multiplier = 1.0 + demand_safety_margin
+        return [
+            {
+                **slot,
+                "estimated_kwh": round(
+                    float(slot.get("estimated_kwh", 0.0)) * demand_multiplier,
+                    3,
+                ),
+            }
+            for slot in hourly_demand
         ]
 
     def _build_battery_switch_windows(
