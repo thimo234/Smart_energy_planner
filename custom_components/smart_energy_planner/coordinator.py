@@ -1880,7 +1880,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> list[dict[str, str | float]]:
         return [
             {
-                "start": max(window.start, now).isoformat(),
+                "start": window.start.isoformat(),
                 "end": min(window.end, horizon_end).isoformat(),
                 "price": round(float(window.price), 6),
             }

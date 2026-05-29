@@ -61,11 +61,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     const now = new Date();
     now.setSeconds(0, 0);
-    const horizonEnd = new Date(now.getTime() + Number(this.config.hours_to_show) * 60 * 60 * 1000);
-    const priceWindows = this.extractPriceWindows(plannerState, priceState, now, horizonEnd);
-    const demandPoints = this.extractDemandPoints(plannerState, demandState, now, horizonEnd);
-    const modeSchedule = this.extractModeSchedule(plannerState, now, horizonEnd);
-    const modeBands = this.modeBands(modeSchedule, now, horizonEnd);
+    const horizonStart = this.getHorizonStart(plannerState, now);
+    const horizonEnd = new Date(horizonStart.getTime() + Number(this.config.hours_to_show) * 60 * 60 * 1000);
+    const priceWindows = this.extractPriceWindows(plannerState, priceState, horizonStart, horizonEnd);
+    const demandPoints = this.extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd);
+    const modeSchedule = this.extractModeSchedule(plannerState, horizonStart, horizonEnd);
+    const modeBands = this.modeBands(modeSchedule, horizonStart, horizonEnd);
 
     if (!priceWindows.length) {
       this.updateHtml(this.renderError("No price windows found on the selected planner"));
@@ -78,17 +79,31 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <div class="header">
             <div>
               <div class="title">${this.escape(this.config.title)}</div>
-              <div class="subtitle">${this.formatRange(now, horizonEnd)}</div>
+              <div class="subtitle">${this.formatRange(horizonStart, horizonEnd)}</div>
             </div>
           </div>
           ${this.renderSummary(priceWindows, plannerState, now)}
-          ${this.renderChart(priceWindows, demandPoints, modeBands, now, horizonEnd)}
-          ${this.renderModeTimeline(modeBands, plannerState, now, horizonEnd)}
+          ${this.renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd)}
+          ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd)}
           ${this.config.show_legend ? this.renderLegend() : ""}
         </div>
       </ha-card>
       ${this.renderStyles()}
     `);
+  }
+
+  getHorizonStart(plannerState, now) {
+    const start = new Date(now);
+    const resolution = String(plannerState?.attributes?.price_resolution || "");
+    if (resolution === "quarter_hourly") {
+      start.setMinutes(Math.floor(start.getMinutes() / 15) * 15, 0, 0);
+      return start;
+    }
+    if (resolution === "hourly") {
+      start.setMinutes(0, 0, 0);
+      return start;
+    }
+    return start;
   }
 
   renderSummary(priceWindows, plannerState, now) {
