@@ -282,20 +282,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
             }).join("")}
             ${nowInRange ? `<div class="mode-now-line" style="left:${nowLeft.toFixed(3)}%;"></div>` : ""}
           </div>
-          <div class="mode-label-row" style="${chartWidth > 960 ? `width:${chartWidth}px` : "width:100%"}">
-            ${modeBands.map((band) => {
-              const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
-              const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
-              return `
-                <div
-                  class="mode-label"
-                  style="left:${Math.max(0, left).toFixed(3)}%;width:${Math.max(0.5, width).toFixed(3)}%;"
-                >
-                  <span>${this.modeLabel(band.mode)}</span>
-                </div>
-              `;
-            }).join("")}
-          </div>
         </div>
       </div>
     `;
@@ -914,28 +900,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
           overflow: hidden;
           position: absolute;
           top: 0;
-        }
-        .mode-label-row {
-          color: var(--primary-text-color);
-          font-size: 12px;
-          font-weight: 600;
-          height: 18px;
-          margin-top: 3px;
-          position: relative;
-        }
-        .mode-label {
-          left: 0;
-          overflow: hidden;
-          padding-right: 6px;
-          position: absolute;
-          text-overflow: ellipsis;
-          top: 0;
-          white-space: nowrap;
-        }
-        .mode-label span {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         }
         .legend {
           align-items: center;
