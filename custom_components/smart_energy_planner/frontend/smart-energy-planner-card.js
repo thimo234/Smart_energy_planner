@@ -216,7 +216,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
                 y="${yValue.toFixed(2)}"
                 width="${barWidth.toFixed(2)}"
                 height="${barHeight.toFixed(2)}"
-                rx="3"
+                rx="7"
                 class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
               ></rect>
             `;
@@ -628,16 +628,21 @@ class SmartEnergyPlannerCard extends HTMLElement {
         :host {
           display: block;
         }
+        ha-card {
+          background: transparent;
+          border: 0;
+          box-shadow: none;
+        }
         .card {
-          min-height: 320px;
-          padding: 16px;
+          min-height: 290px;
+          padding: 8px;
         }
         .header {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
-          gap: 12px;
-          margin-bottom: 8px;
+          gap: 8px;
+          margin-bottom: 6px;
         }
         .title {
           color: var(--primary-text-color);
@@ -652,15 +657,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .summary {
           display: grid;
-          gap: 8px;
+          gap: 5px;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          margin: 0 0 8px;
+          margin: 0 0 5px;
         }
         .metric {
-          background: var(--secondary-background-color);
-          border-radius: 8px;
+          background: rgba(0, 0, 0, 0.16);
+          border-radius: 6px;
           min-width: 0;
-          padding: 7px 9px;
+          padding: 5px 7px;
         }
         .metric span {
           color: var(--secondary-text-color);
@@ -703,7 +708,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           overflow: visible;
         }
         .chart-bg {
-          fill: var(--card-background-color);
+          fill: transparent;
         }
         .grid {
           stroke: var(--divider-color);
@@ -723,7 +728,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           text-anchor: middle;
         }
         .price-bar {
-          opacity: 0.88;
+          opacity: 0.58;
         }
         .demand-line {
           fill: none;
@@ -801,7 +806,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           background: #9aa0a6;
         }
         .mode-panel {
-          margin-top: 6px;
+          margin-top: 4px;
         }
         .mode-panel-header {
           align-items: center;
@@ -809,8 +814,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
           display: flex;
           font-size: 12px;
           justify-content: space-between;
-          gap: 10px;
-          margin-bottom: 6px;
+          gap: 8px;
+          margin-bottom: 4px;
         }
         .mode-pill {
           border-radius: 999px;
@@ -868,8 +873,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
           display: flex;
           flex-wrap: wrap;
           font-size: 12px;
-          gap: 8px;
-          margin-top: 8px;
+          gap: 6px;
+          margin-top: 5px;
         }
         .swatch {
           border-radius: 3px;
