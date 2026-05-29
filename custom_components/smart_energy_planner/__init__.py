@@ -278,7 +278,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             StaticPathConfig(
                 _CARD_STATIC_URL,
                 str(_CARD_STATIC_PATH),
-                cache_headers=True,
+                cache_headers=False,
             )
         ]
     )

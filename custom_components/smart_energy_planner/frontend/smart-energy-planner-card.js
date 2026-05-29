@@ -29,6 +29,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       show_legend: true,
       ...config,
     };
+    this._lastHtml = "";
   }
 
   set hass(hass) {
@@ -54,11 +55,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
       : undefined;
 
     if (!plannerState) {
-      this.innerHTML = this.renderError(`Planner entity not found: ${this.config.planner_entity}`);
+      this.updateHtml(this.renderError(`Planner entity not found: ${this.config.planner_entity}`));
       return;
     }
 
     const now = new Date();
+    now.setSeconds(0, 0);
     const horizonEnd = new Date(now.getTime() + Number(this.config.hours_to_show) * 60 * 60 * 1000);
     const priceWindows = this.extractPriceWindows(plannerState, priceState, now, horizonEnd);
     const demandPoints = this.extractDemandPoints(plannerState, demandState, now, horizonEnd);
@@ -66,11 +68,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const modeBands = this.modeBands(modeSchedule, now, horizonEnd);
 
     if (!priceWindows.length) {
-      this.innerHTML = this.renderError("No price windows found on the selected planner");
+      this.updateHtml(this.renderError("No price windows found on the selected planner"));
       return;
     }
 
-    this.innerHTML = `
+    this.updateHtml(`
       <ha-card>
         <div class="card">
           <div class="header">
@@ -86,7 +88,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         </div>
       </ha-card>
       ${this.renderStyles()}
-    `;
+    `);
   }
 
   renderSummary(priceWindows, plannerState, now) {
@@ -120,8 +122,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd) {
     const width = 960;
-    const height = 320;
-    const pad = { top: 18, right: 40, bottom: 42, left: 54 };
+    const height = 340;
+    const pad = { top: 18, right: 46, bottom: 50, left: 62 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const priceValues = priceWindows.flatMap((window) => [window.price]);
@@ -166,7 +168,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         ${priceWindows.map((window) => {
           const xStart = x(window.start);
           const xEnd = x(window.end);
-          const barWidth = Math.max(2, xEnd - xStart - 3);
+          const barWidth = Math.max(3, xEnd - xStart - 4);
           const yValue = yPrice(window.price);
           const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
           return `
@@ -512,6 +514,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
     `;
   }
 
+  updateHtml(html) {
+    if (html === this._lastHtml) {
+      return;
+    }
+    this._lastHtml = html;
+    this.innerHTML = html;
+  }
+
   renderStyles() {
     return `
       <style>
@@ -519,7 +529,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
           display: block;
         }
         .card {
-          padding: 16px;
+          min-height: 420px;
+          padding: 18px;
         }
         .header {
           display: flex;
@@ -530,13 +541,13 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .title {
           color: var(--primary-text-color);
-          font-size: 18px;
+          font-size: 20px;
           font-weight: 600;
           line-height: 1.25;
         }
         .subtitle {
           color: var(--secondary-text-color);
-          font-size: 12px;
+          font-size: 13px;
           margin-top: 3px;
         }
         .summary {
@@ -554,19 +565,19 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .metric span {
           color: var(--secondary-text-color);
           display: block;
-          font-size: 11px;
+          font-size: 13px;
           line-height: 1.2;
         }
         .metric strong {
           color: var(--primary-text-color);
           display: block;
-          font-size: 16px;
+          font-size: 20px;
           line-height: 1.25;
           margin-top: 2px;
           overflow-wrap: anywhere;
         }
         .mode-current strong {
-          font-size: 14px;
+          font-size: 16px;
         }
         .badge {
           color: var(--primary-text-color);
@@ -582,6 +593,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .chart {
           display: block;
           height: auto;
+          min-height: 260px;
           overflow: visible;
           width: 100%;
         }
@@ -597,7 +609,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .axis {
           fill: var(--secondary-text-color);
-          font-size: 12px;
+          font-size: 19px;
         }
         .label-right {
           text-anchor: end;
@@ -667,7 +679,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           align-items: center;
           color: var(--secondary-text-color);
           display: flex;
-          font-size: 12px;
+          font-size: 14px;
           justify-content: space-between;
           gap: 10px;
           margin-bottom: 8px;
@@ -675,7 +687,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .mode-pill {
           border-radius: 999px;
           color: #fff;
-          font-size: 12px;
+          font-size: 14px;
           line-height: 1.2;
           padding: 5px 9px;
           text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
@@ -684,7 +696,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .mode-track {
           background: var(--secondary-background-color);
           border-radius: 8px;
-          height: 46px;
+          height: 54px;
           overflow: hidden;
           position: relative;
         }
@@ -694,7 +706,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           bottom: 0;
           color: #fff;
           display: flex;
-          font-size: 11px;
+          font-size: 13px;
           font-weight: 600;
           justify-content: center;
           left: 0;
@@ -717,7 +729,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           color: var(--secondary-text-color);
           display: flex;
           flex-wrap: wrap;
-          font-size: 12px;
+          font-size: 13px;
           gap: 8px;
           margin-top: 8px;
         }
