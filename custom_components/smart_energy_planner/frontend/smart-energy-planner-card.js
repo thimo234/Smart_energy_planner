@@ -243,6 +243,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
               const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
               const selectTime = new Date((window.start.getTime() + window.end.getTime()) / 2);
               const values = this.selectionValues(selectTime, priceWindows, demandPoints, solarPoints);
+              const isCurrentWindow = window.start <= now && window.end > now;
               return `
                 <rect
                   x="${(xStart + 1).toFixed(2)}"
@@ -250,12 +251,13 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   width="${barWidth.toFixed(2)}"
                   height="${barHeight.toFixed(2)}"
                   rx="7"
-                  class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
+                  class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}${isCurrentWindow ? " selected" : ""}"
                   data-selection-time="${this.escape(this.formatTime(selectTime))}"
                   data-selection-x="${((xStart + xEnd) / 2).toFixed(2)}"
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand)}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
+                  ${isCurrentWindow ? "data-now-selection" : ""}
                 ></rect>
               `;
             }).join("")}
@@ -287,7 +289,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
                 data-selected-solar="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).solar, "0.00")}"
               ></circle>
             `).join("")}
-            <line x1="${nowX.toFixed(2)}" y1="${pad.top}" x2="${nowX.toFixed(2)}" y2="${height - pad.bottom}" class="selection-line"></line>
             ${nowInRange ? `
               <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
               <text x="${(x(now) + 8).toFixed(2)}" y="${pad.top + 16}" class="now-label">Nu</text>
@@ -727,32 +728,33 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const selectedPrice = this.querySelector("[data-selected-price]");
     const selectedDemand = this.querySelector("[data-selected-demand]");
     const selectedSolar = this.querySelector("[data-selected-solar]");
-    const selectionLine = this.querySelector(".selection-line");
     const chart = this.querySelector(".chart");
 
-    if (!selectedTime || !selectedPrice || !selectedDemand || !selectedSolar || !selectionLine) {
+    if (!selectedTime || !selectedPrice || !selectedDemand || !selectedSolar) {
       return;
     }
 
-    const applySelection = (dataset) => {
+    const applySelection = (dataset, element) => {
       selectedTime.textContent = dataset.selectionTime || dataset.nowTime || "Nu";
       selectedPrice.textContent = dataset.selectedPrice || dataset.nowPrice || "-";
       selectedDemand.textContent = dataset.selectedDemand || dataset.nowDemand || "-";
       selectedSolar.textContent = dataset.selectedSolar || dataset.nowSolar || "0.00";
 
-      const selectedX = Number(dataset.selectionX || dataset.nowX);
-      if (Number.isFinite(selectedX)) {
-        selectionLine.setAttribute("x1", selectedX.toFixed(2));
-        selectionLine.setAttribute("x2", selectedX.toFixed(2));
+      if (element) {
+        this.querySelectorAll(".selected").forEach((selected) => selected.classList.remove("selected"));
+        element.classList.add("selected");
       }
     };
 
     this.querySelectorAll("[data-selection-time]").forEach((element) => {
-      element.addEventListener("click", () => applySelection(element.dataset));
+      element.addEventListener("click", () => applySelection(element.dataset, element));
     });
 
     this.querySelector("[data-reset-selection]")?.addEventListener("click", () => {
-      if (chart) {
+      const nowElement = this.querySelector("[data-now-selection]");
+      if (nowElement) {
+        applySelection(nowElement.dataset, nowElement);
+      } else if (chart) {
         applySelection(chart.dataset);
       }
     });
@@ -958,10 +960,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
           stroke: var(--card-background-color);
           stroke-width: 2;
         }
-        .selection-line {
+        .selected {
+          filter: brightness(1.25);
+          opacity: 0.95;
           stroke: var(--primary-text-color);
-          stroke-linecap: round;
-          stroke-width: 2.5;
+          stroke-width: 3;
         }
         .now-line {
           stroke: var(--primary-text-color);
