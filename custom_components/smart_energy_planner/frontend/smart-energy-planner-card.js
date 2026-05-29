@@ -263,32 +263,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
             }).join("")}
             ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
             ${solarPath ? `<path d="${solarPath}" class="solar-line"></path>` : ""}
-            ${demandPoints.map((point) => `
-              <circle
-                cx="${x(point.time).toFixed(2)}"
-                cy="${yDemand(point.value).toFixed(2)}"
-                r="4"
-                class="demand-dot"
-                data-selection-time="${this.escape(this.formatTime(point.time))}"
-                data-selection-x="${x(point.time).toFixed(2)}"
-                data-selected-price="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).price)}"
-                data-selected-demand="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).demand)}"
-                data-selected-solar="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).solar, "0.00")}"
-              ></circle>
-            `).join("")}
-            ${solarPoints.map((point) => `
-              <circle
-                cx="${x(point.time).toFixed(2)}"
-                cy="${yDemand(point.value).toFixed(2)}"
-                r="4"
-                class="solar-dot"
-                data-selection-time="${this.escape(this.formatTime(point.time))}"
-                data-selection-x="${x(point.time).toFixed(2)}"
-                data-selected-price="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).price)}"
-                data-selected-demand="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).demand)}"
-                data-selected-solar="${this.formatSelectedValue(this.selectionValues(point.time, priceWindows, demandPoints, solarPoints).solar, "0.00")}"
-              ></circle>
-            `).join("")}
             ${nowInRange ? `
               <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
               <text x="${(x(now) + 8).toFixed(2)}" y="${pad.top + 16}" class="now-label">Nu</text>
@@ -549,12 +523,31 @@ class SmartEnergyPlannerCard extends HTMLElement {
     if (!points.length) {
       return "";
     }
-    return points
-      .map((point, index) => {
-        const command = index === 0 ? "M" : "L";
-        return `${command} ${x(point.time).toFixed(2)} ${y(point.value).toFixed(2)}`;
-      })
-      .join(" ");
+    if (points.length === 1) {
+      return `M ${x(points[0].time).toFixed(2)} ${y(points[0].value).toFixed(2)}`;
+    }
+
+    const coords = points.map((point) => ({
+      x: x(point.time),
+      y: y(point.value),
+    }));
+    const parts = [`M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`];
+
+    for (let index = 0; index < coords.length - 1; index += 1) {
+      const p0 = coords[Math.max(0, index - 1)];
+      const p1 = coords[index];
+      const p2 = coords[index + 1];
+      const p3 = coords[Math.min(coords.length - 1, index + 2)];
+      const cp1x = p1.x + ((p2.x - p0.x) / 6);
+      const cp1y = p1.y + ((p2.y - p0.y) / 6);
+      const cp2x = p2.x - ((p3.x - p1.x) / 6);
+      const cp2y = p2.y - ((p3.y - p1.y) / 6);
+      parts.push(
+        `C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
+      );
+    }
+
+    return parts.join(" ");
   }
 
   timeTicks(start, end, hoursToShow) {
@@ -947,18 +940,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
           stroke-linecap: round;
           stroke-linejoin: round;
           stroke-width: 5;
-        }
-        .demand-dot {
-          cursor: pointer;
-          fill: #ab47bc;
-          stroke: var(--card-background-color);
-          stroke-width: 2;
-        }
-        .solar-dot {
-          cursor: pointer;
-          fill: #fdd835;
-          stroke: var(--card-background-color);
-          stroke-width: 2;
         }
         .selected {
           filter: brightness(1.25);
