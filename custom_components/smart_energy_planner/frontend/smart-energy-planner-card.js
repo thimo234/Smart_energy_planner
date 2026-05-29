@@ -63,6 +63,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const priceWindows = this.extractPriceWindows(plannerState, priceState, now, horizonEnd);
     const demandPoints = this.extractDemandPoints(plannerState, demandState, now, horizonEnd);
     const modeSchedule = this.extractModeSchedule(plannerState, now, horizonEnd);
+    const modeBands = this.modeBands(modeSchedule, now, horizonEnd);
 
     if (!priceWindows.length) {
       this.innerHTML = this.renderError("No price windows found on the selected planner");
@@ -77,9 +78,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
               <div class="title">${this.escape(this.config.title)}</div>
               <div class="subtitle">${this.formatRange(now, horizonEnd)}</div>
             </div>
-            <div class="badge">${this.escape(String(plannerState?.state || ""))}</div>
           </div>
-          ${this.renderChart(priceWindows, demandPoints, modeSchedule, now, horizonEnd)}
+          ${this.renderSummary(priceWindows, plannerState, now)}
+          ${this.renderChart(priceWindows, demandPoints, modeBands, now, horizonEnd)}
+          ${this.renderModeTimeline(modeBands, plannerState, now, horizonEnd)}
           ${this.config.show_legend ? this.renderLegend() : ""}
         </div>
       </ha-card>
@@ -87,10 +89,39 @@ class SmartEnergyPlannerCard extends HTMLElement {
     `;
   }
 
-  renderChart(priceWindows, demandPoints, modeSchedule, horizonStart, horizonEnd) {
+  renderSummary(priceWindows, plannerState, now) {
+    const prices = priceWindows.map((window) => window.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const currentWindow = priceWindows.find((window) => window.start <= now && window.end > now);
+    const currentPrice = currentWindow?.price ?? priceWindows[0]?.price;
+
+    return `
+      <div class="summary">
+        <div class="metric">
+          <span>Nu</span>
+          <strong>${this.formatNumber(currentPrice)}</strong>
+        </div>
+        <div class="metric">
+          <span>Min</span>
+          <strong>${this.formatNumber(minPrice)}</strong>
+        </div>
+        <div class="metric">
+          <span>Max</span>
+          <strong>${this.formatNumber(maxPrice)}</strong>
+        </div>
+        <div class="metric mode-current">
+          <span>Planner</span>
+          <strong>${this.modeLabel(plannerState?.state || "accu_uit")}</strong>
+        </div>
+      </div>
+    `;
+  }
+
+  renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd) {
     const width = 960;
     const height = 320;
-    const pad = { top: 20, right: 38, bottom: 42, left: 54 };
+    const pad = { top: 18, right: 40, bottom: 42, left: 54 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const priceValues = priceWindows.flatMap((window) => [window.price]);
@@ -113,32 +144,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
       return pad.top + (1 - ratio) * plotHeight;
     };
 
-    const pricePath = this.stepPath(
-      priceWindows.map((window) => ({
-        start: window.start,
-        end: window.end,
-        value: window.price,
-      })),
-      x,
-      yPrice,
-    );
     const demandPath = this.linePath(demandPoints, x, yDemand);
-    const modeBands = this.modeBands(modeSchedule, horizonStart, horizonEnd);
     const ticks = this.timeTicks(horizonStart, horizonEnd, Number(this.config.hours_to_show));
     const priceTicks = this.valueTicks(minPrice, maxPrice, 4);
+    const lowThreshold = minPrice + ((maxPrice - minPrice) * 0.33);
+    const highThreshold = minPrice + ((maxPrice - minPrice) * 0.66);
 
     return `
       <svg class="chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
         <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
-        ${modeBands.map((band) => `
-          <rect
-            x="${x(band.start)}"
-            y="${pad.top}"
-            width="${Math.max(1, x(band.end) - x(band.start))}"
-            height="${plotHeight}"
-            class="mode-band mode-${this.modeClass(band.mode)}"
-          ></rect>
-        `).join("")}
         ${priceTicks.map((tick) => `
           <line x1="${pad.left}" y1="${yPrice(tick)}" x2="${width - pad.right}" y2="${yPrice(tick)}" class="grid"></line>
           <text x="${pad.left - 10}" y="${yPrice(tick) + 4}" class="axis label-right">${this.formatNumber(tick)}</text>
@@ -149,9 +163,56 @@ class SmartEnergyPlannerCard extends HTMLElement {
         `).join("")}
         <text x="${pad.left}" y="${height - 6}" class="axis">Prijs</text>
         <text x="${width - pad.right}" y="${height - 6}" class="axis label-right">Verbruik</text>
-        <path d="${pricePath}" class="price-line"></path>
+        ${priceWindows.map((window) => {
+          const xStart = x(window.start);
+          const xEnd = x(window.end);
+          const barWidth = Math.max(2, xEnd - xStart - 3);
+          const yValue = yPrice(window.price);
+          const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
+          return `
+            <rect
+              x="${(xStart + 1.5).toFixed(2)}"
+              y="${yValue.toFixed(2)}"
+              width="${barWidth.toFixed(2)}"
+              height="${barHeight.toFixed(2)}"
+              rx="3"
+              class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
+            ></rect>
+          `;
+        }).join("")}
         ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
+        ${demandPoints.map((point) => `
+          <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="demand-dot"></circle>
+        `).join("")}
       </svg>
+    `;
+  }
+
+  renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd) {
+    const horizonMs = horizonEnd.getTime() - horizonStart.getTime();
+    const currentMode = String(plannerState?.state || "accu_uit");
+    return `
+      <div class="mode-panel">
+        <div class="mode-panel-header">
+          <span>Huidige plannermodus</span>
+          <strong class="mode-pill mode-${this.modeClass(currentMode)}">${this.modeLabel(currentMode)}</strong>
+        </div>
+        <div class="mode-track">
+          ${modeBands.map((band) => {
+            const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
+            const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
+            return `
+              <div
+                class="mode-box mode-${this.modeClass(band.mode)}"
+                style="left:${Math.max(0, left).toFixed(3)}%;width:${Math.max(0.5, width).toFixed(3)}%;"
+                title="${this.escape(`${this.formatTime(band.start)} - ${this.formatTime(band.end)} ${this.modeLabel(band.mode)}`)}"
+              >
+                <span>${this.modeLabel(band.mode)}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
     `;
   }
 
@@ -166,7 +227,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     return `
       <div class="legend">
-        <span class="legend-line price"></span><span>Prijs</span>
+        <span class="swatch price-low"></span><span>Lage prijs</span>
+        <span class="swatch price-mid"></span><span>Midden</span>
+        <span class="swatch price-high"></span><span>Hoge prijs</span>
         <span class="legend-line demand"></span><span>Verbruik</span>
         ${modes.map(([mode, label]) => `
           <span class="swatch mode-${this.modeClass(mode)}"></span><span>${label}</span>
@@ -387,6 +450,28 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return String(mode || "accu_uit").replaceAll("_", "-");
   }
 
+  modeLabel(mode) {
+    const labels = {
+      accu_uit: "Uit",
+      laden_met_zonne_energie: "Laden zon",
+      laden_van_net: "Laden net",
+      ontladen: "Ontladen",
+      ontladen_naar_net: "Naar net",
+      not_applicable: "N.v.t.",
+    };
+    return labels[String(mode)] || String(mode || "Onbekend").replaceAll("_", " ");
+  }
+
+  priceClass(price, lowThreshold, highThreshold) {
+    if (price <= lowThreshold) {
+      return "price-low";
+    }
+    if (price >= highThreshold) {
+      return "price-high";
+    }
+    return "price-mid";
+  }
+
   formatRange(start, end) {
     return `${this.formatDateTime(start)} - ${this.formatDateTime(end)}`;
   }
@@ -441,7 +526,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 12px;
+          margin-bottom: 10px;
         }
         .title {
           color: var(--primary-text-color);
@@ -453,6 +538,35 @@ class SmartEnergyPlannerCard extends HTMLElement {
           color: var(--secondary-text-color);
           font-size: 12px;
           margin-top: 3px;
+        }
+        .summary {
+          display: grid;
+          gap: 8px;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          margin: 0 0 10px;
+        }
+        .metric {
+          background: var(--secondary-background-color);
+          border-radius: 8px;
+          min-width: 0;
+          padding: 8px 10px;
+        }
+        .metric span {
+          color: var(--secondary-text-color);
+          display: block;
+          font-size: 11px;
+          line-height: 1.2;
+        }
+        .metric strong {
+          color: var(--primary-text-color);
+          display: block;
+          font-size: 16px;
+          line-height: 1.25;
+          margin-top: 2px;
+          overflow-wrap: anywhere;
+        }
+        .mode-current strong {
+          font-size: 14px;
         }
         .badge {
           color: var(--primary-text-color);
@@ -491,38 +605,112 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .label-center {
           text-anchor: middle;
         }
-        .price-line {
-          fill: none;
-          stroke: var(--primary-color);
-          stroke-linecap: round;
-          stroke-linejoin: round;
-          stroke-width: 3;
+        .price-bar {
+          opacity: 0.88;
         }
         .demand-line {
           fill: none;
           stroke: var(--warning-color, #f39c12);
-          stroke-dasharray: 7 7;
+          stroke-dasharray: 6 6;
           stroke-linecap: round;
           stroke-linejoin: round;
           stroke-width: 3;
         }
+        .demand-dot {
+          fill: var(--warning-color, #f39c12);
+          stroke: var(--card-background-color);
+          stroke-width: 2;
+        }
         .mode-band {
           opacity: 0.2;
         }
+        .price-low {
+          fill: #43a047;
+          background: #43a047;
+        }
+        .price-mid {
+          fill: #f9ab00;
+          background: #f9ab00;
+        }
+        .price-high {
+          fill: #d93025;
+          background: #d93025;
+        }
         .mode-accu-uit {
           fill: #9aa0a6;
+          background: #9aa0a6;
         }
         .mode-laden-met-zonne-energie {
           fill: #34a853;
+          background: #34a853;
         }
         .mode-laden-van-net {
           fill: #4285f4;
+          background: #4285f4;
         }
         .mode-ontladen {
           fill: #fbbc04;
+          background: #fbbc04;
         }
         .mode-ontladen-naar-net {
           fill: #ea4335;
+          background: #ea4335;
+        }
+        .mode-not-applicable {
+          fill: #9aa0a6;
+          background: #9aa0a6;
+        }
+        .mode-panel {
+          margin-top: 8px;
+        }
+        .mode-panel-header {
+          align-items: center;
+          color: var(--secondary-text-color);
+          display: flex;
+          font-size: 12px;
+          justify-content: space-between;
+          gap: 10px;
+          margin-bottom: 8px;
+        }
+        .mode-pill {
+          border-radius: 999px;
+          color: #fff;
+          font-size: 12px;
+          line-height: 1.2;
+          padding: 5px 9px;
+          text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+          white-space: nowrap;
+        }
+        .mode-track {
+          background: var(--secondary-background-color);
+          border-radius: 8px;
+          height: 46px;
+          overflow: hidden;
+          position: relative;
+        }
+        .mode-box {
+          align-items: center;
+          border-right: 1px solid rgba(255, 255, 255, 0.28);
+          bottom: 0;
+          color: #fff;
+          display: flex;
+          font-size: 11px;
+          font-weight: 600;
+          justify-content: center;
+          left: 0;
+          line-height: 1.1;
+          min-width: 18px;
+          overflow: hidden;
+          padding: 0 4px;
+          position: absolute;
+          text-align: center;
+          text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+          top: 0;
+        }
+        .mode-box span {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .legend {
           align-items: center;
@@ -552,6 +740,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .error {
           color: var(--error-color);
+        }
+        @media (max-width: 520px) {
+          .summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .mode-box {
+            font-size: 10px;
+          }
         }
       </style>
     `;
