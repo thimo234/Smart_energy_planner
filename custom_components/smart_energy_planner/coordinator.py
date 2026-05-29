@@ -1782,7 +1782,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=round(non_heating_daily_average_kwh, 2),
             upcoming_energy_price_windows=self._serialize_price_windows(
                 all_windows,
-                now=now,
+                horizon_start=now - timedelta(hours=1),
                 horizon_end=planning_horizon_end,
             ),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
@@ -1875,7 +1875,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         windows: list[PlannerWindow],
         *,
-        now: datetime,
+        horizon_start: datetime,
         horizon_end: datetime,
     ) -> list[dict[str, str | float]]:
         return [
@@ -1885,7 +1885,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "price": round(float(window.price), 6),
             }
             for window in windows
-            if window.end > now and window.start < horizon_end
+            if window.end > horizon_start and window.start < horizon_end
         ]
 
     def _battery_demand_safety_margin(self) -> float:

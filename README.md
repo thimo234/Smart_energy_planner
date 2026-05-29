@@ -99,12 +99,14 @@ Then add the card:
 type: custom:smart-energy-planner-card
 title: Energieprijs planning
 planner_entity: sensor.smart_energy_planner_battery_strategy
-hours_to_show: 24
 ```
 
 In the visual editor you only need to select the planner sensor. The card reads
 `upcoming_energy_price_windows`, `estimated_hourly_home_demand`, and
-`planned_battery_mode_schedule` from that selected planner entity.
+`planned_battery_mode_schedule` from that selected planner entity. By default
+the graph starts one hour before the current hour and continues to the last
+known energy price. Add `hours_to_show` only if you want to cap the visible
+horizon.
 
 ## HACS
 
