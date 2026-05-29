@@ -123,9 +123,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   chartWidth(priceWindows, horizonStart, horizonEnd) {
     const horizonHours = Math.max(1, (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000));
-    const windowWidth = priceWindows.length ? priceWindows.length * 54 + 140 : 0;
-    const hourWidth = horizonHours * 52 + 120;
-    return Math.max(960, Math.ceil(windowWidth), Math.ceil(hourWidth));
+    if (horizonHours <= 36) {
+      return 960;
+    }
+    return Math.ceil(960 + ((horizonHours - 36) * 30));
   }
 
   renderSummary(priceWindows, plannerState, now) {
@@ -193,7 +194,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     return `
       <div class="chart-scroll">
-        <svg class="chart" style="width:${width}px" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
+        <svg class="chart" style="${width > 960 ? `width:${width}px` : "width:100%"}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
           <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
           ${priceTicks.map((tick) => `
             <line x1="${pad.left}" y1="${yPrice(tick)}" x2="${width - pad.right}" y2="${yPrice(tick)}" class="grid"></line>
@@ -247,7 +248,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <strong class="mode-pill mode-${this.modeClass(currentMode)}">${this.modeLabel(currentMode)}</strong>
         </div>
         <div class="mode-scroll">
-          <div class="mode-track" style="width:${chartWidth}px">
+          <div class="mode-track" style="${chartWidth > 960 ? `width:${chartWidth}px` : "width:100%"}">
             ${modeBands.map((band) => {
               const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
               const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
