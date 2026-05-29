@@ -24,6 +24,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     }
     this.config = {
       title: "Energieprijs planning",
+      show_title: true,
       show_legend: true,
       ...config,
     };
@@ -77,12 +78,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     this.updateHtml(`
       <ha-card>
         <div class="card">
-          <div class="header">
-            <div>
-              <div class="title">${this.escape(this.config.title)}</div>
-              <div class="subtitle">${this.formatRange(horizonStart, horizonEnd)}</div>
-            </div>
-          </div>
+          ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
           ${this.renderSummary(priceWindows, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
@@ -91,6 +87,17 @@ class SmartEnergyPlannerCard extends HTMLElement {
       </ha-card>
       ${this.renderStyles()}
     `);
+  }
+
+  renderHeader(horizonStart, horizonEnd) {
+    return `
+      <div class="header">
+        <div>
+          <div class="title">${this.escape(this.config.title || "")}</div>
+          <div class="subtitle">${this.formatRange(horizonStart, horizonEnd)}</div>
+        </div>
+      </div>
+    `;
   }
 
   getHorizonStart(plannerState, now) {
@@ -124,10 +131,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   chartWidth(priceWindows, horizonStart, horizonEnd) {
     const horizonHours = Math.max(1, (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000));
-    if (horizonHours <= 36) {
+    if (horizonHours <= 12) {
       return 960;
     }
-    return Math.ceil(960 + ((horizonHours - 36) * 30));
+    return Math.ceil(960 + ((horizonHours - 12) * 76));
   }
 
   renderSummary(priceWindows, now) {
@@ -157,8 +164,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth) {
     const width = chartWidth;
-    const height = 260;
-    const pad = { top: 16, right: 28, bottom: 38, left: 56 };
+    const height = 250;
+    const pad = { top: 10, right: 58, bottom: 34, left: 58 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const priceValues = priceWindows.flatMap((window) => [window.price]);
@@ -186,54 +193,64 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const hoursToShow = (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000);
     const ticks = this.timeTicks(horizonStart, horizonEnd, hoursToShow);
     const priceTicks = this.valueTicks(minPrice, maxPrice, 4);
+    const energyTicks = this.valueTicks(0, maxEnergy, 4);
     const lowThreshold = minPrice + ((maxPrice - minPrice) * 0.33);
     const highThreshold = minPrice + ((maxPrice - minPrice) * 0.66);
     const nowInRange = now >= horizonStart && now <= horizonEnd;
 
     return `
-      <div class="chart-scroll">
-        <svg class="chart" style="${width > 960 ? `width:${width}px` : "width:100%"}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
-          <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
-          ${priceTicks.map((tick) => `
-            <line x1="${pad.left}" y1="${yPrice(tick)}" x2="${width - pad.right}" y2="${yPrice(tick)}" class="grid"></line>
-            <text x="${pad.left - 10}" y="${yPrice(tick) + 4}" class="axis label-right">${this.formatNumber(tick)}</text>
-          `).join("")}
-          ${ticks.map((tick) => `
-            <line x1="${x(tick)}" y1="${pad.top}" x2="${x(tick)}" y2="${height - pad.bottom}" class="grid vertical"></line>
-            <text x="${x(tick)}" y="${height - 16}" class="axis label-center">${this.formatTime(tick)}</text>
-          `).join("")}
-          <text x="${pad.left}" y="${height - 6}" class="axis">Prijs</text>
-          <text x="${width - pad.right}" y="${height - 6}" class="axis label-right">kWh</text>
-          ${priceWindows.map((window) => {
-            const xStart = x(window.start);
-            const xEnd = x(window.end);
-            const barWidth = Math.max(3, xEnd - xStart - 4);
-            const yValue = yPrice(window.price);
-            const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
-            return `
-              <rect
-                x="${(xStart + 1.5).toFixed(2)}"
-                y="${yValue.toFixed(2)}"
-                width="${barWidth.toFixed(2)}"
-                height="${barHeight.toFixed(2)}"
-                rx="7"
-                class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
-              ></rect>
-            `;
-          }).join("")}
-          ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
-          ${solarPath ? `<path d="${solarPath}" class="solar-line"></path>` : ""}
-          ${demandPoints.map((point) => `
-            <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="demand-dot"></circle>
-          `).join("")}
-          ${solarPoints.map((point) => `
-            <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="solar-dot"></circle>
-          `).join("")}
-          ${nowInRange ? `
-            <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
-            <text x="${(x(now) + 8).toFixed(2)}" y="${pad.top + 16}" class="now-label">Nu</text>
-          ` : ""}
-        </svg>
+      <div class="chart-wrap">
+        <div class="chart-scroll">
+          <svg class="chart" style="${width > 960 ? `width:${width}px` : "width:100%"}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Energy price planning chart">
+            <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
+            ${priceTicks.map((tick) => `
+              <line x1="${pad.left}" y1="${yPrice(tick)}" x2="${width - pad.right}" y2="${yPrice(tick)}" class="grid"></line>
+              <text x="${pad.left - 10}" y="${yPrice(tick) + 4}" class="axis label-right">${this.formatNumber(tick)}</text>
+            `).join("")}
+            ${ticks.map((tick) => `
+              <line x1="${x(tick)}" y1="${pad.top}" x2="${x(tick)}" y2="${height - pad.bottom}" class="grid vertical"></line>
+              <text x="${x(tick)}" y="${height - 12}" class="axis label-center">${this.formatTime(tick)}</text>
+            `).join("")}
+            <text x="${pad.left}" y="${height - 4}" class="axis axis-muted">Prijs</text>
+            ${priceWindows.map((window) => {
+              const xStart = x(window.start);
+              const xEnd = x(window.end);
+              const barWidth = Math.max(8, xEnd - xStart - 2);
+              const yValue = yPrice(window.price);
+              const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
+              return `
+                <rect
+                  x="${(xStart + 1).toFixed(2)}"
+                  y="${yValue.toFixed(2)}"
+                  width="${barWidth.toFixed(2)}"
+                  height="${barHeight.toFixed(2)}"
+                  rx="7"
+                  class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}"
+                ></rect>
+              `;
+            }).join("")}
+            ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
+            ${solarPath ? `<path d="${solarPath}" class="solar-line"></path>` : ""}
+            ${demandPoints.map((point) => `
+              <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="demand-dot"></circle>
+            `).join("")}
+            ${solarPoints.map((point) => `
+              <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="solar-dot"></circle>
+            `).join("")}
+            ${nowInRange ? `
+              <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
+              <text x="${(x(now) + 8).toFixed(2)}" y="${pad.top + 16}" class="now-label">Nu</text>
+            ` : ""}
+          </svg>
+        </div>
+        <div class="kwh-axis" aria-hidden="true">
+          <svg viewBox="0 0 58 ${height}">
+            ${energyTicks.map((tick) => `
+              <text x="8" y="${yDemand(tick) + 4}" class="axis">${this.formatNumber(tick)}</text>
+            `).join("")}
+            <text x="8" y="${height - 4}" class="axis axis-muted">kWh</text>
+          </svg>
+        </div>
       </div>
     `;
   }
@@ -260,11 +277,24 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   style="left:${Math.max(0, left).toFixed(3)}%;width:${Math.max(0.5, width).toFixed(3)}%;"
                   title="${this.escape(`${this.formatTime(band.start)} - ${this.formatTime(band.end)} ${this.modeLabel(band.mode)}`)}"
                 >
-                  <span>${this.modeLabel(band.mode)}</span>
                 </div>
               `;
             }).join("")}
             ${nowInRange ? `<div class="mode-now-line" style="left:${nowLeft.toFixed(3)}%;"></div>` : ""}
+          </div>
+          <div class="mode-label-row" style="${chartWidth > 960 ? `width:${chartWidth}px` : "width:100%"}">
+            ${modeBands.map((band) => {
+              const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
+              const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
+              return `
+                <div
+                  class="mode-label"
+                  style="left:${Math.max(0, left).toFixed(3)}%;width:${Math.max(0.5, width).toFixed(3)}%;"
+                >
+                  <span>${this.modeLabel(band.mode)}</span>
+                </div>
+              `;
+            }).join("")}
           </div>
         </div>
       </div>
@@ -408,7 +438,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
         const value = this.parseNumber(slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate);
-        if (!start || !end || value === undefined) {
+        if (!start || !end || value === undefined || value <= 0.01) {
           return undefined;
         }
         const midpoint = new Date((start.getTime() + end.getTime()) / 2);
@@ -634,7 +664,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           box-shadow: none;
         }
         .card {
-          min-height: 290px;
+          min-height: 286px;
           padding: 8px;
         }
         .header {
@@ -642,7 +672,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           align-items: flex-start;
           justify-content: space-between;
           gap: 8px;
-          margin-bottom: 6px;
+          margin-bottom: 5px;
         }
         .title {
           color: var(--primary-text-color);
@@ -659,7 +689,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           display: grid;
           gap: 5px;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          margin: 0 0 5px;
+          margin: 0 0 3px;
         }
         .metric {
           background: rgba(0, 0, 0, 0.16);
@@ -695,16 +725,42 @@ class SmartEnergyPlannerCard extends HTMLElement {
           padding: 6px 8px;
           text-align: right;
         }
+        .chart-wrap {
+          position: relative;
+        }
         .chart-scroll,
         .mode-scroll {
+          -ms-overflow-style: none;
           overflow-x: auto;
           overflow-y: hidden;
-          scrollbar-width: thin;
+          scrollbar-width: none;
+          -webkit-overflow-scrolling: touch;
+        }
+        .chart-scroll::-webkit-scrollbar,
+        .mode-scroll::-webkit-scrollbar {
+          display: none;
+        }
+        .chart-scroll {
+          padding-right: 58px;
+        }
+        .kwh-axis {
+          background: linear-gradient(90deg, rgba(0, 0, 0, 0), var(--card-background-color, rgba(0, 0, 0, 0.82)) 34%);
+          bottom: 0;
+          pointer-events: none;
+          position: absolute;
+          right: 0;
+          top: 0;
+          width: 58px;
+        }
+        .kwh-axis svg {
+          display: block;
+          height: 100%;
+          width: 58px;
         }
         .chart {
           display: block;
           height: auto;
-          min-height: 190px;
+          min-height: 186px;
           overflow: visible;
         }
         .chart-bg {
@@ -712,14 +768,21 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .grid {
           stroke: var(--divider-color);
-          stroke-width: 1;
+          stroke-dasharray: 4 5;
+          stroke-width: 1.2;
         }
         .grid.vertical {
           opacity: 0.55;
         }
         .axis {
+          fill: var(--primary-text-color);
+          font-size: 18px;
+          font-weight: 600;
+        }
+        .axis-muted {
           fill: var(--secondary-text-color);
           font-size: 16px;
+          font-weight: 500;
         }
         .label-right {
           text-anchor: end;
@@ -736,14 +799,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
           stroke-dasharray: 6 6;
           stroke-linecap: round;
           stroke-linejoin: round;
-          stroke-width: 3;
+          stroke-width: 5;
         }
         .solar-line {
           fill: none;
           stroke: #fdd835;
           stroke-linecap: round;
           stroke-linejoin: round;
-          stroke-width: 3;
+          stroke-width: 5;
         }
         .demand-dot {
           fill: #ab47bc;
@@ -806,7 +869,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           background: #9aa0a6;
         }
         .mode-panel {
-          margin-top: 4px;
+          margin-top: 2px;
         }
         .mode-panel-header {
           align-items: center;
@@ -829,7 +892,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .mode-track {
           background: var(--secondary-background-color);
           border-radius: 8px;
-          height: 42px;
+          height: 30px;
           overflow: hidden;
           position: relative;
         }
@@ -844,25 +907,32 @@ class SmartEnergyPlannerCard extends HTMLElement {
           z-index: 2;
         }
         .mode-box {
-          align-items: center;
           border-right: 1px solid rgba(255, 255, 255, 0.28);
           bottom: 0;
-          color: #fff;
-          display: flex;
-          font-size: 12px;
-          font-weight: 600;
-          justify-content: center;
           left: 0;
-          line-height: 1.1;
           min-width: 18px;
           overflow: hidden;
-          padding: 0 4px;
           position: absolute;
-          text-align: center;
-          text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
           top: 0;
         }
-        .mode-box span {
+        .mode-label-row {
+          color: var(--primary-text-color);
+          font-size: 12px;
+          font-weight: 600;
+          height: 18px;
+          margin-top: 3px;
+          position: relative;
+        }
+        .mode-label {
+          left: 0;
+          overflow: hidden;
+          padding-right: 6px;
+          position: absolute;
+          text-overflow: ellipsis;
+          top: 0;
+          white-space: nowrap;
+        }
+        .mode-label span {
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -935,6 +1005,13 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
           domain-filter="sensor"
           allow-custom-entity
         ></ha-entity-picker>
+        <ha-textfield
+          label="Titel"
+          .value="${this.escape(this.config.title ?? "")}"
+        ></ha-textfield>
+        <ha-formfield label="Titel tonen">
+          <ha-switch></ha-switch>
+        </ha-formfield>
       </div>
       <style>
         .editor {
@@ -949,6 +1026,18 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
     picker.value = this.config.planner_entity || "";
     picker.addEventListener("value-changed", (event) => {
       this.updateConfig({ planner_entity: event.detail.value });
+    });
+
+    const titleField = this.querySelector("ha-textfield");
+    titleField.value = this.config.title ?? "";
+    titleField.addEventListener("input", (event) => {
+      this.updateConfig({ title: event.target.value });
+    });
+
+    const titleSwitch = this.querySelector("ha-switch");
+    titleSwitch.checked = this.config.show_title !== false;
+    titleSwitch.addEventListener("change", (event) => {
+      this.updateConfig({ show_title: event.target.checked });
     });
   }
 
