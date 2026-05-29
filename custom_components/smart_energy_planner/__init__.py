@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import CoreState, Event, EventStateChangedData, HomeAssistant, callback
@@ -65,11 +67,14 @@ from .thermostat_planner import (
 )
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
+_CARD_STATIC_URL = "/smart_energy_planner"
+_CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Energy Planner from a config entry."""
     merged = {**entry.data, **entry.options}
+    await _async_register_frontend(hass)
 
     # Load persisted runtime state BEFORE the first coordinator refresh so
     # that battery profit tracking reads the correct stored values instead of
@@ -260,6 +265,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     entry.async_on_unload(coordinator._cancel_source_error_retry)
     return True
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Register the bundled Lovelace card as a static frontend resource."""
+    registered_key = f"{DOMAIN}_frontend_registered"
+    if hass.data.get(registered_key):
+        return
+
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                _CARD_STATIC_URL,
+                str(_CARD_STATIC_PATH),
+                cache_headers=True,
+            )
+        ]
+    )
+    hass.data[registered_key] = True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

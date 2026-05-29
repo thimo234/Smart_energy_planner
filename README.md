@@ -80,6 +80,34 @@ Battery strategy values:
 - `laden_met_zonne_energie`
 - `laden_van_net`
 
+## Lovelace card
+
+The integration includes a custom Lovelace card that shows the upcoming energy
+price as a stepped graph, the expected home demand as a dotted line, and the
+planned battery mode as background colors.
+
+Add this JavaScript module as a Lovelace resource:
+
+```yaml
+url: /smart_energy_planner/smart-energy-planner-card.js
+type: module
+```
+
+Then add the card:
+
+```yaml
+type: custom:smart-energy-planner-card
+title: Energieprijs planning
+price_entity: sensor.your_energy_price_sensor
+demand_entity: sensor.smart_energy_planner_estimated_home_demand_today
+planner_entity: sensor.smart_energy_planner_battery_strategy
+hours_to_show: 24
+```
+
+The card reads `raw_today`/`raw_tomorrow` from the price sensor,
+`estimated_hourly_home_demand` from the demand sensor, and
+`planned_battery_mode_schedule` from the battery strategy sensor.
+
 ## HACS
 
 1. Open HACS.
