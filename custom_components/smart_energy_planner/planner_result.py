@@ -30,6 +30,7 @@ class PlannerResult:
     upcoming_energy_price_windows: list[dict[str, str | float]]
     estimated_total_home_demand_kwh: float
     estimated_hourly_home_demand: list[dict[str, str | float]]
+    estimated_hourly_solar_forecast: list[dict[str, str | float]]
     projected_remaining_solar_until_sunset_kwh: float
     projected_remaining_home_demand_until_sunset_kwh: float
     projected_solar_surplus_until_sunset_kwh: float

@@ -64,6 +64,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const horizonEnd = this.getHorizonEnd(allPriceWindows, horizonStart);
     const priceWindows = this.clipPriceWindows(allPriceWindows, horizonStart, horizonEnd);
     const demandPoints = this.extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd);
+    const solarPoints = this.extractSolarPoints(plannerState, horizonStart, horizonEnd);
     const modeSchedule = this.extractModeSchedule(plannerState, horizonStart, horizonEnd);
     const modeBands = this.modeBands(modeSchedule, horizonStart, horizonEnd);
     const chartWidth = this.chartWidth(priceWindows, horizonStart, horizonEnd);
@@ -83,7 +84,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
             </div>
           </div>
           ${this.renderSummary(priceWindows, now)}
-          ${this.renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
+          ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
         </div>
@@ -154,17 +155,17 @@ class SmartEnergyPlannerCard extends HTMLElement {
     `;
   }
 
-  renderChart(priceWindows, demandPoints, modeBands, horizonStart, horizonEnd, now, chartWidth) {
+  renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth) {
     const width = chartWidth;
-    const height = 340;
-    const pad = { top: 18, right: 46, bottom: 50, left: 62 };
+    const height = 260;
+    const pad = { top: 16, right: 28, bottom: 38, left: 56 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const priceValues = priceWindows.flatMap((window) => [window.price]);
-    const demandValues = demandPoints.map((point) => point.value);
+    const energyValues = [...demandPoints, ...solarPoints].map((point) => point.value);
     const minPrice = Math.min(...priceValues, 0);
     const maxPrice = Math.max(...priceValues, 0.01);
-    const maxDemand = Math.max(...demandValues, 0.1);
+    const maxEnergy = Math.max(...energyValues, 0.1);
     const timeSpan = horizonEnd.getTime() - horizonStart.getTime();
 
     const x = (date) => {
@@ -176,11 +177,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
       return pad.top + (1 - ratio) * plotHeight;
     };
     const yDemand = (value) => {
-      const ratio = value / Math.max(maxDemand, 0.0001);
+      const ratio = value / Math.max(maxEnergy, 0.0001);
       return pad.top + (1 - ratio) * plotHeight;
     };
 
     const demandPath = this.linePath(demandPoints, x, yDemand);
+    const solarPath = this.linePath(solarPoints, x, yDemand);
     const hoursToShow = (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000);
     const ticks = this.timeTicks(horizonStart, horizonEnd, hoursToShow);
     const priceTicks = this.valueTicks(minPrice, maxPrice, 4);
@@ -201,7 +203,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
             <text x="${x(tick)}" y="${height - 16}" class="axis label-center">${this.formatTime(tick)}</text>
           `).join("")}
           <text x="${pad.left}" y="${height - 6}" class="axis">Prijs</text>
-          <text x="${width - pad.right}" y="${height - 6}" class="axis label-right">Verbruik</text>
+          <text x="${width - pad.right}" y="${height - 6}" class="axis label-right">kWh</text>
           ${priceWindows.map((window) => {
             const xStart = x(window.start);
             const xEnd = x(window.end);
@@ -220,8 +222,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
             `;
           }).join("")}
           ${demandPath ? `<path d="${demandPath}" class="demand-line"></path>` : ""}
+          ${solarPath ? `<path d="${solarPath}" class="solar-line"></path>` : ""}
           ${demandPoints.map((point) => `
             <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="demand-dot"></circle>
+          `).join("")}
+          ${solarPoints.map((point) => `
+            <circle cx="${x(point.time).toFixed(2)}" cy="${yDemand(point.value).toFixed(2)}" r="3" class="solar-dot"></circle>
           `).join("")}
           ${nowInRange ? `
             <line x1="${x(now).toFixed(2)}" y1="${pad.top}" x2="${x(now).toFixed(2)}" y2="${height - pad.bottom}" class="now-line"></line>
@@ -381,6 +387,27 @@ class SmartEnergyPlannerCard extends HTMLElement {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
         const value = this.parseNumber(slot.estimated_kwh);
+        if (!start || !end || value === undefined) {
+          return undefined;
+        }
+        const midpoint = new Date((start.getTime() + end.getTime()) / 2);
+        return { time: midpoint, value };
+      })
+      .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
+      .sort((a, b) => a.time - b.time);
+  }
+
+  extractSolarPoints(plannerState, horizonStart, horizonEnd) {
+    const raw = plannerState?.attributes?.estimated_hourly_solar_forecast;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+
+    return raw
+      .map((slot) => {
+        const start = this.parseDate(slot.start);
+        const end = this.parseDate(slot.end);
+        const value = this.parseNumber(slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate);
         if (!start || !end || value === undefined) {
           return undefined;
         }
@@ -602,49 +629,49 @@ class SmartEnergyPlannerCard extends HTMLElement {
           display: block;
         }
         .card {
-          min-height: 420px;
-          padding: 18px;
+          min-height: 320px;
+          padding: 16px;
         }
         .header {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
         }
         .title {
           color: var(--primary-text-color);
-          font-size: 20px;
+          font-size: 16px;
           font-weight: 600;
           line-height: 1.25;
         }
         .subtitle {
           color: var(--secondary-text-color);
-          font-size: 13px;
+          font-size: 12px;
           margin-top: 3px;
         }
         .summary {
           display: grid;
           gap: 8px;
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          margin: 0 0 10px;
+          margin: 0 0 8px;
         }
         .metric {
           background: var(--secondary-background-color);
           border-radius: 8px;
           min-width: 0;
-          padding: 8px 10px;
+          padding: 7px 9px;
         }
         .metric span {
           color: var(--secondary-text-color);
           display: block;
-          font-size: 13px;
+          font-size: 12px;
           line-height: 1.2;
         }
         .metric strong {
           color: var(--primary-text-color);
           display: block;
-          font-size: 20px;
+          font-size: 17px;
           line-height: 1.25;
           margin-top: 2px;
           overflow-wrap: anywhere;
@@ -672,7 +699,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .chart {
           display: block;
           height: auto;
-          min-height: 260px;
+          min-height: 190px;
           overflow: visible;
         }
         .chart-bg {
@@ -687,7 +714,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .axis {
           fill: var(--secondary-text-color);
-          font-size: 19px;
+          font-size: 16px;
         }
         .label-right {
           text-anchor: end;
@@ -700,14 +727,26 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .demand-line {
           fill: none;
-          stroke: #00bcd4;
+          stroke: #ab47bc;
           stroke-dasharray: 6 6;
           stroke-linecap: round;
           stroke-linejoin: round;
           stroke-width: 3;
         }
+        .solar-line {
+          fill: none;
+          stroke: #fdd835;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+          stroke-width: 3;
+        }
         .demand-dot {
-          fill: #00bcd4;
+          fill: #ab47bc;
+          stroke: var(--card-background-color);
+          stroke-width: 2;
+        }
+        .solar-dot {
+          fill: #fdd835;
           stroke: var(--card-background-color);
           stroke-width: 2;
         }
@@ -719,7 +758,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .now-label {
           fill: var(--primary-text-color);
-          font-size: 18px;
+          font-size: 16px;
           font-weight: 700;
         }
         .mode-band {
@@ -762,21 +801,21 @@ class SmartEnergyPlannerCard extends HTMLElement {
           background: #9aa0a6;
         }
         .mode-panel {
-          margin-top: 8px;
+          margin-top: 6px;
         }
         .mode-panel-header {
           align-items: center;
           color: var(--secondary-text-color);
           display: flex;
-          font-size: 14px;
+          font-size: 12px;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 8px;
+          margin-bottom: 6px;
         }
         .mode-pill {
           border-radius: 999px;
           color: #fff;
-          font-size: 14px;
+          font-size: 12px;
           line-height: 1.2;
           padding: 5px 9px;
           text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
@@ -785,7 +824,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .mode-track {
           background: var(--secondary-background-color);
           border-radius: 8px;
-          height: 54px;
+          height: 42px;
           overflow: hidden;
           position: relative;
         }
@@ -805,7 +844,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           bottom: 0;
           color: #fff;
           display: flex;
-          font-size: 13px;
+          font-size: 12px;
           font-weight: 600;
           justify-content: center;
           left: 0;
@@ -828,7 +867,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           color: var(--secondary-text-color);
           display: flex;
           flex-wrap: wrap;
-          font-size: 13px;
+          font-size: 12px;
           gap: 8px;
           margin-top: 8px;
         }
@@ -847,7 +886,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           border-top: 3px solid var(--primary-color);
         }
         .legend-line.demand {
-          border-top: 3px dashed #00bcd4;
+          border-top: 3px dashed #ab47bc;
         }
         .legend-line.now {
           border-top: 3px dashed var(--primary-text-color);

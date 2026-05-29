@@ -649,6 +649,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             upcoming_energy_price_windows=[],
             estimated_total_home_demand_kwh=0.0,
             estimated_hourly_home_demand=[],
+            estimated_hourly_solar_forecast=[],
             projected_remaining_solar_until_sunset_kwh=0.0,
             projected_remaining_home_demand_until_sunset_kwh=0.0,
             projected_solar_surplus_until_sunset_kwh=0.0,
@@ -1222,6 +1223,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             [window.end for window in [*all_windows, *all_solar_windows]],
             default=now + timedelta(days=1),
         )
+        planning_start = min(
+            (window.start for window in all_windows),
+            default=now.replace(hour=0, minute=0, second=0, microsecond=0),
+        )
         estimated_hourly_home_demand = build_hourly_home_demand_forecast(
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
@@ -1236,6 +1241,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         estimated_hourly_home_demand = self._apply_hourly_demand_safety_margin(
             estimated_hourly_home_demand,
             demand_safety_margin=demand_safety_margin,
+        )
+        estimated_hourly_solar_forecast = self._serialize_solar_windows(
+            all_solar_windows,
+            horizon_start=planning_start,
+            horizon_end=planning_horizon_end,
         )
         estimated_total_home_demand_kwh = round(
             sum(
@@ -1750,7 +1760,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "battery is idle because the current hour is outside the planned charge and discharge phases"
                     )
 
-        planning_start = min((window.start for window in all_windows), default=now.replace(hour=0, minute=0, second=0, microsecond=0))
         planned_battery_mode_schedule = build_battery_mode_schedule(
             planning_start=planning_start,
             full_planned_mode_windows=full_planned_mode_windows,
@@ -1787,6 +1796,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
+            estimated_hourly_solar_forecast=estimated_hourly_solar_forecast,
             projected_remaining_solar_until_sunset_kwh=round(remaining_solar_until_sunset, 3),
             projected_remaining_home_demand_until_sunset_kwh=round(remaining_home_demand_until_sunset, 3),
             projected_solar_surplus_until_sunset_kwh=projected_solar_surplus_until_sunset,
@@ -1883,6 +1893,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "start": window.start.isoformat(),
                 "end": min(window.end, horizon_end).isoformat(),
                 "price": round(float(window.price), 6),
+            }
+            for window in windows
+            if window.end > horizon_start and window.start < horizon_end
+        ]
+
+    def _serialize_solar_windows(
+        self,
+        windows: list[SolarWindow],
+        *,
+        horizon_start: datetime,
+        horizon_end: datetime,
+    ) -> list[dict[str, str | float]]:
+        return [
+            {
+                "start": window.start.isoformat(),
+                "end": min(window.end, horizon_end).isoformat(),
+                "estimated_kwh": round(float(window.forecast_kwh), 6),
             }
             for window in windows
             if window.end > horizon_start and window.start < horizon_end

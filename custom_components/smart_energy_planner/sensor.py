@@ -193,6 +193,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "battery_min_profit_per_kwh": data.battery_min_profit_per_kwh,
             "upcoming_energy_price_windows": getattr(data, "upcoming_energy_price_windows", []),
             "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
+            "estimated_hourly_solar_forecast": getattr(data, "estimated_hourly_solar_forecast", []),
             "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
