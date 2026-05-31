@@ -68,6 +68,26 @@ def normalize_full_battery_charge_mode(
     return mode
 
 
+def normalize_full_battery_mode_windows(
+    *,
+    windows: list[dict[str, str | float]],
+    usable_energy_kwh: float,
+    usable_capacity_kwh: float,
+) -> list[dict[str, str | float]]:
+    """Convert grid-charge mode windows to solar hold mode when the battery is full."""
+
+    normalized_windows: list[dict[str, str | float]] = []
+    for window in windows:
+        normalized = dict(window)
+        normalized["mode"] = normalize_full_battery_charge_mode(
+            mode=str(window.get("mode", BATTERY_MODE_OFF)),
+            usable_energy_kwh=usable_energy_kwh,
+            usable_capacity_kwh=usable_capacity_kwh,
+        )
+        normalized_windows.append(normalized)
+    return normalized_windows
+
+
 def clamp_charge_safety_margin(value: Any, *, default: float = 0.0) -> float:
     """Convert a percentage safety margin to a 0.0-0.5 multiplier."""
 

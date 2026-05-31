@@ -35,6 +35,8 @@ from .battery_planner import (
     calculate_next_battery_peak_price,
     merge_planned_windows,
     merge_windows,
+    normalize_full_battery_charge_mode,
+    normalize_full_battery_mode_windows,
     plan_segment_discharge_kwh,
     select_contiguous_productive_solar_slot_starts,
     summarize_battery_cycles,
@@ -1614,6 +1616,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is None:
             full_planned_mode_windows = []
             planned_current_mode = "accu_uit"
+        elif planner_kind == PLANNER_KIND_BATTERY:
+            full_planned_mode_windows = normalize_full_battery_mode_windows(
+                windows=full_planned_mode_windows,
+                usable_energy_kwh=battery_energy_available_kwh,
+                usable_capacity_kwh=usable_battery_capacity_kwh,
+            )
+            planned_current_mode = normalize_full_battery_charge_mode(
+                mode=planned_current_mode,
+                usable_energy_kwh=battery_energy_available_kwh,
+                usable_capacity_kwh=usable_battery_capacity_kwh,
+            )
 
         grid_charge_needed_until_sunset = round(
             sum(float(window.get("usable_hours", 0.0)) * max_charge for window in planned_grid_charge_windows),
