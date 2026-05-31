@@ -130,19 +130,23 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @property
     def hvac_mode(self) -> HVACMode | str:
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
-        if runtime_state.get("hvac_mode") == HVACMode.OFF:
+        stored_hvac_mode = runtime_state.get("hvac_mode")
+        if stored_hvac_mode in {HVACMode.OFF, "off"}:
             return HVACMode.OFF
+        if stored_hvac_mode in {HVACMode.COOL, "cool"}:
+            return HVACMode.COOL
         if self._cooling_mode_active:
             return HVACMode.COOL
-        if runtime_state.get("hvac_mode") in {HVAC_MODE_SMART, "smart", HVACMode.AUTO}:
+        if stored_hvac_mode in {HVAC_MODE_SMART, "smart", HVACMode.AUTO}:
             return HVACMode.AUTO
         return HVACMode.HEAT
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
-        if self._cooling_mode_active:
-            return [HVACMode.OFF, HVACMode.COOL]
-        return [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
+        modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
+        if self._cooling_mode_switch_entity:
+            modes.append(HVACMode.COOL)
+        return modes
 
     @property
     def preset_mode(self) -> str:
@@ -196,12 +200,13 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
                 return
             await _async_call_turn_service(self.hass, self._cooling_mode_switch_entity, "turn_on")
             runtime_state["hvac_mode"] = HVACMode.COOL
+        elif hvac_mode == HVACMode.OFF:
+            runtime_state["hvac_mode"] = HVACMode.OFF
+            runtime_state["manual_preset_mode"] = PRESET_NORMAL
         else:
             if self._cooling_mode_switch_entity and self._cooling_mode_active:
                 await _async_call_turn_service(self.hass, self._cooling_mode_switch_entity, "turn_off")
             runtime_state["hvac_mode"] = HVAC_MODE_SMART if hvac_mode == HVACMode.AUTO else hvac_mode
-        if hvac_mode == HVACMode.OFF:
-            runtime_state["manual_preset_mode"] = PRESET_NORMAL
         await _async_save_runtime_state(self.hass, self._entry.entry_id, runtime_state)
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()

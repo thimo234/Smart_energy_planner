@@ -394,8 +394,12 @@ async def _async_apply_heating_switch_control(
     preheat_target = getattr(coordinator.data, "thermostat_preheat_setpoint_c", None)
     cooling_mode_switch_entity = merged.get(CONF_COOLING_MODE_SWITCH_ENTITY)
     cooling_mode_switch_state = hass.states.get(cooling_mode_switch_entity) if cooling_mode_switch_entity else None
-    cooling_mode_active = str(cooling_mode_switch_state.state).lower() in {"on", "heat", "heating", "cool", "cooling"} if cooling_mode_switch_state else False
     hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
+    cooling_mode_active = (
+        hvac_mode in {HVACMode.COOL, "cool"}
+        and cooling_mode_switch_state is not None
+        and str(cooling_mode_switch_state.state).lower() in {"on", "heat", "heating", "cool", "cooling"}
+    )
     if hvac_mode == HVACMode.OFF:
         if str(switch_state.state).lower() in {"on", "heat", "heating"}:
             await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
