@@ -132,7 +132,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
   chartWidth(priceWindows, horizonStart, horizonEnd) {
     const horizonHours = Math.max(1, (horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000));
     const chartPadding = 88 + 10;
-    return Math.max(460, Math.ceil(chartPadding + (horizonHours * 31)));
+    return Math.max(430, Math.ceil(chartPadding + (horizonHours * 28)));
   }
 
   renderSummary(priceWindows, demandPoints, solarPoints, now) {
@@ -156,7 +156,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <span>Zon</span>
           <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
         </div>
-        <button class="reset-selection" type="button" data-reset-selection>Nu</button>
       </div>
     `;
   }
@@ -180,7 +179,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
     };
     const yPrice = (value) => {
       const ratio = (value - minPrice) / Math.max(maxPrice - minPrice, 0.0001);
-      return pad.top + (1 - ratio) * plotHeight;
+      const baseline = pad.top + plotHeight;
+      const barScale = plotHeight * 0.78;
+      return baseline - (ratio * barScale);
     };
     const yDemand = (value) => {
       const ratio = value / Math.max(maxEnergy, 0.0001);
@@ -204,7 +205,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         <div class="chart-scroll">
           <svg
             class="chart"
-            style="width:${width}px;min-width:460px;"
+            style="width:${width}px;min-width:430px;"
             viewBox="0 0 ${width} ${height}"
             role="img"
             aria-label="Energy price planning chart"
@@ -231,7 +232,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
             ${priceWindows.map((window) => {
               const xStart = x(window.start);
               const xEnd = x(window.end);
-              const barWidth = Math.max(8, xEnd - xStart - 2);
+              const barWidth = Math.max(7, xEnd - xStart - 4);
               const yValue = yPrice(window.price);
               const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
               const selectTime = new Date((window.start.getTime() + window.end.getTime()) / 2);
@@ -239,7 +240,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
               const isCurrentWindow = window.start <= now && window.end > now;
               return `
                 <rect
-                  x="${(xStart + 1).toFixed(2)}"
+                  x="${(xStart + 2).toFixed(2)}"
                   y="${yValue.toFixed(2)}"
                   width="${barWidth.toFixed(2)}"
                   height="${barHeight.toFixed(2)}"
@@ -278,7 +279,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <strong class="mode-pill mode-${this.modeClass(currentMode)}">${this.modeLabel(currentMode)}</strong>
         </div>
         <div class="mode-scroll">
-          <div class="mode-track" style="width:${chartWidth}px;min-width:460px;">
+          <div class="mode-track" style="width:${chartWidth}px;min-width:430px;">
             ${modeBands.map((band) => {
               const left = ((band.start.getTime() - horizonStart.getTime()) / horizonMs) * 100;
               const width = ((band.end.getTime() - band.start.getTime()) / horizonMs) * 100;
@@ -733,7 +734,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const selectedPrice = this.querySelector("[data-selected-price]");
     const selectedDemand = this.querySelector("[data-selected-demand]");
     const selectedSolar = this.querySelector("[data-selected-solar]");
-    const chart = this.querySelector(".chart");
 
     if (!selectedTime || !selectedPrice || !selectedDemand || !selectedSolar) {
       return;
@@ -753,15 +753,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
     this.querySelectorAll("[data-selection-time]").forEach((element) => {
       element.addEventListener("click", () => applySelection(element.dataset, element));
-    });
-
-    this.querySelector("[data-reset-selection]")?.addEventListener("click", () => {
-      const nowElement = this.querySelector("[data-now-selection]");
-      if (nowElement) {
-        applySelection(nowElement.dataset, nowElement);
-      } else if (chart) {
-        applySelection(chart.dataset);
-      }
     });
   }
 
@@ -789,56 +780,40 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .title {
           color: var(--primary-text-color);
-          font-size: 15px;
+          font-size: 14px;
           font-weight: 600;
           line-height: 1.25;
         }
         .subtitle {
           color: var(--secondary-text-color);
-          font-size: 11px;
+          font-size: 10px;
           margin-top: 2px;
         }
         .summary {
           display: grid;
           gap: 4px;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           margin: 0 0 2px;
         }
         .metric {
           background: rgba(0, 0, 0, 0.16);
           border-radius: 6px;
           min-width: 0;
-          padding: 4px 6px;
+          padding: 4px 5px;
         }
         .metric span {
           color: var(--secondary-text-color);
           display: block;
-          font-size: 11px;
+          font-size: 10px;
           line-height: 1.2;
         }
         .metric strong {
           color: var(--primary-text-color);
           display: block;
-          font-size: 15px;
+          font-size: 14px;
           line-height: 1.25;
           margin-top: 1px;
           overflow-wrap: anywhere;
-        }
-        .metric.compact strong {
-          font-size: 15px;
-        }
-        .reset-selection {
-          align-self: stretch;
-          background: rgba(0, 0, 0, 0.16);
-          border: 0;
-          border-radius: 6px;
-          color: var(--primary-text-color);
-          cursor: pointer;
-          font: inherit;
-          font-size: 12px;
-          font-weight: 700;
-          min-width: 0;
-          padding: 4px 6px;
         }
         .mode-current strong {
           font-size: 16px;
@@ -906,12 +881,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .axis {
           fill: var(--primary-text-color);
-          font-size: 14px;
+          font-size: 12px;
           font-weight: 600;
         }
         .axis-muted {
           fill: var(--secondary-text-color);
-          font-size: 13px;
+          font-size: 11px;
           font-weight: 500;
         }
         .axis-kwh {
@@ -956,7 +931,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         .now-label {
           fill: var(--primary-text-color);
-          font-size: 14px;
+          font-size: 12px;
           font-weight: 700;
         }
         .mode-band {
@@ -1079,7 +1054,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         }
         @media (max-width: 520px) {
           .summary {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
           .chart-scroll {
             -ms-overflow-style: none;
