@@ -40,6 +40,7 @@ class PlannerResult:
     planned_grid_charge_windows: list[dict[str, str | float]]
     planned_solar_charge_windows: list[dict[str, str | float]]
     planned_battery_mode_schedule: list[dict[str, str]]
+    planned_battery_mode_windows: list[dict[str, str | float]]
     battery_soc_percent: float | None
     battery_min_soc_percent: float
     battery_total_energy_kwh: float

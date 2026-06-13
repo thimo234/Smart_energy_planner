@@ -79,8 +79,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
       <ha-card>
         <div class="card">
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
-          ${this.renderSummary(priceWindows, demandPoints, solarPoints, now)}
-          ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth)}
+          ${this.renderSummary(priceWindows, demandPoints, solarPoints, modeBands, plannerState, now)}
+          ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
         </div>
@@ -135,8 +135,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return Math.max(430, Math.ceil(chartPadding + (horizonHours * 28)));
   }
 
-  renderSummary(priceWindows, demandPoints, solarPoints, now) {
+  renderSummary(priceWindows, demandPoints, solarPoints, modeBands, plannerState, now) {
     const currentValues = this.selectionValues(now, priceWindows, demandPoints, solarPoints);
+    const currentMode = this.currentMode(plannerState, modeBands, now);
 
     return `
       <div class="summary">
@@ -156,11 +157,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <span>Zon</span>
           <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
         </div>
+        <div class="metric">
+          <span>Modus</span>
+          <strong data-selected-mode>${this.modeLabel(currentMode)}</strong>
+        </div>
       </div>
     `;
   }
 
-  renderChart(priceWindows, demandPoints, solarPoints, modeBands, horizonStart, horizonEnd, now, chartWidth) {
+  renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth) {
     const width = chartWidth;
     const height = 270;
     const pad = { top: 26, right: 10, bottom: 68, left: 88 };
@@ -214,6 +219,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
             data-now-price="${this.formatSelectedValue(nowValues.price)}"
             data-now-demand="${this.formatSelectedValue(nowValues.demand)}"
             data-now-solar="${this.formatSelectedValue(nowValues.solar, "0.00")}"
+            data-now-mode="${this.escape(this.modeLabel(this.currentMode(plannerState, modeBands, now)))}"
           >
             <rect x="0" y="0" width="${width}" height="${height}" class="chart-bg"></rect>
             ${priceTicks.map((tick) => `
@@ -237,6 +243,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
               const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
               const selectTime = new Date((window.start.getTime() + window.end.getTime()) / 2);
               const values = this.selectionValues(selectTime, priceWindows, demandPoints, solarPoints);
+              const selectedMode = this.modeAtTime(modeBands, selectTime) || this.currentMode(plannerState, modeBands, selectTime);
               const isCurrentWindow = window.start <= now && window.end > now;
               return `
                 <rect
@@ -247,10 +254,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   rx="7"
                   class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}${isCurrentWindow ? " selected" : ""}"
                   data-selection-time="${this.escape(this.formatTime(selectTime))}"
+                  data-selection-ms="${selectTime.getTime()}"
                   data-selection-x="${((xStart + xEnd) / 2).toFixed(2)}"
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand)}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
+                  data-selected-mode="${this.escape(this.modeLabel(selectedMode))}"
                   ${isCurrentWindow ? "data-now-selection" : ""}
                 ></rect>
               `;
@@ -275,8 +284,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return `
       <div class="mode-panel">
         <div class="mode-panel-header">
-          <span>Huidige plannermodus</span>
-          <strong class="mode-pill mode-${this.modeClass(currentMode)}">${this.modeLabel(currentMode)}</strong>
+          <span data-mode-panel-label>Geselecteerde plannermodus</span>
+          <strong class="mode-pill mode-${this.modeClass(currentMode)}" data-selected-mode-pill>${this.modeLabel(currentMode)}</strong>
         </div>
         <div class="mode-scroll">
           <div class="mode-track" style="width:${chartWidth}px;min-width:430px;">
@@ -288,6 +297,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   class="mode-box mode-${this.modeClass(band.mode)}"
                   style="left:${Math.max(0, left).toFixed(3)}%;width:${Math.max(0.5, width).toFixed(3)}%;"
                   title="${this.escape(`${this.formatTime(band.start)} - ${this.formatTime(band.end)} ${this.modeLabel(band.mode)}`)}"
+                  data-mode-start-ms="${band.start.getTime()}"
+                  data-mode-end-ms="${band.end.getTime()}"
+                  data-mode="${this.escape(band.mode)}"
                 >
                 </div>
               `;
@@ -601,9 +613,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   currentMode(plannerState, modeBands, now) {
-    const activeBand = modeBands.find((band) => band.start <= now && band.end > now);
-    if (activeBand?.mode) {
-      return activeBand.mode;
+    const activeMode = this.modeAtTime(modeBands, now);
+    if (activeMode) {
+      return activeMode;
     }
 
     const attributes = plannerState?.attributes || {};
@@ -612,6 +624,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
         || attributes.battery_strategy
         || "accu_uit",
     );
+  }
+
+  modeAtTime(modeBands, time) {
+    return modeBands.find((band) => band.start <= time && band.end > time)?.mode;
   }
 
   selectionValues(time, priceWindows, demandPoints, solarPoints) {
@@ -734,16 +750,72 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const selectedPrice = this.querySelector("[data-selected-price]");
     const selectedDemand = this.querySelector("[data-selected-demand]");
     const selectedSolar = this.querySelector("[data-selected-solar]");
+    const selectedMode = this.querySelector("[data-selected-mode]");
+    const selectedModePill = this.querySelector("[data-selected-mode-pill]");
+    const chartScroll = this.querySelector(".chart-scroll");
+    const modeScroll = this.querySelector(".mode-scroll");
 
     if (!selectedTime || !selectedPrice || !selectedDemand || !selectedSolar) {
       return;
     }
+
+    const scrollModeBandIntoView = (modeBand) => {
+      if (!modeBand || !modeScroll) {
+        return;
+      }
+      const targetLeft = Math.max(
+        0,
+        modeBand.offsetLeft - ((modeScroll.clientWidth - modeBand.offsetWidth) / 2),
+      );
+      modeScroll.scrollTo({ left: targetLeft, behavior: "smooth" });
+      if (chartScroll) {
+        chartScroll.scrollTo({ left: targetLeft, behavior: "smooth" });
+      }
+    };
+
+    const selectModeBand = (selectionMs) => {
+      const selectedTimestamp = Number(selectionMs);
+      if (!Number.isFinite(selectedTimestamp)) {
+        return undefined;
+      }
+
+      const modeBand = [...this.querySelectorAll(".mode-box")].find((band) => {
+        const start = Number(band.dataset.modeStartMs);
+        const end = Number(band.dataset.modeEndMs);
+        return Number.isFinite(start)
+          && Number.isFinite(end)
+          && start <= selectedTimestamp
+          && end > selectedTimestamp;
+      });
+
+      this.querySelectorAll(".selected-mode").forEach((selected) => selected.classList.remove("selected-mode"));
+      if (modeBand) {
+        modeBand.classList.add("selected-mode");
+        scrollModeBandIntoView(modeBand);
+      }
+      return modeBand;
+    };
+
+    const updateModePill = (modeLabel, modeBand) => {
+      if (selectedMode) {
+        selectedMode.textContent = modeLabel || "-";
+      }
+      if (!selectedModePill) {
+        return;
+      }
+
+      const mode = modeBand?.dataset.mode;
+      selectedModePill.textContent = modeLabel || "-";
+      selectedModePill.className = `mode-pill mode-${this.modeClass(mode)}`;
+    };
 
     const applySelection = (dataset, element) => {
       selectedTime.textContent = dataset.selectionTime || dataset.nowTime || "Nu";
       selectedPrice.textContent = dataset.selectedPrice || dataset.nowPrice || "-";
       selectedDemand.textContent = dataset.selectedDemand || dataset.nowDemand || "-";
       selectedSolar.textContent = dataset.selectedSolar || dataset.nowSolar || "0.00";
+      const modeBand = selectModeBand(dataset.selectionMs);
+      updateModePill(dataset.selectedMode || dataset.nowMode || modeBand?.title || "-", modeBand);
 
       if (element) {
         this.querySelectorAll(".selected").forEach((selected) => selected.classList.remove("selected"));
@@ -1019,6 +1091,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
           overflow: hidden;
           position: absolute;
           top: 0;
+        }
+        .mode-box.selected-mode {
+          box-shadow: inset 0 0 0 3px var(--primary-text-color);
+          filter: brightness(1.2);
+          z-index: 1;
         }
         .legend {
           align-items: center;

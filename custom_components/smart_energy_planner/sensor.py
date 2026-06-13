@@ -195,6 +195,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "estimated_hourly_home_demand": getattr(data, "estimated_hourly_home_demand", []),
             "estimated_hourly_solar_forecast": getattr(data, "estimated_hourly_solar_forecast", []),
             "planned_battery_mode_schedule": getattr(data, "planned_battery_mode_schedule", []),
+            "planned_battery_mode_windows": getattr(data, "planned_battery_mode_windows", []),
             "price_resolution": data.price_resolution,
             "rationale": data.rationale,
         }

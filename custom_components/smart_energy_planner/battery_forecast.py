@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from typing import Any, cast
 
@@ -16,13 +17,15 @@ def build_hourly_home_demand_forecast(
     non_heating_daily_average_kwh: float,
     heating_estimate_kwh: float,
     hourly_demand_table: dict[str, float] | None = None,
+    demand_adjustment_factor: float = 1.0,
     horizon_end: datetime | None = None,
 ) -> list[dict[str, str | float]]:
-    """Build an hourly demand forecast from the 168-slot EMA table."""
+    """Build an hourly demand forecast from the 168-slot demand profile."""
 
     base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
     fallback_hourly = max(0.4, base_hourly)
     table = hourly_demand_table or {}
+    adjustment_factor = min(1.35, max(0.75, demand_adjustment_factor))
 
     heating_profile = [
         0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
@@ -42,10 +45,15 @@ def build_hourly_home_demand_forecast(
         for hour in range(24):
             slot_start = day_start + timedelta(hours=hour)
             slot_key = str(slot_start.weekday() * 24 + hour)
-            table_value = _coerce_float(table.get(slot_key))
-            historical_hourly = min(table_value, 3.0) if table_value is not None else fallback_hourly
+            historical_hourly = _hourly_demand_value(
+                table=table,
+                slot_key=slot_key,
+                weekday=slot_start.weekday(),
+                hour=hour,
+                fallback_hourly=fallback_hourly,
+            )
             heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
-            total_hourly = round(max(0.0, historical_hourly) + heating_hourly, 3)
+            total_hourly = round(max(0.0, historical_hourly * adjustment_factor) + heating_hourly, 3)
             forecast.append(
                 {
                     "start": slot_start.isoformat(),
@@ -55,6 +63,57 @@ def build_hourly_home_demand_forecast(
             )
 
     return forecast
+
+
+def _hourly_demand_value(
+    *,
+    table: dict[str, float],
+    slot_key: str,
+    weekday: int,
+    hour: int,
+    fallback_hourly: float,
+) -> float:
+    """Return the best historical hourly demand estimate for a forecast slot."""
+
+    table_value = _coerce_float(table.get(slot_key))
+    if table_value is not None:
+        return min(table_value, 3.0)
+
+    forecast_is_weekend = weekday >= 5
+    similar_day_values = _same_hour_values(
+        table,
+        hour=hour,
+        weekdays=[5, 6] if forecast_is_weekend else [0, 1, 2, 3, 4],
+    )
+    if similar_day_values:
+        return min(_median(similar_day_values), 3.0)
+
+    same_hour_values = _same_hour_values(table, hour=hour, weekdays=range(7))
+    if same_hour_values:
+        return min(_median(same_hour_values), 3.0)
+
+    return fallback_hourly
+
+
+def _same_hour_values(
+    table: dict[str, float],
+    *,
+    hour: int,
+    weekdays: Iterable[int],
+) -> list[float]:
+    return [
+        value
+        for weekday in weekdays
+        if (value := _coerce_float(table.get(str(weekday * 24 + hour)))) is not None
+    ]
+
+
+def _median(values: list[float]) -> float:
+    sorted_values = sorted(values)
+    midpoint = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[midpoint]
+    return (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2
 
 
 def get_solar_day_end(solar_windows: list[SolarWindow]) -> datetime | None:

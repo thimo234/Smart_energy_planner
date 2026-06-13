@@ -111,6 +111,10 @@ _HISTORY_LOOKBACK_DAYS = 7
 # noise, but the baseline is still persisted so we don't lose precision across
 # Home Assistant restarts.
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
+_DEMAND_PROFILE_ALPHA = 0.35
+_DEMAND_PROFILE_MAX_KWH_PER_HOUR = 10.0
+_DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
+_DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
 
 
 class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
@@ -433,15 +437,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 non_heating_daily_average = 0.0
                 heating_estimate = 0.0
                 hourly_demand_table: dict[str, float] = {}
+                demand_adjustment_factor = 1.0
             else:
                 non_heating_daily_average = total_energy_daily_average
                 heating_estimate = 0.0
                 hourly_demand_table = {}
+                demand_adjustment_factor = 1.0
                 if total_energy_sensor and total_energy_state:
                     current_energy = _coerce_float(total_energy_state.state)
                     if current_energy is not None:
                         hourly_demand_table = await self._async_update_hourly_demand_table(
                             current_value=current_energy,
+                            entity_id=total_energy_sensor,
                             now=now,
                         )
                     else:
@@ -450,6 +457,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                              .get(self.config_entry.entry_id, {})
                              .get("hourly_demand_table") or {})
                         )
+                    demand_adjustment_factor = (
+                        _coerce_float(
+                            self.hass.data.get(RUNTIME_STATE, {})
+                            .get(self.config_entry.entry_id, {})
+                            .get("hourly_demand_adjustment_factor")
+                        )
+                        or 1.0
+                    )
 
             cooling_profile = await self._async_estimate_room_cooling_profile(
                 room_temperature_sensor=room_temperature_sensor,
@@ -535,6 +550,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     total_energy_daily_average_kwh=total_energy_daily_average,
                     non_heating_daily_average_kwh=non_heating_daily_average,
                     hourly_demand_table=hourly_demand_table,
+                    demand_adjustment_factor=demand_adjustment_factor,
                     room_temperature_c=room_temperature,
                     thermostat_setpoint_c=thermostat_setpoint,
                     thermostat_cool_setpoint_c=thermostat_cool_setpoint,
@@ -661,6 +677,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_grid_charge_windows=[],
             planned_solar_charge_windows=[],
             planned_battery_mode_schedule=[],
+            planned_battery_mode_windows=[],
             battery_soc_percent=None,
             battery_min_soc_percent=float(
                 self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
@@ -866,16 +883,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self,
         *,
         current_value: float,
+        entity_id: str | None = None,
         now: datetime,
     ) -> dict[str, float]:
         """Maintain a 168-slot (7 Ã— 24) EMA table of hourly energy consumption.
 
-        Each slot key is str(weekday * 24 + hour).  When the hour changes the
-        delta between the current reading and the reading at the previous hour
-        boundary is applied with alpha=0.2:
-            new = old + (delta - old) * 0.2
-        Values are capped at 10 kWh/h before the update to guard against
-        sensor spikes or meter rollovers.
+        Each slot key is str(weekday * 24 + hour). Complete recorder history
+        hours are preferred because they line up with real hour boundaries.
+        Values are applied with alpha=0.35:
+            new = old + (delta - old) * 0.35
+        Values are capped at 10 kWh/h before the update to guard against sensor
+        spikes or meter rollovers. If recorder history is not available yet we
+        fall back to the previous incremental update path.
         """
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
             self.config_entry.entry_id, {}
@@ -886,6 +905,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         last_ts_raw = runtime_state.get("hourly_demand_last_ts")
         current_hour_key = now.weekday() * 24 + now.hour
         changed = False
+        updated_from_history = False
+
+        if entity_id:
+            hourly_usage = await self._async_get_hourly_energy_usage(entity_id, horizon_end=now)
+            runtime_state["hourly_demand_adjustment_factor"] = _calculate_demand_adjustment_factor(
+                hourly_usage=hourly_usage,
+                table=table,
+                now=now,
+            )
+            usage_by_slot: dict[str, list[float]] = {}
+            for hour_start, usage_kwh in hourly_usage.items():
+                if hour_start + timedelta(hours=1) > now:
+                    continue
+                if not 0.0 <= usage_kwh <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR:
+                    continue
+                slot = str(hour_start.weekday() * 24 + hour_start.hour)
+                usage_by_slot.setdefault(slot, []).append(usage_kwh)
+
+            for slot, values in usage_by_slot.items():
+                historical_hourly = _robust_hourly_demand(values)
+                if historical_hourly is None:
+                    continue
+                existing = _coerce_float(table.get(slot))
+                if existing is None:
+                    table[slot] = round(historical_hourly, 4)
+                else:
+                    table[slot] = round(existing + (historical_hourly - existing) * _DEMAND_PROFILE_ALPHA, 4)
+                updated_from_history = True
 
         if last_value is None or last_hour_key is None:
             # First call: store the baseline without updating any slot.
@@ -893,7 +940,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             runtime_state["hourly_demand_last_hour_key"] = current_hour_key
             runtime_state["hourly_demand_last_ts"] = now.isoformat()
             changed = True
-        elif last_hour_key != current_hour_key:
+        elif last_hour_key != current_hour_key and not updated_from_history:
             # The hour has turned: compute consumption of the completed hour.
             last_ts = dt_util.parse_datetime(last_ts_raw) if last_ts_raw else None
             elapsed_hours = (
@@ -903,13 +950,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # If HA was down for more than one hour normalise to per-hour.
             hourly_delta = delta / elapsed_hours if elapsed_hours > 1.5 else delta
             # Cap and reject negatives (meter reset / rollover).
-            if 0.0 <= hourly_delta <= 10.0:
+            if 0.0 <= hourly_delta <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR:
                 slot = str(last_hour_key)
                 existing = _coerce_float(table.get(slot))
                 if existing is None:
                     table[slot] = round(hourly_delta, 4)
                 else:
                     table[slot] = round(existing + (hourly_delta - existing) * 0.2, 4)
+            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
+            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
+            runtime_state["hourly_demand_last_ts"] = now.isoformat()
+            runtime_state["hourly_demand_table"] = table
+            changed = True
+        elif updated_from_history:
             runtime_state["hourly_demand_last_value"] = round(current_value, 3)
             runtime_state["hourly_demand_last_hour_key"] = current_hour_key
             runtime_state["hourly_demand_last_ts"] = now.isoformat()
@@ -942,6 +995,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
             "hourly_demand_table": runtime_state.get("hourly_demand_table", {}),
+            "hourly_demand_adjustment_factor": runtime_state.get("hourly_demand_adjustment_factor", 1.0),
             "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
             "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
             "hourly_demand_last_ts": runtime_state.get("hourly_demand_last_ts"),
@@ -1173,6 +1227,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         total_energy_daily_average_kwh: float,
         non_heating_daily_average_kwh: float,
         hourly_demand_table: dict[str, float],
+        demand_adjustment_factor: float,
         room_temperature_c: float | None,
         thermostat_setpoint_c: float | None,
         thermostat_cool_setpoint_c: float | None,
@@ -1233,6 +1288,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
             heating_estimate_kwh=heating_estimate_kwh,
             hourly_demand_table=hourly_demand_table,
+            demand_adjustment_factor=demand_adjustment_factor,
             horizon_end=planning_horizon_end,
         )
         demand_safety_margin = (
@@ -1777,6 +1833,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planning_start=planning_start,
             full_planned_mode_windows=full_planned_mode_windows,
         )
+        planned_battery_mode_windows = _serialize_mode_windows(full_planned_mode_windows)
 
         rationale = ". ".join(rationale_parts) if rationale_parts else "planner inputs are balanced"
         planner_status = "ready_with_warnings" if source_errors else "ready"
@@ -1819,6 +1876,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_grid_charge_windows=planned_grid_charge_windows,
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_battery_mode_schedule=planned_battery_mode_schedule,
+            planned_battery_mode_windows=planned_battery_mode_windows,
             battery_soc_percent=battery_soc_percent,
             battery_min_soc_percent=battery_min_soc_percent,
             battery_total_energy_kwh=battery_total_energy_kwh,
@@ -3071,6 +3129,110 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if overlap_end <= overlap_start:
             return 0.0
         return (overlap_end - overlap_start).total_seconds() / 3600
+
+
+def _robust_hourly_demand(values: list[float]) -> float | None:
+    valid_values = sorted(
+        value
+        for value in values
+        if 0.0 <= value <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR
+    )
+    if not valid_values:
+        return None
+    if len(valid_values) < 3:
+        return round(statistics.median(valid_values), 4)
+
+    median_value = statistics.median(valid_values)
+    lower_bound = 0.0 if median_value < 0.1 else median_value * 0.35
+    upper_bound = min(
+        _DEMAND_PROFILE_MAX_KWH_PER_HOUR,
+        max(0.2, median_value * 2.75),
+    )
+    trimmed_values = [
+        value
+        for value in valid_values
+        if lower_bound <= value <= upper_bound
+    ]
+    return round(statistics.median(trimmed_values or valid_values), 4)
+
+
+def _calculate_demand_adjustment_factor(
+    *,
+    hourly_usage: dict[datetime, float],
+    table: dict[str, float],
+    now: datetime,
+) -> float:
+    today = dt_util.as_local(now).date()
+    completed_today = [
+        (dt_util.as_local(hour_start), usage_kwh)
+        for hour_start, usage_kwh in hourly_usage.items()
+        if dt_util.as_local(hour_start).date() == today
+        and dt_util.as_local(hour_start) + timedelta(hours=1) <= now
+        and 0.0 <= usage_kwh <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR
+    ]
+    if len(completed_today) < _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS:
+        return 1.0
+
+    actual_kwh = sum(usage_kwh for _, usage_kwh in completed_today)
+    expected_kwh = sum(
+        _demand_profile_value_for_time(table, hour_start) or 0.0
+        for hour_start, _ in completed_today
+    )
+    if expected_kwh < 0.5:
+        return 1.0
+
+    raw_factor = actual_kwh / expected_kwh
+    damped_factor = 1.0 + ((raw_factor - 1.0) * _DEMAND_TODAY_ADJUSTMENT_WEIGHT)
+    return round(min(1.35, max(0.75, damped_factor)), 3)
+
+
+def _demand_profile_value_for_time(table: dict[str, float], hour_start: datetime) -> float | None:
+    hour_start = dt_util.as_local(hour_start)
+    weekday = hour_start.weekday()
+    hour = hour_start.hour
+    exact_value = _coerce_float(table.get(str(weekday * 24 + hour)))
+    if exact_value is not None:
+        return exact_value
+
+    forecast_is_weekend = weekday >= 5
+    similar_weekdays = [5, 6] if forecast_is_weekend else [0, 1, 2, 3, 4]
+    similar_values = [
+        value
+        for similar_weekday in similar_weekdays
+        if (value := _coerce_float(table.get(str(similar_weekday * 24 + hour)))) is not None
+    ]
+    if similar_values:
+        return statistics.median(similar_values)
+
+    same_hour_values = [
+        value
+        for any_weekday in range(7)
+        if (value := _coerce_float(table.get(str(any_weekday * 24 + hour)))) is not None
+    ]
+    if same_hour_values:
+        return statistics.median(same_hour_values)
+
+    return None
+
+
+def _serialize_mode_windows(windows: list[dict[str, str | datetime | float]]) -> list[dict[str, str | float]]:
+    serialized: list[dict[str, str | float]] = []
+    for window in windows:
+        start = window.get("start")
+        end = window.get("end")
+        mode = window.get("mode")
+        if start is None or end is None or mode is None:
+            continue
+        serialized_window: dict[str, str | float] = {
+            "start": start.isoformat() if isinstance(start, datetime) else str(start),
+            "end": end.isoformat() if isinstance(end, datetime) else str(end),
+            "mode": str(mode),
+        }
+        price = _coerce_float(window.get("price"))
+        if price is not None:
+            serialized_window["price"] = round(price, 6)
+        serialized.append(serialized_window)
+    return serialized
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:
