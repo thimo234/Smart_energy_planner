@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -70,6 +71,9 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
 _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 _CARD_FILENAME = "smart-energy-planner-card.js"
+_CARD_VERSION = str(
+    json.loads((Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")).get("version", "dev")
+)
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -317,6 +321,7 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
         return
 
     base_url = f"{_CARD_STATIC_URL}/{_CARD_FILENAME}"
+    resource_url = f"{base_url}?v={_CARD_VERSION}"
     existing = [
         item
         for item in resources.async_items()
@@ -324,12 +329,12 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
     ]
 
     for item in existing:
-        if item.get("url") != base_url and hasattr(resources, "async_update_item"):
+        if item.get("url") != resource_url and hasattr(resources, "async_update_item"):
             await resources.async_update_item(
                 item["id"],
                 {
                     "res_type": "module",
-                    "url": base_url,
+                    "url": resource_url,
                 },
             )
         return
@@ -338,7 +343,7 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
         await resources.async_create_item(
             {
                 "res_type": "module",
-                "url": base_url,
+                "url": resource_url,
             }
         )
 
