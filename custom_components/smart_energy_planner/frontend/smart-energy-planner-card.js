@@ -30,6 +30,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
     };
     this._lastHtml = "";
     this._selectedTimestamp = undefined;
+    this._selectedRangeStart = undefined;
+    this._selectedRangeEnd = undefined;
   }
 
   set hass(hass) {
@@ -82,7 +84,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
           ${this.renderSummary(priceWindows, demandPoints, solarPoints, modeBands, plannerState, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
-          ${this.renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
+          ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
         </div>
       </ha-card>
@@ -296,7 +298,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     `;
   }
 
-  renderModeTimeline(modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth) {
+  renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth) {
     const horizonMs = horizonEnd.getTime() - horizonStart.getTime();
     const currentMode = this.currentMode(plannerState, modeBands, now);
     const nowInRange = now >= horizonStart && now <= horizonEnd;
@@ -322,17 +324,25 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <div class="mode-track" style="width:${chartWidth}px;min-width:430px;">
             ${modeBands.filter((band) => band.end > visibleModeStart).map((band) => {
               const start = band.start < visibleModeStart ? visibleModeStart : band.start;
+              const end = band.end;
               const left = modeLeft(start);
-              const width = modeWidth(start, band.end);
+              const width = modeWidth(start, end);
               const boxLeft = left + 2;
               const boxWidth = Math.max(7, width - 4);
+              const values = this.periodValues(start, end, priceWindows, demandPoints, solarPoints);
               return `
                 <div
                   class="mode-box mode-${this.modeClass(band.mode)}"
                   style="left:${Math.max(0, boxLeft).toFixed(2)}px;width:${boxWidth.toFixed(2)}px;"
-                  title="${this.escape(`${this.formatTime(start)} - ${this.formatTime(band.end)} ${this.modeLabel(band.mode)}`)}"
+                  title="${this.escape(`${this.formatTime(start)} - ${this.formatTime(end)} ${this.modeLabel(band.mode)}`)}"
+                  data-selection-time="${this.escape(`${this.formatTime(start)} - ${this.formatTime(end)}`)}"
+                  data-selection-ms="${start.getTime()}"
+                  data-selected-price="${this.formatSelectedValue(values.price)}"
+                  data-selected-demand="${this.formatSelectedValue(values.demand, "0.00")}"
+                  data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
+                  data-selected-mode="${this.escape(this.modeLabel(band.mode))}"
                   data-mode-start-ms="${start.getTime()}"
-                  data-mode-end-ms="${band.end.getTime()}"
+                  data-mode-end-ms="${end.getTime()}"
                   data-mode="${this.escape(band.mode)}"
                 >
                 </div>
@@ -465,7 +475,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           return undefined;
         }
         const midpoint = new Date((start.getTime() + end.getTime()) / 2);
-        return { time: midpoint, value };
+        return { start, end, time: midpoint, value };
       })
       .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
       .sort((a, b) => a.time - b.time);
@@ -486,7 +496,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           return undefined;
         }
         const midpoint = new Date((start.getTime() + end.getTime()) / 2);
-        return { time: midpoint, value };
+        return { start, end, time: midpoint, value };
       })
       .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
       .sort((a, b) => a.time - b.time);
@@ -673,6 +683,47 @@ class SmartEnergyPlannerCard extends HTMLElement {
     };
   }
 
+  periodValues(start, end, priceWindows, demandPoints, solarPoints) {
+    return {
+      price: this.weightedAveragePrice(start, end, priceWindows),
+      demand: this.totalPointValue(start, end, demandPoints),
+      solar: this.totalPointValue(start, end, solarPoints),
+    };
+  }
+
+  weightedAveragePrice(start, end, priceWindows) {
+    let weightedPrice = 0;
+    let totalMs = 0;
+
+    priceWindows.forEach((window) => {
+      const overlapMs = this.overlapMs(start, end, window.start, window.end);
+      if (overlapMs <= 0) {
+        return;
+      }
+      weightedPrice += window.price * overlapMs;
+      totalMs += overlapMs;
+    });
+
+    return totalMs > 0 ? weightedPrice / totalMs : undefined;
+  }
+
+  totalPointValue(start, end, points) {
+    return points.reduce((total, point) => {
+      const pointStart = point.start || point.time;
+      const pointEnd = point.end || point.time;
+      const slotMs = Math.max(pointEnd.getTime() - pointStart.getTime(), 1);
+      const overlapMs = this.overlapMs(start, end, pointStart, pointEnd);
+      return total + (point.value * (overlapMs / slotMs));
+    }, 0);
+  }
+
+  overlapMs(start, end, otherStart, otherEnd) {
+    return Math.max(
+      0,
+      Math.min(end.getTime(), otherEnd.getTime()) - Math.max(start.getTime(), otherStart.getTime()),
+    );
+  }
+
   nearestPoint(points, time) {
     const maxDistance = 45 * 60 * 1000;
     let nearest;
@@ -780,6 +831,17 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   restoreSelection() {
+    if (Number.isFinite(this._selectedRangeStart) && Number.isFinite(this._selectedRangeEnd)) {
+      const selectedElement = [...this.querySelectorAll(".mode-box")]
+        .find((element) => Number(element.dataset.modeStartMs) === this._selectedRangeStart
+          && Number(element.dataset.modeEndMs) === this._selectedRangeEnd);
+
+      if (selectedElement) {
+        selectedElement.dispatchEvent(new Event("click"));
+        return;
+      }
+    }
+
     if (!Number.isFinite(this._selectedTimestamp)) {
       return;
     }
@@ -862,10 +924,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
       selectedModePill.className = `mode-pill mode-${this.modeClass(mode)}`;
     };
 
-    const applySelection = (dataset, element) => {
+    const applySelection = (dataset, element, options = {}) => {
       const selectedTimestamp = Number(dataset.selectionMs);
       if (Number.isFinite(selectedTimestamp)) {
         this._selectedTimestamp = selectedTimestamp;
+      }
+      if (!options.preserveRange) {
+        this._selectedRangeStart = undefined;
+        this._selectedRangeEnd = undefined;
       }
       selectedTime.textContent = dataset.selectionTime || dataset.nowTime || "Nu";
       selectedPrice.textContent = dataset.selectedPrice || dataset.nowPrice || "-";
@@ -880,7 +946,16 @@ class SmartEnergyPlannerCard extends HTMLElement {
       }
     };
 
-    const findPriceBarForTimestamp = (timestamp) => [...this.querySelectorAll(".price-bar")].find((element) => {
+    const priceBars = () => [...this.querySelectorAll(".price-bar")];
+    const priceBarOverlaps = (element, start, end) => {
+      const windowStart = Number(element.dataset.windowStartMs);
+      const windowEnd = Number(element.dataset.windowEndMs);
+      return Number.isFinite(windowStart)
+        && Number.isFinite(windowEnd)
+        && windowStart < end
+        && windowEnd > start;
+    };
+    const findPriceBarForTimestamp = (timestamp) => priceBars().find((element) => {
       const start = Number(element.dataset.windowStartMs);
       const end = Number(element.dataset.windowEndMs);
       return Number.isFinite(start)
@@ -888,6 +963,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
         && start <= timestamp
         && timestamp < end;
     });
+    const selectPriceBarsForRange = (start, end) => {
+      const selectedBars = priceBars().filter((element) => priceBarOverlaps(element, start, end));
+      this.querySelectorAll(".selected").forEach((selected) => selected.classList.remove("selected"));
+      selectedBars.forEach((element) => element.classList.add("selected"));
+      return selectedBars;
+    };
 
     this.querySelectorAll(".price-bar[data-selection-time]").forEach((element) => {
       element.addEventListener("click", () => applySelection(element.dataset, element));
@@ -900,13 +981,22 @@ class SmartEnergyPlannerCard extends HTMLElement {
           return;
         }
 
-        const priceBar = findPriceBarForTimestamp(modeStart);
-        if (priceBar) {
-          applySelection(priceBar.dataset, priceBar);
-          selectModeBand(modeStart);
-          return;
+        const modeEnd = Number(element.dataset.modeEndMs);
+        if (Number.isFinite(modeEnd) && modeEnd > modeStart) {
+          this._selectedRangeStart = modeStart;
+          this._selectedRangeEnd = modeEnd;
+          this._selectedTimestamp = undefined;
+          applySelection(element.dataset, undefined, { preserveRange: true });
+          this._selectedTimestamp = undefined;
+          this._selectedRangeStart = modeStart;
+          this._selectedRangeEnd = modeEnd;
+          selectPriceBarsForRange(modeStart, modeEnd);
+        } else {
+          const priceBar = findPriceBarForTimestamp(modeStart);
+          if (priceBar) {
+            applySelection(priceBar.dataset, priceBar);
+          }
         }
-
         selectModeBand(modeStart);
       });
     });
