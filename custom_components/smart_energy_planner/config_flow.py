@@ -29,6 +29,7 @@ from .const import (
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
+    CONF_PRICE_WINDOW_TYPE,
     CONF_PRICE_WINDOW_DURATION_HOURS,
     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
     CONF_ROOM_TEMPERATURE_SENSOR,
@@ -55,6 +56,7 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
+    DEFAULT_PRICE_WINDOW_TYPE,
     DEFAULT_PRICE_WINDOW_DURATION_HOURS,
     DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
     DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
@@ -71,6 +73,8 @@ from .const import (
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     PRICE_RESOLUTION_QUARTER_HOURLY,
+    PRICE_WINDOW_TYPE_CHEAPEST,
+    PRICE_WINDOW_TYPE_MOST_EXPENSIVE,
 )
 
 
@@ -439,6 +443,18 @@ def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] |
             vol.Required(
                 CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
             ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
+            vol.Required(
+                CONF_PRICE_WINDOW_TYPE,
+                default=user_input.get(CONF_PRICE_WINDOW_TYPE, DEFAULT_PRICE_WINDOW_TYPE),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value=PRICE_WINDOW_TYPE_CHEAPEST, label="Cheapest window"),
+                        selector.SelectOptionDict(value=PRICE_WINDOW_TYPE_MOST_EXPENSIVE, label="Most expensive window"),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(
                 CONF_PRICE_WINDOW_DURATION_HOURS,
                 default=user_input.get(CONF_PRICE_WINDOW_DURATION_HOURS, DEFAULT_PRICE_WINDOW_DURATION_HOURS),

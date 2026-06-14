@@ -13,12 +13,15 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_PRICE_WINDOW_TYPE,
     CONF_PRICE_WINDOW_DURATION_HOURS,
     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
+    DEFAULT_PRICE_WINDOW_TYPE,
     DEFAULT_PRICE_WINDOW_DURATION_HOURS,
     DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
     DOMAIN,
     PLANNER_KIND_PRICE_WINDOW,
+    PRICE_WINDOW_TYPE_MOST_EXPENSIVE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 
@@ -33,23 +36,17 @@ async def async_setup_entry(
     if coordinator.data.planner_kind != PLANNER_KIND_PRICE_WINDOW:
         return
 
+    merged = {**entry.data, **entry.options}
+    price_window_type = str(merged.get(CONF_PRICE_WINDOW_TYPE, DEFAULT_PRICE_WINDOW_TYPE))
+    is_high_window = price_window_type == PRICE_WINDOW_TYPE_MOST_EXPENSIVE
     async_add_entities(
         [
             PriceWindowBinarySensor(
                 coordinator,
                 entry,
-                key="cheapest_price_window",
-                name="Low Price Window Active",
-                window_key="cheapest_price_window",
-                icon="mdi:cash-clock",
-            ),
-            PriceWindowBinarySensor(
-                coordinator,
-                entry,
-                key="most_expensive_price_window",
-                name="High Price Window Active",
-                window_key="most_expensive_price_window",
-                icon="mdi:cash-alert",
+                key="selected_price_window",
+                name="High Price Window Active" if is_high_window else "Low Price Window Active",
+                icon="mdi:cash-alert" if is_high_window else "mdi:cash-clock",
             ),
         ]
     )
@@ -67,12 +64,10 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         *,
         key: str,
         name: str,
-        window_key: str,
         icon: str,
     ) -> None:
         super().__init__(coordinator)
         self._entry = entry
-        self._window_key = window_key
         self._attr_name = f"{entry.title} {name}".strip()
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_icon = icon
@@ -93,6 +88,7 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         merged = {**self._entry.data, **self._entry.options}
         return {
             "planner_kind": self.coordinator.data.planner_kind,
+            "price_window_type": self.coordinator.data.price_window_type,
             "start": window.get("start"),
             "end": window.get("end"),
             "average_price": window.get("average_price"),
@@ -111,7 +107,7 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def _window(self) -> dict[str, str | float] | None:
-        value = getattr(self.coordinator.data, self._window_key, None)
+        value = getattr(self.coordinator.data, "selected_price_window", None)
         return value if isinstance(value, dict) else None
 
 

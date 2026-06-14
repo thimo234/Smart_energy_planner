@@ -65,6 +65,7 @@ from .const import (
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
+    CONF_PRICE_WINDOW_TYPE,
     CONF_PRICE_WINDOW_DURATION_HOURS,
     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
     CONF_ROOM_TEMPERATURE_SENSOR,
@@ -86,6 +87,7 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
     DEFAULT_PRICE_WINDOW_DURATION_HOURS,
+    DEFAULT_PRICE_WINDOW_TYPE,
     DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
     DEFAULT_THERMOSTAT_MAX_TEMP,
@@ -96,6 +98,7 @@ from .const import (
     PLANNER_KIND_PRICE_WINDOW,
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
+    PRICE_WINDOW_TYPE_MOST_EXPENSIVE,
     RUNTIME_STATE,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -732,6 +735,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_preheat_window_start=None,
             planned_preheat_window_end=None,
             planned_preheat_windows=[],
+            selected_price_window=None,
+            price_window_type=None,
             cheapest_price_window=None,
             most_expensive_price_window=None,
             battery_min_profit_per_kwh=float(
@@ -1292,6 +1297,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 self._config.get(CONF_PRICE_WINDOW_DURATION_HOURS),
                 float(DEFAULT_PRICE_WINDOW_DURATION_HOURS),
             ) or float(DEFAULT_PRICE_WINDOW_DURATION_HOURS)
+            price_window_type = str(self._config.get(CONF_PRICE_WINDOW_TYPE, DEFAULT_PRICE_WINDOW_TYPE))
+            wants_most_expensive = price_window_type == PRICE_WINDOW_TYPE_MOST_EXPENSIVE
             whole_hour_start = bool(
                 self._config.get(
                     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
@@ -1312,6 +1319,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 cheapest=False,
                 whole_hour_start=whole_hour_start,
             )
+            selected_price_window = (
+                most_expensive_price_window
+                if wants_most_expensive
+                else cheapest_price_window
+            )
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             day_end = day_start + timedelta(days=1)
             result = self._build_pending_result(
@@ -1323,10 +1335,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             result.recommendation = "price_window"
             result.current_price = current_price
             result.price_spread = price_spread
-            result.next_window_start = cheapest_price_window.get("start") if cheapest_price_window else None
-            result.next_window_end = cheapest_price_window.get("end") if cheapest_price_window else None
+            result.next_window_start = selected_price_window.get("start") if selected_price_window else None
+            result.next_window_end = selected_price_window.get("end") if selected_price_window else None
             result.next_window_price = (
-                float(cheapest_price_window["average_price"]) if cheapest_price_window else None
+                float(selected_price_window["average_price"]) if selected_price_window else None
             )
             result.next_high_price_window_start = (
                 str(most_expensive_price_window["start"]) if most_expensive_price_window else None
@@ -1339,6 +1351,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 horizon_start=day_start,
                 horizon_end=day_end,
             )
+            result.selected_price_window = selected_price_window
+            result.price_window_type = price_window_type
             result.cheapest_price_window = cheapest_price_window
             result.most_expensive_price_window = most_expensive_price_window
             result.rationale = (
@@ -2010,6 +2024,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_preheat_window_start=preheat_window["start"].isoformat() if preheat_window else None,
             planned_preheat_window_end=preheat_window["end"].isoformat() if preheat_window else None,
             planned_preheat_windows=self._serialize_planned_price_windows(preheat_windows),
+            selected_price_window=None,
+            price_window_type=None,
             cheapest_price_window=None,
             most_expensive_price_window=None,
             battery_min_profit_per_kwh=battery_min_profit,
