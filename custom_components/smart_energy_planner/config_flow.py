@@ -189,6 +189,21 @@ def _normalize_selector_values(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _merge_options_data(
+    existing: dict[str, Any],
+    user_input: dict[str, Any],
+    *,
+    planner_kind: str,
+) -> dict[str, Any]:
+    """Preserve existing option values that Home Assistant did not resubmit."""
+
+    return {
+        **existing,
+        **user_input,
+        CONF_PLANNER_KIND: planner_kind,
+    }
+
+
 def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
     """Build the battery planner schema."""
     user_input = _base_defaults(user_input)
@@ -486,9 +501,14 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
 
         if user_input is not None:
             user_input = _normalize_selector_values(user_input)
-            title = str(user_input.get(CONF_PLANNER_NAME) or self.config_entry.title)
+            options_data = _merge_options_data(
+                merged,
+                user_input,
+                planner_kind=planner_kind,
+            )
+            title = str(options_data.get(CONF_PLANNER_NAME) or self.config_entry.title)
             self.hass.config_entries.async_update_entry(self.config_entry, title=title)
-            return self.async_create_entry(title="", data={CONF_PLANNER_KIND: planner_kind, **user_input})
+            return self.async_create_entry(title="", data=options_data)
 
         return self.async_show_form(
             step_id="init",
