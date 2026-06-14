@@ -29,6 +29,8 @@ from .const import (
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
+    CONF_PRICE_WINDOW_DURATION_HOURS,
+    CONF_PRICE_WINDOW_WHOLE_HOUR_START,
     CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_SOLCAST_TOMORROW_SENSOR,
@@ -53,6 +55,8 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_PLANNER_KIND,
     DEFAULT_PRICE_RESOLUTION,
+    DEFAULT_PRICE_WINDOW_DURATION_HOURS,
+    DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
     DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
     DEFAULT_THERMOSTAT_COLD_TOLERANCE,
     DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
@@ -63,6 +67,7 @@ from .const import (
     DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
+    PLANNER_KIND_PRICE_WINDOW,
     PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     PRICE_RESOLUTION_QUARTER_HOURLY,
@@ -164,6 +169,7 @@ def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
                     options=[
                         selector.SelectOptionDict(value=PLANNER_KIND_BATTERY, label="Battery planner"),
                         selector.SelectOptionDict(value=PLANNER_KIND_THERMOSTAT, label="Thermostat planner"),
+                        selector.SelectOptionDict(value=PLANNER_KIND_PRICE_WINDOW, label="Price window planner"),
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
@@ -421,6 +427,49 @@ def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | N
     )
 
 
+def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the price window planner schema."""
+    user_input = _base_defaults(user_input)
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_PLANNER_NAME,
+                default=user_input.get(CONF_PLANNER_NAME, f"{DEFAULT_NAME} Price Windows"),
+            ): selector.TextSelector(),
+            vol.Required(
+                CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
+            ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
+            vol.Required(
+                CONF_PRICE_WINDOW_DURATION_HOURS,
+                default=user_input.get(CONF_PRICE_WINDOW_DURATION_HOURS, DEFAULT_PRICE_WINDOW_DURATION_HOURS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_WINDOW_WHOLE_HOUR_START,
+                default=user_input.get(
+                    CONF_PRICE_WINDOW_WHOLE_HOUR_START,
+                    DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
+                ),
+            ): selector.BooleanSelector(),
+            vol.Required(
+                CONF_PRICE_RESOLUTION,
+                default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=[
+                        selector.SelectOptionDict(value=PRICE_RESOLUTION_HOURLY, label="Hourly contract"),
+                        selector.SelectOptionDict(
+                            value=PRICE_RESOLUTION_QUARTER_HOURLY, label="Quarter-hour contract"
+                        ),
+                    ],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+        }
+    )
+
+
 def _schema_for_kind(
     hass: HomeAssistant,
     planner_kind: str,
@@ -428,6 +477,8 @@ def _schema_for_kind(
 ) -> vol.Schema:
     if planner_kind == PLANNER_KIND_BATTERY:
         return _build_battery_schema(hass, user_input)
+    if planner_kind == PLANNER_KIND_PRICE_WINDOW:
+        return _build_price_window_schema(hass, user_input)
     return _build_thermostat_schema(hass, user_input)
 
 
@@ -436,6 +487,8 @@ def _title_for_kind(planner_kind: str) -> str:
         return f"{DEFAULT_NAME} Battery"
     if planner_kind == PLANNER_KIND_THERMOSTAT:
         return f"{DEFAULT_NAME} Thermostat"
+    if planner_kind == PLANNER_KIND_PRICE_WINDOW:
+        return f"{DEFAULT_NAME} Price Windows"
     return f"{DEFAULT_NAME} Battery"
 
 

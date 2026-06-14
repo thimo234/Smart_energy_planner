@@ -190,6 +190,58 @@ def extend_price_window_tail(
     return extended_windows
 
 
+def select_contiguous_price_window(
+    windows: list[PlannerWindow],
+    *,
+    now: datetime,
+    duration_hours: float,
+    cheapest: bool,
+    whole_hour_start: bool,
+) -> dict[str, str | float] | None:
+    """Select the cheapest or most expensive contiguous window in today's day."""
+
+    duration = timedelta(hours=max(duration_hours, 0.0))
+    if duration <= timedelta(0):
+        return None
+
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    clipped_windows = _clip_windows_to_range(windows, day_start, day_end)
+    if not clipped_windows:
+        return None
+
+    latest_start = day_end - duration
+    candidate_starts = sorted(
+        {
+            window.start
+            for window in clipped_windows
+            if day_start <= window.start <= latest_start
+            and (
+                not whole_hour_start
+                or (window.start.minute == 0 and window.start.second == 0 and window.start.microsecond == 0)
+            )
+        }
+    )
+
+    best: dict[str, str | float] | None = None
+    for candidate_start in candidate_starts:
+        candidate_end = candidate_start + duration
+        weighted = _weighted_average_price(clipped_windows, candidate_start, candidate_end)
+        if weighted is None:
+            continue
+        if best is None or (
+            weighted < float(best["average_price"]) if cheapest else weighted > float(best["average_price"])
+        ):
+            best = {
+                "start": candidate_start.isoformat(),
+                "end": candidate_end.isoformat(),
+                "average_price": round(weighted, 6),
+                "duration_hours": round(duration.total_seconds() / 3600, 3),
+            }
+
+    return best
+
+
 def aggregate_price_windows_to_hourly(windows: list[PlannerWindow]) -> list[PlannerWindow]:
     if not windows:
         return windows
@@ -209,6 +261,44 @@ def aggregate_price_windows_to_hourly(windows: list[PlannerWindow]) -> list[Plan
             )
         )
     return sorted(aggregated, key=lambda item: item.start)
+
+
+def _clip_windows_to_range(
+    windows: list[PlannerWindow],
+    start: datetime,
+    end: datetime,
+) -> list[PlannerWindow]:
+    clipped: list[PlannerWindow] = []
+    for window in windows:
+        clipped_start = max(window.start, start)
+        clipped_end = min(window.end, end)
+        if clipped_end <= clipped_start:
+            continue
+        clipped.append(PlannerWindow(start=clipped_start, end=clipped_end, price=window.price))
+    return sorted(clipped, key=lambda item: item.start)
+
+
+def _weighted_average_price(
+    windows: list[PlannerWindow],
+    start: datetime,
+    end: datetime,
+) -> float | None:
+    weighted_price = 0.0
+    covered_seconds = 0.0
+    expected_seconds = (end - start).total_seconds()
+
+    for window in windows:
+        overlap_start = max(start, window.start)
+        overlap_end = min(end, window.end)
+        if overlap_end <= overlap_start:
+            continue
+        overlap_seconds = (overlap_end - overlap_start).total_seconds()
+        weighted_price += window.price * overlap_seconds
+        covered_seconds += overlap_seconds
+
+    if covered_seconds < expected_seconds - 1:
+        return None
+    return weighted_price / covered_seconds if covered_seconds > 0 else None
 
 
 def _parse_datetime(value: Any) -> datetime | None:

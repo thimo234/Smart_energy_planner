@@ -86,6 +86,8 @@ class PlannerResult:
     planned_preheat_window_start: str | None
     planned_preheat_window_end: str | None
     planned_preheat_windows: list[dict[str, str | float]]
+    cheapest_price_window: dict[str, str | float] | None
+    most_expensive_price_window: dict[str, str | float] | None
     battery_min_profit_per_kwh: float
     price_resolution: str
     source_status: dict[str, str]

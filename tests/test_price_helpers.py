@@ -9,6 +9,7 @@ from custom_components.smart_energy_planner.price_helpers import (
     extract_price_windows,
     extend_price_window_tail,
     infer_series_interval_minutes,
+    select_contiguous_price_window,
 )
 from custom_components.smart_energy_planner.price_models import PlannerWindow
 
@@ -58,3 +59,64 @@ class PriceHelpersTest(unittest.TestCase):
         self.assertEqual(infer_series_interval_minutes(48), 30)
         self.assertEqual(infer_series_interval_minutes(96), 15)
         self.assertIsNone(infer_series_interval_minutes(12))
+
+    def test_select_contiguous_price_window_finds_cheapest_block(self):
+        start = datetime(2026, 5, 20, 0, 0)
+        windows = [
+            PlannerWindow(start=start + timedelta(hours=index), end=start + timedelta(hours=index + 1), price=price)
+            for index, price in enumerate([0.40, 0.30, 0.10, 0.20, 0.50])
+        ]
+
+        selected = select_contiguous_price_window(
+            windows,
+            now=start + timedelta(hours=12),
+            duration_hours=2,
+            cheapest=True,
+            whole_hour_start=True,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["start"], (start + timedelta(hours=2)).isoformat())
+        self.assertEqual(selected["end"], (start + timedelta(hours=4)).isoformat())
+        self.assertEqual(selected["average_price"], 0.15)
+
+    def test_select_contiguous_price_window_finds_most_expensive_block(self):
+        start = datetime(2026, 5, 20, 0, 0)
+        windows = [
+            PlannerWindow(start=start + timedelta(hours=index), end=start + timedelta(hours=index + 1), price=price)
+            for index, price in enumerate([0.40, 0.30, 0.10, 0.20, 0.50])
+        ]
+
+        selected = select_contiguous_price_window(
+            windows,
+            now=start + timedelta(hours=12),
+            duration_hours=2,
+            cheapest=False,
+            whole_hour_start=True,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["start"], start.isoformat())
+        self.assertEqual(selected["average_price"], 0.35)
+
+    def test_select_contiguous_price_window_can_require_whole_hour_start(self):
+        start = datetime(2026, 5, 20, 0, 0)
+        windows = [
+            PlannerWindow(
+                start=start + timedelta(minutes=15 * index),
+                end=start + timedelta(minutes=15 * (index + 1)),
+                price=0.01 if index == 1 else 0.50,
+            )
+            for index in range(8)
+        ]
+
+        selected = select_contiguous_price_window(
+            windows,
+            now=start,
+            duration_hours=0.25,
+            cheapest=True,
+            whole_hour_start=True,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["start"], start.isoformat())

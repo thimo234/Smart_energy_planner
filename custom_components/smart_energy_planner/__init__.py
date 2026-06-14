@@ -67,7 +67,7 @@ from .thermostat_planner import (
     THERMOSTAT_MAX_COOLDOWN_HOURS as _THERMOSTAT_MAX_COOLDOWN_HOURS,
 )
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE, Platform.BINARY_SENSOR]
 _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 _CARD_FILENAME = "smart-energy-planner-card.js"
