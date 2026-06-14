@@ -327,13 +327,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
               const end = band.end;
               const left = modeLeft(start);
               const width = modeWidth(start, end);
-              const boxLeft = left + 2;
-              const boxWidth = Math.max(7, width - 4);
               const values = this.periodValues(start, end, priceWindows, demandPoints, solarPoints);
               return `
                 <div
                   class="mode-box mode-${this.modeClass(band.mode)}"
-                  style="left:${Math.max(0, boxLeft).toFixed(2)}px;width:${boxWidth.toFixed(2)}px;"
+                  style="left:${Math.max(0, left).toFixed(2)}px;width:${Math.max(1, width).toFixed(2)}px;"
                   title="${this.escape(`${this.formatTime(start)} - ${this.formatTime(end)} ${this.modeLabel(band.mode)}`)}"
                   data-selection-time="${this.escape(`${this.formatTime(start)} - ${this.formatTime(end)}`)}"
                   data-selection-ms="${start.getTime()}"
