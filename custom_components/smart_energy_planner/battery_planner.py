@@ -6,7 +6,7 @@ changes can be made without rewriting the large coordinator.py file.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 
@@ -86,6 +86,43 @@ def normalize_full_battery_mode_windows(
         )
         normalized_windows.append(normalized)
     return normalized_windows
+
+
+def collapse_short_off_mode_windows(
+    windows: list[dict[str, str | float]],
+    *,
+    max_duration: timedelta = timedelta(minutes=30),
+) -> list[dict[str, str | float]]:
+    """Fold tiny off gaps into the adjacent active battery mode.
+
+    Replanning often creates a short idle sliver just before an upcoming active
+    window.  The next refresh usually removes it anyway, so prefer the adjacent
+    active mode immediately when the off period is small enough.
+    """
+
+    if not windows:
+        return []
+
+    collapsed: list[dict[str, str | float]] = []
+    ordered_windows = sorted(windows, key=lambda item: str(item.get("start", "")))
+    for index, window in enumerate(ordered_windows):
+        collapsed_window = dict(window)
+        mode = str(collapsed_window.get("mode", BATTERY_MODE_OFF))
+        start = _parse_datetime(collapsed_window.get("start"))
+        end = _parse_datetime(collapsed_window.get("end"))
+
+        if mode == BATTERY_MODE_OFF and start is not None and end is not None and end > start:
+            duration = end - start
+            if duration <= max_duration:
+                previous_mode = _neighbor_active_mode(ordered_windows, index - 1)
+                next_mode = _neighbor_active_mode(ordered_windows, index + 1)
+                replacement_mode = next_mode or previous_mode
+                if replacement_mode is not None:
+                    collapsed_window["mode"] = replacement_mode
+
+        collapsed.append(collapsed_window)
+
+    return merge_windows(collapsed, same_mode_only=True, pick_max_price=True)
 
 
 def clamp_charge_safety_margin(value: Any, *, default: float = 0.0) -> float:
@@ -581,6 +618,16 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _neighbor_active_mode(
+    windows: list[dict[str, str | float]],
+    index: int,
+) -> str | None:
+    if not 0 <= index < len(windows):
+        return None
+    mode = str(windows[index].get("mode", BATTERY_MODE_OFF))
+    return mode if mode != BATTERY_MODE_OFF else None
 
 
 def _overlap_hours(

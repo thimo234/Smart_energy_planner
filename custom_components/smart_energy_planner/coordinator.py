@@ -33,6 +33,7 @@ from .battery_planner import (
     build_battery_mode_schedule,
     build_charge_window_lookup,
     calculate_next_battery_peak_price,
+    collapse_short_off_mode_windows,
     merge_planned_windows,
     merge_windows,
     normalize_full_battery_charge_mode,
@@ -1678,11 +1679,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 usable_energy_kwh=battery_energy_available_kwh,
                 usable_capacity_kwh=usable_battery_capacity_kwh,
             )
+            full_planned_mode_windows = collapse_short_off_mode_windows(
+                full_planned_mode_windows,
+            )
             planned_current_mode = normalize_full_battery_charge_mode(
                 mode=planned_current_mode,
                 usable_energy_kwh=battery_energy_available_kwh,
                 usable_capacity_kwh=usable_battery_capacity_kwh,
             )
+            planned_current_mode = _mode_at_time(full_planned_mode_windows, now) or planned_current_mode
 
         grid_charge_needed_until_sunset = round(
             sum(float(window.get("usable_hours", 0.0)) * max_charge for window in planned_grid_charge_windows),
@@ -3233,6 +3238,28 @@ def _serialize_mode_windows(windows: list[dict[str, str | datetime | float]]) ->
             serialized_window["price"] = round(price, 6)
         serialized.append(serialized_window)
     return serialized
+
+
+def _mode_at_time(windows: list[dict[str, str | float]], at: datetime) -> str | None:
+    for window in windows:
+        start = _parse_datetime(window.get("start"))
+        end = _parse_datetime(window.get("end"))
+        if start is None or end is None:
+            continue
+        if start <= at < end:
+            return str(window.get("mode", "accu_uit"))
+    return None
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:
