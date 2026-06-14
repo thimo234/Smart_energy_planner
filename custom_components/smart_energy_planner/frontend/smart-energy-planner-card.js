@@ -274,6 +274,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   data-selection-time="${this.escape(this.formatTime(selectTime))}"
                   data-selection-ms="${selectTime.getTime()}"
                   data-selection-x="${((xStart + xEnd) / 2).toFixed(2)}"
+                  data-window-start-ms="${window.start.getTime()}"
+                  data-window-end-ms="${window.end.getTime()}"
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand)}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
@@ -782,7 +784,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       return;
     }
 
-    const selectedElement = [...this.querySelectorAll("[data-selection-ms]")]
+    const selectedElement = [...this.querySelectorAll(".price-bar[data-selection-ms]")]
       .find((element) => Number(element.dataset.selectionMs) === this._selectedTimestamp);
 
     if (selectedElement) {
@@ -878,8 +880,35 @@ class SmartEnergyPlannerCard extends HTMLElement {
       }
     };
 
-    this.querySelectorAll("[data-selection-time]").forEach((element) => {
+    const findPriceBarForTimestamp = (timestamp) => [...this.querySelectorAll(".price-bar")].find((element) => {
+      const start = Number(element.dataset.windowStartMs);
+      const end = Number(element.dataset.windowEndMs);
+      return Number.isFinite(start)
+        && Number.isFinite(end)
+        && start <= timestamp
+        && timestamp < end;
+    });
+
+    this.querySelectorAll(".price-bar[data-selection-time]").forEach((element) => {
       element.addEventListener("click", () => applySelection(element.dataset, element));
+    });
+
+    this.querySelectorAll(".mode-box").forEach((element) => {
+      element.addEventListener("click", () => {
+        const modeStart = Number(element.dataset.modeStartMs);
+        if (!Number.isFinite(modeStart)) {
+          return;
+        }
+
+        const priceBar = findPriceBarForTimestamp(modeStart);
+        if (priceBar) {
+          applySelection(priceBar.dataset, priceBar);
+          selectModeBand(modeStart);
+          return;
+        }
+
+        selectModeBand(modeStart);
+      });
     });
   }
 
@@ -1141,6 +1170,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .mode-box {
           border-right: 1px solid rgba(255, 255, 255, 0.28);
           bottom: 0;
+          cursor: pointer;
           left: 0;
           min-width: 18px;
           overflow: hidden;
