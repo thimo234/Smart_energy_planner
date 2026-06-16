@@ -2698,16 +2698,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_mode: str,
         sim_usable_energy_kwh: float,
         usable_capacity_kwh: float,
+        max_charge_kw: float,
+        mode_start: datetime | None = None,
     ) -> tuple[str, float, datetime]:
+        charge_start = cast(datetime, charge_window.get("start", slot["start"]))
         charge_end = cast(datetime, charge_window["end"])
-        usable_hours = float(charge_window["usable_hours"])
-        charge_kwh = float(charge_window.get("charge_kwh", 0.0))
+        mode_start = mode_start or charge_start
+        usable_hours = max((charge_end - mode_start).total_seconds() / 3600, 0.0)
+        charge_kwh = min(
+            float(charge_window.get("charge_kwh", 0.0)),
+            max(0.0, usable_hours * max_charge_kw),
+        )
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
-        if slot["start"] <= now < charge_end:
+        if mode_start <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
             {
-                "start": slot["start"].isoformat(),
+                "start": mode_start.isoformat(),
                 "end": charge_end.isoformat(),
                 "price": round(float(slot[price_key]), 6),
                 "usable_hours": round(usable_hours, 3),
@@ -2769,8 +2776,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             **grid_charge_starts,
         }
         charge_windows = [
-            {"start": start, **window}
-            for start, window in charge_starts.items()
+            {"start": start, "mode": "laden_van_net", "price_key": "import_price", **window}
+            for start, window in grid_charge_starts.items()
+        ] + [
+            {"start": start, "mode": "laden_met_zonne_energie", "price_key": "export_price", **window}
+            for start, window in solar_charge_starts.items()
         ]
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
@@ -2796,7 +2806,39 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         while slot_index < len(slots):
             slot = slots[slot_index]
             slot_start = slot["start"]
+            slot_end = slot["end"]
             charge_window_handled = False
+            overlapping_charge_window = next(
+                (
+                    window
+                    for window in charge_windows
+                    if slot_end > cast(datetime, window["start"])
+                    and slot_start < cast(datetime, window["end"])
+                ),
+                None,
+            )
+            if overlapping_charge_window is not None and slot_start not in charge_starts:
+                charge_mode = str(overlapping_charge_window["mode"])
+                current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
+                    hourly_modes=hourly_modes,
+                    slot=slot,
+                    charge_window=overlapping_charge_window,
+                    mode=charge_mode,
+                    price_key=str(overlapping_charge_window["price_key"]),
+                    now=now,
+                    current_mode=current_mode,
+                    sim_usable_energy_kwh=sim_usable_energy_kwh,
+                    usable_capacity_kwh=usable_capacity_kwh,
+                    max_charge_kw=max_charge_kw,
+                    mode_start=max(slot_start, cast(datetime, overlapping_charge_window["start"])),
+                )
+                last_charge_mode = charge_mode
+                while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
+                    slot_index += 1
+                charge_window_handled = True
+            if charge_window_handled:
+                continue
+
             for charge_lookup, charge_mode, price_key in (
                 (grid_charge_starts,  "laden_van_net",           "import_price"),
                 (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
@@ -2813,6 +2855,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     current_mode=current_mode,
                     sim_usable_energy_kwh=sim_usable_energy_kwh,
                     usable_capacity_kwh=usable_capacity_kwh,
+                    max_charge_kw=max_charge_kw,
                 )
                 last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
