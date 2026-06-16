@@ -85,6 +85,7 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         window = self._window or {}
+        tomorrow_cheapest_window = self._tomorrow_cheapest_window or {}
         merged = {**self._entry.data, **self._entry.options}
         return {
             "planner_kind": self.coordinator.data.planner_kind,
@@ -93,6 +94,11 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             "end": window.get("end"),
             "average_price": window.get("average_price"),
             "duration_hours": window.get("duration_hours"),
+            "tomorrow_cheapest_price_window": self._tomorrow_cheapest_window,
+            "tomorrow_cheapest_price_window_start": tomorrow_cheapest_window.get("start"),
+            "tomorrow_cheapest_price_window_end": tomorrow_cheapest_window.get("end"),
+            "tomorrow_cheapest_price_window_average_price": tomorrow_cheapest_window.get("average_price"),
+            "tomorrow_cheapest_price_window_duration_hours": tomorrow_cheapest_window.get("duration_hours"),
             "configured_duration_hours": merged.get(
                 CONF_PRICE_WINDOW_DURATION_HOURS,
                 DEFAULT_PRICE_WINDOW_DURATION_HOURS,
@@ -108,6 +114,11 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @property
     def _window(self) -> dict[str, str | float] | None:
         value = getattr(self.coordinator.data, "selected_price_window", None)
+        return value if isinstance(value, dict) else None
+
+    @property
+    def _tomorrow_cheapest_window(self) -> dict[str, str | float] | None:
+        value = getattr(self.coordinator.data, "tomorrow_cheapest_price_window", None)
         return value if isinstance(value, dict) else None
 
 

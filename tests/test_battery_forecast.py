@@ -7,6 +7,7 @@ install_package_stub()
 from custom_components.smart_energy_planner.battery_forecast import (
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
+    populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
 )
@@ -56,9 +57,10 @@ class BatteryForecastTest(unittest.TestCase):
     def test_build_hourly_home_demand_forecast_uses_same_hour_history_fallback(self):
         now = datetime.now().astimezone()
         opposite_day_type_weekday = 0 if now.weekday() >= 5 else 5
-        hourly = {str(opposite_day_type_weekday * 24 + 10): 1.8}
+        hourly = {str(opposite_day_type_weekday * 24 + hour): 0.5 for hour in range(24)}
+        hourly[str(opposite_day_type_weekday * 24 + 10)] = 1.8
         forecast = build_hourly_home_demand_forecast(
-            non_heating_daily_average_kwh=12.0,
+            non_heating_daily_average_kwh=13.3,
             heating_estimate_kwh=0.0,
             horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
             hourly_demand_table=hourly,
@@ -71,9 +73,10 @@ class BatteryForecastTest(unittest.TestCase):
         now = datetime.now().astimezone()
         weekday = now.weekday()
         similar_weekday = (6 if weekday == 5 else 5) if weekday >= 5 else (1 if weekday == 0 else 0)
-        hourly = {str(similar_weekday * 24 + 10): 1.5}
+        hourly = {str(similar_weekday * 24 + hour): 0.5 for hour in range(24)}
+        hourly[str(similar_weekday * 24 + 10)] = 1.5
         forecast = build_hourly_home_demand_forecast(
-            non_heating_daily_average_kwh=12.0,
+            non_heating_daily_average_kwh=13.0,
             heating_estimate_kwh=0.0,
             horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
             hourly_demand_table=hourly,
@@ -87,11 +90,12 @@ class BatteryForecastTest(unittest.TestCase):
         weekday = now.weekday()
         other_weekday = (weekday - 1) % 7
         hourly = {
+            **{str(weekday * 24 + hour): 0.5 for hour in range(24)},
             str(weekday * 24 + 10): 2.0,
             str(other_weekday * 24 + 10): 1.0,
         }
         forecast = build_hourly_home_demand_forecast(
-            non_heating_daily_average_kwh=12.0,
+            non_heating_daily_average_kwh=13.5,
             heating_estimate_kwh=0.0,
             horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
             hourly_demand_table=hourly,
@@ -102,9 +106,9 @@ class BatteryForecastTest(unittest.TestCase):
 
     def test_build_hourly_home_demand_forecast_applies_bounded_today_adjustment(self):
         now = datetime.now().astimezone()
-        hourly = {str(now.weekday() * 24): 1.0}
+        hourly = {str(now.weekday() * 24 + hour): 1.0 for hour in range(24)}
         forecast = build_hourly_home_demand_forecast(
-            non_heating_daily_average_kwh=12.0,
+            non_heating_daily_average_kwh=24.0,
             heating_estimate_kwh=0.0,
             horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
             hourly_demand_table=hourly,
@@ -113,6 +117,64 @@ class BatteryForecastTest(unittest.TestCase):
 
         first_slot = forecast[0]
         self.assertEqual(first_slot["estimated_kwh"], 1.35)
+
+    def test_build_hourly_home_demand_forecast_matches_daily_average(self):
+        now = datetime.now().astimezone()
+        weekday = now.weekday()
+        hourly = {
+            str(weekday * 24): 2.0,
+            str(weekday * 24 + 1): 1.5,
+        }
+
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=6.0,
+            heating_estimate_kwh=0.0,
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
+            hourly_demand_table=hourly,
+        )
+
+        today_total = sum(float(slot["estimated_kwh"]) for slot in forecast[:24])
+        self.assertEqual(round(today_total, 1), 6.0)
+
+    def test_build_hourly_home_demand_forecast_only_adjusts_today(self):
+        now = datetime.now().astimezone()
+        hourly = {str(weekday * 24 + hour): 1.0 for weekday in range(7) for hour in range(24)}
+
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=24.0,
+            heating_estimate_kwh=0.0,
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
+            hourly_demand_table=hourly,
+            demand_adjustment_factor=1.35,
+        )
+
+        today_total = sum(float(slot["estimated_kwh"]) for slot in forecast[:24])
+        tomorrow_total = sum(float(slot["estimated_kwh"]) for slot in forecast[24:48])
+        self.assertEqual(round(today_total, 1), 32.4)
+        self.assertEqual(round(tomorrow_total, 1), 24.0)
+
+    def test_populate_hourly_demand_table_fills_week_from_observed_slots(self):
+        table = {
+            "10": 0.7,
+            str(1 * 24 + 10): 0.8,
+        }
+
+        populated = populate_hourly_demand_table(table, observed_slots=table.keys())
+
+        self.assertEqual(len(populated), 168)
+        self.assertEqual(populated["10"], 0.7)
+        self.assertEqual(populated[str(2 * 24 + 10)], 0.75)
+
+    def test_populate_hourly_demand_table_tempers_sparse_high_outlier(self):
+        table = {
+            str(0 * 24 + 18): 0.4,
+            str(1 * 24 + 18): 0.5,
+            str(2 * 24 + 18): 3.0,
+        }
+
+        populated = populate_hourly_demand_table(table, observed_slots=table.keys())
+
+        self.assertEqual(populated[str(2 * 24 + 18)], 0.45)
 
     def test_build_fallback_solar_windows_for_tomorrow_has_daylight_windows(self):
         windows = build_fallback_solar_windows_for_day(10.0, day_offset=1)

@@ -89,6 +89,7 @@ class PlannerResult:
     selected_price_window: dict[str, str | float] | None
     price_window_type: str | None
     cheapest_price_window: dict[str, str | float] | None
+    tomorrow_cheapest_price_window: dict[str, str | float] | None
     most_expensive_price_window: dict[str, str | float] | None
     battery_min_profit_per_kwh: float
     price_resolution: str

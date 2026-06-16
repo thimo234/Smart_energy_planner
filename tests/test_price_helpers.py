@@ -120,3 +120,57 @@ class PriceHelpersTest(unittest.TestCase):
 
         self.assertIsNotNone(selected)
         self.assertEqual(selected["start"], start.isoformat())
+
+    def test_select_contiguous_price_window_can_select_tomorrow(self):
+        start = datetime(2026, 5, 20, 0, 0)
+        windows = [
+            PlannerWindow(
+                start=start + timedelta(hours=index),
+                end=start + timedelta(hours=index + 1),
+                price=0.50,
+            )
+            for index in range(24)
+        ] + [
+            PlannerWindow(
+                start=start + timedelta(days=1, hours=index),
+                end=start + timedelta(days=1, hours=index + 1),
+                price=price,
+            )
+            for index, price in enumerate([0.40, 0.30, 0.10, 0.20, 0.50])
+        ]
+
+        selected = select_contiguous_price_window(
+            windows,
+            now=start + timedelta(hours=12),
+            duration_hours=2,
+            cheapest=True,
+            whole_hour_start=True,
+            day_offset=1,
+        )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["start"], (start + timedelta(days=1, hours=2)).isoformat())
+        self.assertEqual(selected["end"], (start + timedelta(days=1, hours=4)).isoformat())
+        self.assertEqual(selected["average_price"], 0.15)
+
+    def test_select_contiguous_price_window_returns_none_when_tomorrow_unavailable(self):
+        start = datetime(2026, 5, 20, 0, 0)
+        windows = [
+            PlannerWindow(
+                start=start + timedelta(hours=index),
+                end=start + timedelta(hours=index + 1),
+                price=0.50,
+            )
+            for index in range(24)
+        ]
+
+        selected = select_contiguous_price_window(
+            windows,
+            now=start + timedelta(hours=12),
+            duration_hours=2,
+            cheapest=True,
+            whole_hour_start=True,
+            day_offset=1,
+        )
+
+        self.assertIsNone(selected)

@@ -24,6 +24,7 @@ from .battery_forecast import (
     extract_solar_windows,
     get_solar_day_end,
     merge_solar_windows,
+    populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
     select_best_solar_window,
@@ -738,6 +739,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_price_window=None,
             price_window_type=None,
             cheapest_price_window=None,
+            tomorrow_cheapest_price_window=None,
             most_expensive_price_window=None,
             battery_min_profit_per_kwh=float(
                 self._config.get(CONF_BATTERY_MIN_PROFIT_PER_KWH, DEFAULT_BATTERY_MIN_PROFIT_PER_KWH)
@@ -905,20 +907,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         entity_id: str | None = None,
         now: datetime,
     ) -> dict[str, float]:
-        """Maintain a 168-slot (7 Ã— 24) EMA table of hourly energy consumption.
+        """Maintain a 168-slot (7 Ã— 24) table of hourly energy consumption.
 
         Each slot key is str(weekday * 24 + hour). Complete recorder history
-        hours are preferred because they line up with real hour boundaries.
-        Values are applied with alpha=0.35:
-            new = old + (delta - old) * 0.35
-        Values are capped at 10 kWh/h before the update to guard against sensor
-        spikes or meter rollovers. If recorder history is not available yet we
-        fall back to the previous incremental update path.
+        hours are preferred because they line up with real hour boundaries. A
+        recorder-derived slot replaces the previous slot value instead of being
+        EMA-applied on every refresh; otherwise the same history sample would be
+        counted over and over. If recorder history is not available yet we fall
+        back to the previous incremental EMA update path.
         """
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
             self.config_entry.entry_id, {}
         )
         table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
+        observed_slots = {
+            str(slot)
+            for slot in (
+                runtime_state.get("hourly_demand_observed_slots")
+                or table.keys()
+            )
+        }
         last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
         last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
         last_ts_raw = runtime_state.get("hourly_demand_last_ts")
@@ -946,11 +954,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 historical_hourly = _robust_hourly_demand(values)
                 if historical_hourly is None:
                     continue
-                existing = _coerce_float(table.get(slot))
-                if existing is None:
-                    table[slot] = round(historical_hourly, 4)
-                else:
-                    table[slot] = round(existing + (historical_hourly - existing) * _DEMAND_PROFILE_ALPHA, 4)
+                table[slot] = round(historical_hourly, 4)
+                observed_slots.add(slot)
                 updated_from_history = True
 
         if last_value is None or last_hour_key is None:
@@ -976,6 +981,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     table[slot] = round(hourly_delta, 4)
                 else:
                     table[slot] = round(existing + (hourly_delta - existing) * 0.2, 4)
+                observed_slots.add(slot)
             runtime_state["hourly_demand_last_value"] = round(current_value, 3)
             runtime_state["hourly_demand_last_hour_key"] = current_hour_key
             runtime_state["hourly_demand_last_ts"] = now.isoformat()
@@ -989,7 +995,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             changed = True
 
         if changed:
+            table = populate_hourly_demand_table(table, observed_slots=observed_slots)
             runtime_state["hourly_demand_table"] = table
+            runtime_state["hourly_demand_observed_slots"] = sorted(observed_slots)
             await self._async_persist_runtime_state(runtime_state)
 
         return table
@@ -1014,6 +1022,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
             "hourly_demand_table": runtime_state.get("hourly_demand_table", {}),
+            "hourly_demand_observed_slots": runtime_state.get("hourly_demand_observed_slots", []),
             "hourly_demand_adjustment_factor": runtime_state.get("hourly_demand_adjustment_factor", 1.0),
             "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
             "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
@@ -1312,6 +1321,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 cheapest=True,
                 whole_hour_start=whole_hour_start,
             )
+            tomorrow_cheapest_price_window = select_contiguous_price_window(
+                all_windows,
+                now=now,
+                duration_hours=duration_hours,
+                cheapest=True,
+                whole_hour_start=whole_hour_start,
+                day_offset=1,
+            )
             most_expensive_price_window = select_contiguous_price_window(
                 all_windows,
                 now=now,
@@ -1354,6 +1371,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             result.selected_price_window = selected_price_window
             result.price_window_type = price_window_type
             result.cheapest_price_window = cheapest_price_window
+            result.tomorrow_cheapest_price_window = tomorrow_cheapest_price_window
             result.most_expensive_price_window = most_expensive_price_window
             result.rationale = (
                 f"selected {duration_hours:g} contiguous hour price windows between "
@@ -2027,6 +2045,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_price_window=None,
             price_window_type=None,
             cheapest_price_window=None,
+            tomorrow_cheapest_price_window=None,
             most_expensive_price_window=None,
             battery_min_profit_per_kwh=battery_min_profit,
             price_resolution=price_resolution,

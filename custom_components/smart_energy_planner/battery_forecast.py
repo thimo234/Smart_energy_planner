@@ -10,6 +10,7 @@ from .battery_models import SolarWindow
 
 
 DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN = 0.20
+HOURS_PER_WEEK = 7 * 24
 
 
 def build_hourly_home_demand_forecast(
@@ -23,7 +24,7 @@ def build_hourly_home_demand_forecast(
     """Build an hourly demand forecast from the 168-slot demand profile."""
 
     base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
-    fallback_hourly = max(0.4, base_hourly)
+    fallback_hourly = base_hourly
     table = hourly_demand_table or {}
     adjustment_factor = min(1.35, max(0.75, demand_adjustment_factor))
 
@@ -42,18 +43,33 @@ def build_hourly_home_demand_forecast(
     forecast: list[dict[str, str | float]] = []
     for day_offset in range(day_count):
         day_start = today_start + timedelta(days=day_offset)
+        raw_non_heating_by_hour: list[float] = []
         for hour in range(24):
             slot_start = day_start + timedelta(hours=hour)
             slot_key = str(slot_start.weekday() * 24 + hour)
-            historical_hourly = _hourly_demand_value(
-                table=table,
-                slot_key=slot_key,
-                weekday=slot_start.weekday(),
-                hour=hour,
-                fallback_hourly=fallback_hourly,
+            raw_non_heating_by_hour.append(
+                _hourly_demand_value(
+                    table=table,
+                    slot_key=slot_key,
+                    weekday=slot_start.weekday(),
+                    hour=hour,
+                    fallback_hourly=fallback_hourly,
+                )
             )
+
+        day_adjustment_factor = adjustment_factor if day_offset == 0 else 1.0
+        target_non_heating_kwh = max(0.0, non_heating_daily_average_kwh * day_adjustment_factor)
+        raw_non_heating_total = sum(raw_non_heating_by_hour)
+        if target_non_heating_kwh > 0 and raw_non_heating_total > 0:
+            non_heating_scale = target_non_heating_kwh / raw_non_heating_total
+        else:
+            non_heating_scale = 1.0
+
+        for hour, raw_non_heating_hourly in enumerate(raw_non_heating_by_hour):
+            slot_start = day_start + timedelta(hours=hour)
             heating_hourly = heating_estimate_kwh * (heating_profile[hour] / profile_sum)
-            total_hourly = round(max(0.0, historical_hourly * adjustment_factor) + heating_hourly, 3)
+            non_heating_hourly = max(0.0, raw_non_heating_hourly * non_heating_scale)
+            total_hourly = round(non_heating_hourly + heating_hourly, 3)
             forecast.append(
                 {
                     "start": slot_start.isoformat(),
@@ -106,6 +122,86 @@ def _same_hour_values(
         for weekday in weekdays
         if (value := _coerce_float(table.get(str(weekday * 24 + hour)))) is not None
     ]
+
+
+def populate_hourly_demand_table(
+    table: dict[str, float],
+    *,
+    observed_slots: Iterable[str] | None = None,
+) -> dict[str, float]:
+    """Return a full 168-slot demand table using observed slots as source data."""
+
+    observed_keys = set(observed_slots or table.keys())
+    observed_table = {
+        slot: value
+        for slot in observed_keys
+        if (value := _coerce_float(table.get(slot))) is not None and value >= 0
+    }
+    if not observed_table:
+        return {
+            slot: value
+            for slot, raw_value in table.items()
+            if (value := _coerce_float(raw_value)) is not None and value >= 0
+        }
+
+    source_table = _stabilize_sparse_observed_table(observed_table)
+    fallback_hourly = _median(list(source_table.values()))
+    populated = dict(source_table)
+    for slot_index in range(HOURS_PER_WEEK):
+        slot_key = str(slot_index)
+        if slot_key in populated:
+            continue
+        weekday = slot_index // 24
+        hour = slot_index % 24
+        populated[slot_key] = round(
+            _hourly_demand_value(
+                table=source_table,
+                slot_key=slot_key,
+                weekday=weekday,
+                hour=hour,
+                fallback_hourly=fallback_hourly,
+            ),
+            4,
+        )
+
+    return populated
+
+
+def _stabilize_sparse_observed_table(table: dict[str, float]) -> dict[str, float]:
+    stabilized = dict(table)
+    for slot_key, value in table.items():
+        try:
+            slot_index = int(slot_key)
+        except ValueError:
+            continue
+        if not 0 <= slot_index < HOURS_PER_WEEK:
+            continue
+
+        weekday = slot_index // 24
+        hour = slot_index % 24
+        similar_weekdays = [5, 6] if weekday >= 5 else [0, 1, 2, 3, 4]
+        peer_values = [
+            peer_value
+            for peer_weekday in similar_weekdays
+            if (peer_key := str(peer_weekday * 24 + hour)) != slot_key
+            and (peer_value := _coerce_float(table.get(peer_key))) is not None
+        ]
+        if not peer_values:
+            peer_values = [
+                peer_value
+                for peer_weekday in range(7)
+                if (peer_key := str(peer_weekday * 24 + hour)) != slot_key
+                and (peer_value := _coerce_float(table.get(peer_key))) is not None
+            ]
+        if not peer_values:
+            continue
+
+        peer_median = _median(peer_values)
+        sparse_high_threshold = max(1.5, peer_median * 2.75)
+        if value > sparse_high_threshold:
+            stabilized[slot_key] = round(peer_median, 4)
+
+    return stabilized
 
 
 def _median(values: list[float]) -> float:

@@ -197,14 +197,15 @@ def select_contiguous_price_window(
     duration_hours: float,
     cheapest: bool,
     whole_hour_start: bool,
+    day_offset: int = 0,
 ) -> dict[str, str | float] | None:
-    """Select the cheapest or most expensive contiguous window in today's day."""
+    """Select the cheapest or most expensive contiguous window for a local day."""
 
     duration = timedelta(hours=max(duration_hours, 0.0))
     if duration <= timedelta(0):
         return None
 
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=day_offset)
     day_end = day_start + timedelta(days=1)
     clipped_windows = _clip_windows_to_range(windows, day_start, day_end)
     if not clipped_windows:
