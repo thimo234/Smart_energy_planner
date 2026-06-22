@@ -143,6 +143,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def hvac_modes(self) -> list[HVACMode]:
+        if self._cooling_mode_active:
+            return [HVACMode.OFF, HVACMode.COOL]
         modes = [HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO]
         if self._cooling_mode_switch_entity:
             modes.append(HVACMode.COOL)
@@ -193,6 +195,8 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
         """Keep a simple heat-only thermostat interface."""
         if hvac_mode not in (HVACMode.HEAT, HVACMode.OFF, HVACMode.COOL, HVACMode.AUTO):
+            return
+        if self._cooling_mode_active and hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self._entry.entry_id, {})
         if hvac_mode == HVACMode.COOL:
@@ -257,7 +261,7 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     async def async_turn_on(self) -> None:
         """Turn the planner thermostat on."""
-        await self.async_set_hvac_mode(HVACMode.HEAT)
+        await self.async_set_hvac_mode(HVACMode.COOL if self._cooling_mode_active else HVACMode.HEAT)
 
     async def async_turn_off(self) -> None:
         """Turn the planner thermostat off."""
