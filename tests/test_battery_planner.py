@@ -1,5 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
+import sys
+import types
 
 from test_support import install_package_stub
 
@@ -12,6 +14,69 @@ from custom_components.smart_energy_planner.battery_planner import (
     normalize_full_battery_charge_mode,
     normalize_full_battery_mode_windows,
 )
+
+
+def _install_homeassistant_stubs() -> None:
+    homeassistant = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
+
+    components = sys.modules.setdefault("homeassistant.components", types.ModuleType("homeassistant.components"))
+    recorder = sys.modules.setdefault("homeassistant.components.recorder", types.ModuleType("homeassistant.components.recorder"))
+    recorder.get_instance = lambda *args, **kwargs: None
+    recorder.history = types.SimpleNamespace()
+    components.recorder = recorder
+
+    config_entries = sys.modules.setdefault(
+        "homeassistant.config_entries",
+        types.ModuleType("homeassistant.config_entries"),
+    )
+    config_entries.ConfigEntry = object
+
+    const = sys.modules.setdefault("homeassistant.const", types.ModuleType("homeassistant.const"))
+    const.STATE_OFF = "off"
+    const.STATE_ON = "on"
+    const.STATE_UNAVAILABLE = "unavailable"
+    const.STATE_UNKNOWN = "unknown"
+
+    core = sys.modules.setdefault("homeassistant.core", types.ModuleType("homeassistant.core"))
+    core.HomeAssistant = object
+    core.callback = lambda func: func
+
+    helpers = sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
+    event = sys.modules.setdefault("homeassistant.helpers.event", types.ModuleType("homeassistant.helpers.event"))
+    event.async_track_time_interval = lambda *args, **kwargs: None
+    storage = sys.modules.setdefault("homeassistant.helpers.storage", types.ModuleType("homeassistant.helpers.storage"))
+    storage.Store = object
+    update_coordinator = sys.modules.setdefault(
+        "homeassistant.helpers.update_coordinator",
+        types.ModuleType("homeassistant.helpers.update_coordinator"),
+    )
+
+    class DataUpdateCoordinator:
+        @classmethod
+        def __class_getitem__(cls, item):
+            return cls
+
+    update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
+    helpers.event = event
+    helpers.storage = storage
+    helpers.update_coordinator = update_coordinator
+
+    util = sys.modules.setdefault("homeassistant.util", types.ModuleType("homeassistant.util"))
+    dt = sys.modules.setdefault("homeassistant.util.dt", types.ModuleType("homeassistant.util.dt"))
+    dt.now = datetime.now
+    dt.as_local = lambda value: value
+    dt.parse_datetime = datetime.fromisoformat
+    util.dt = dt
+    homeassistant.components = components
+    homeassistant.config_entries = config_entries
+    homeassistant.const = const
+    homeassistant.core = core
+    homeassistant.helpers = helpers
+    homeassistant.util = util
+
+
+_install_homeassistant_stubs()
+from custom_components.smart_energy_planner.coordinator import SmartEnergyPlannerCoordinator
 
 
 class BatteryPlannerTest(unittest.TestCase):
@@ -93,4 +158,67 @@ class BatteryPlannerTest(unittest.TestCase):
 
         self.assertEqual(len(collapsed), 2)
         self.assertEqual(collapsed[0]["mode"], BATTERY_MODE_OFF)
+
+    def test_solar_charge_plan_does_not_extend_into_evening_peak(self):
+        now = datetime(2026, 6, 22, 7, 45)
+        slots = []
+        for hour in range(8, 24):
+            start = now.replace(hour=hour, minute=0)
+            price = 0.12 if hour in (11, 12) else (0.46 if hour >= 20 else 0.30)
+            net_solar_kwh = 1.0 if 11 <= hour < 18 else (-0.8 if hour >= 20 else -0.2)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": price,
+                    "export_price": price,
+                    "hours": 1.0,
+                    "net_solar_kwh": net_solar_kwh,
+                    "demand_kwh": max(0.0, -net_solar_kwh),
+                    "solar_kwh": max(0.0, net_solar_kwh),
+                }
+            )
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._discharge_session_started = False
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=2.0,
+            max_charge_kw=1.0,
+            battery_min_profit=0.08,
+        )
+
+        self.assertEqual(grid_windows, [])
+        self.assertEqual(len(solar_windows), 1)
+        self.assertEqual(solar_windows[0]["start"], now.replace(hour=11, minute=0).isoformat())
+        self.assertEqual(solar_windows[0]["end"], now.replace(hour=13, minute=0).isoformat())
+
+        coordinator._active_charge_phase_mode = "accu_uit"
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=6.0,
+            usable_capacity_kwh=8.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, "accu_uit")
+        self.assertTrue(
+            any(
+                window["mode"] == "ontladen"
+                and window["start"] == now.replace(hour=20, minute=0).isoformat()
+                for window in mode_windows
+            )
+        )
 
