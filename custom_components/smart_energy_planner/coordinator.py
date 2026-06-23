@@ -149,6 +149,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
         self._source_error_retry_unsub: object | None = None
         self._discharge_session_started: bool = False
+        self._discharge_session_block_until: datetime | None = None
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -2307,12 +2308,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_soc_fraction = (
             current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
         )
+        discharge_block_until = getattr(self, "_discharge_session_block_until", None)
+        if discharge_block_until is not None and discharge_block_until <= now:
+            self._discharge_session_started = False
+            self._discharge_session_block_until = None
         if self._active_charge_phase_end is not None and self._active_charge_phase_end > now:
             # Charge phase is actively running â€” not a discharge cycle.
             self._discharge_session_started = False
+            self._discharge_session_block_until = None
         elif usable_soc_fraction < 0.15:
             # Safety valve: battery nearly empty â€” allow grid charging regardless.
             self._discharge_session_started = False
+            self._discharge_session_block_until = None
         # Between 15 % and 70 %: flag coasts - maintains state from previous tick.
 
         if self._discharge_session_started or usable_soc_fraction >= 0.70:
@@ -2725,14 +2732,36 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             {"start": start, "mode": "laden_met_zonne_energie", "price_key": "export_price", **window}
             for start, window in solar_charge_starts.items()
         ]
+        cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         discharge_session_started = self._discharge_session_started
         if discharge_session_started:
-            self._active_charge_phase_end = None
-            self._active_charge_phase_mode = "accu_uit"
-            charge_starts = {}
-            charge_windows = []
-            solar_charge_starts = {}
-            grid_charge_starts = {}
+            discharge_block_until = getattr(self, "_discharge_session_block_until", None) or cycle_end
+            if discharge_block_until <= now:
+                discharge_session_started = False
+                self._discharge_session_started = False
+                self._discharge_session_block_until = None
+            else:
+                self._active_charge_phase_end = None
+                self._active_charge_phase_mode = "accu_uit"
+                charge_windows = [
+                    window
+                    for window in charge_windows
+                    if cast(datetime, window["start"]) >= discharge_block_until
+                ]
+                solar_charge_starts = {
+                    start: window
+                    for start, window in solar_charge_starts.items()
+                    if start >= discharge_block_until
+                }
+                grid_charge_starts = {
+                    start: window
+                    for start, window in grid_charge_starts.items()
+                    if start >= discharge_block_until
+                }
+                charge_starts = {
+                    **solar_charge_starts,
+                    **grid_charge_starts,
+                }
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
@@ -2748,7 +2777,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
-        cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
         last_charge_mode = "accu_uit"
@@ -2999,6 +3027,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if discharge_session_started:
             self._discharge_session_started = True
+            self._discharge_session_block_until = getattr(
+                self,
+                "_discharge_session_block_until",
+                None,
+            ) or cycle_end
 
         self._update_active_charge_phase_state(
             now=now,
