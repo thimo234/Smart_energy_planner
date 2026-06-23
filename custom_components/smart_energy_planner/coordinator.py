@@ -2297,10 +2297,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
-        # Discharge cycle tracking: once the battery is well-charged (SOC >= 70%)
-        # the daily charge cycle is considered complete and the discharge cycle begins.
-        # During a discharge cycle, suppress current-cycle grid charging to prevent
-        # brief laden_van_net windows from interrupting an active discharge session.
+        # Discharge cycle tracking: once actual discharge has started, suppress
+        # current-cycle grid charging to prevent brief laden_van_net windows from
+        # interrupting the active discharge session.  A well-charged battery also
+        # suppresses extra current-cycle grid charging, but it does not start the
+        # irreversible discharge session by itself.
         # The cycle resets when an active charge phase resumes or the battery is
         # critically low (safety valve for winter / no-solar scenarios).
         usable_soc_fraction = (
@@ -2312,12 +2313,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         elif usable_soc_fraction < 0.15:
             # Safety valve: battery nearly empty â€” allow grid charging regardless.
             self._discharge_session_started = False
-        elif usable_soc_fraction >= 0.70:
-            # Charge cycle complete; discharge cycle begins (or continues).
-            self._discharge_session_started = True
-        # Between 15 % and 70 %: flag coasts â€” maintains state from previous tick.
+        # Between 15 % and 70 %: flag coasts - maintains state from previous tick.
 
-        if self._discharge_session_started:
+        if self._discharge_session_started or usable_soc_fraction >= 0.70:
             current_grid_limit_kwh = 0.0
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
@@ -2727,6 +2725,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             {"start": start, "mode": "laden_met_zonne_energie", "price_key": "export_price", **window}
             for start, window in solar_charge_starts.items()
         ]
+        discharge_session_started = self._discharge_session_started
+        if discharge_session_started:
+            self._active_charge_phase_end = None
+            self._active_charge_phase_mode = "accu_uit"
+            charge_starts = {}
+            charge_windows = []
+            solar_charge_starts = {}
+            grid_charge_starts = {}
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
@@ -2976,6 +2982,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
+                    if mode in ("ontladen", "ontladen_naar_net"):
+                        discharge_session_started = True
 
                 hourly_modes.append(
                     {
@@ -2988,6 +2996,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
 
             slot_index = segment_end_index
+
+        if discharge_session_started:
+            self._discharge_session_started = True
 
         self._update_active_charge_phase_state(
             now=now,

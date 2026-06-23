@@ -222,3 +222,53 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         )
 
+    def test_active_discharge_session_blocks_later_charge_windows(self):
+        now = datetime(2026, 6, 22, 17, 45)
+        slots = []
+        for hour in range(17, 21):
+            start = now.replace(hour=hour, minute=0)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.20 if hour == 18 else 0.45,
+                    "export_price": 0.20 if hour == 18 else 0.45,
+                    "hours": 1.0,
+                    "net_solar_kwh": -1.0,
+                    "demand_kwh": 1.0,
+                    "solar_kwh": 0.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = now + timedelta(hours=2)
+        coordinator._active_charge_phase_mode = "laden_van_net"
+        coordinator._discharge_session_started = True
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[],
+            planned_grid_charge_windows=[
+                {
+                    "start": now.replace(hour=18, minute=0).isoformat(),
+                    "end": now.replace(hour=19, minute=0).isoformat(),
+                    "price": 0.20,
+                    "usable_hours": 1.0,
+                }
+            ],
+            initial_usable_energy_kwh=4.0,
+            usable_capacity_kwh=8.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=2.0,
+            max_discharge_kw=2.0,
+        )
+
+        self.assertEqual(current_mode, "ontladen")
+        self.assertTrue(coordinator._discharge_session_started)
+        self.assertIsNone(coordinator._active_charge_phase_end)
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
+
