@@ -128,6 +128,7 @@ _DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
 _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
 _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT = 30.0
 _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT = 90.0
+_MIN_CHARGE_WINDOW_GAP = timedelta(hours=3)
 
 
 class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
@@ -2575,7 +2576,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         charge_windows: list[dict[str, float | datetime]],
         now: datetime,
     ) -> tuple[list[dict[str, datetime]], str]:
-        cluster_gap = timedelta(minutes=90)
+        cluster_gap = _MIN_CHARGE_WINDOW_GAP
         normalized_windows = sorted(
             [
                 {
@@ -2611,7 +2612,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         clusters: list[dict[str, datetime]] = []
         for window in normalized_windows:
-            if not clusters or window["start"] > clusters[-1]["end"] + cluster_gap:
+            if not clusters or window["start"] >= clusters[-1]["end"] + cluster_gap:
                 clusters.append(dict(window))
                 continue
             clusters[-1]["end"] = max(clusters[-1]["end"], window["end"])
@@ -2725,9 +2726,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if recharge_allowed:
                 discharge_session_started = False
                 self._discharge_session_started = False
-            elif battery_soc_percent is not None:
-                self._active_charge_phase_end = None
-                self._active_charge_phase_mode = "accu_uit"
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
@@ -2748,12 +2746,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         last_charge_mode = "accu_uit"
         simulated_discharge_session_started = discharge_session_started
 
-        def _charge_allowed_now() -> bool:
-            return (
-                not simulated_discharge_session_started
-                or sim_usable_energy_kwh <= 0.01
-            )
-
         slot_index = 0
         while slot_index < len(slots):
             slot = slots[slot_index]
@@ -2772,7 +2764,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if (
                 overlapping_charge_window is not None
                 and slot_start not in charge_starts
-                and _charge_allowed_now()
             ):
                 charge_mode = str(overlapping_charge_window["mode"])
                 current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
@@ -2800,8 +2791,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
             ):
                 if slot_start not in charge_lookup:
-                    continue
-                if not _charge_allowed_now():
                     continue
                 current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
                     hourly_modes=hourly_modes,
