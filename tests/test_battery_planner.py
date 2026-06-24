@@ -217,7 +217,8 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(
             any(
                 window["mode"] == "ontladen"
-                and window["start"] == now.replace(hour=20, minute=0).isoformat()
+                and window["start"] <= now.replace(hour=20, minute=0).isoformat()
+                and window["end"] >= now.replace(hour=21, minute=0).isoformat()
                 for window in mode_windows
             )
         )
@@ -260,6 +261,7 @@ class BatteryPlannerTest(unittest.TestCase):
             ],
             initial_usable_energy_kwh=4.0,
             usable_capacity_kwh=8.0,
+            battery_soc_percent=50.0,
             average_price=0.30,
             average_export_price=0.30,
             max_charge_kw=2.0,
@@ -272,7 +274,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
         self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
 
-    def test_active_discharge_session_keeps_next_day_charge_windows(self):
+    def test_active_discharge_session_allows_charge_when_soc_is_below_threshold(self):
         now = datetime(2026, 6, 22, 22, 30)
         cycle_end = datetime(2026, 6, 23, 0, 0)
         slots = []
@@ -309,7 +311,6 @@ class BatteryPlannerTest(unittest.TestCase):
         coordinator._active_charge_phase_end = now + timedelta(minutes=30)
         coordinator._active_charge_phase_mode = "laden_van_net"
         coordinator._discharge_session_started = True
-        coordinator._discharge_session_block_until = cycle_end
 
         mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
             coordinator,
@@ -326,15 +327,125 @@ class BatteryPlannerTest(unittest.TestCase):
             ],
             initial_usable_energy_kwh=4.0,
             usable_capacity_kwh=8.0,
+            battery_soc_percent=29.0,
             average_price=0.30,
             average_export_price=0.30,
             max_charge_kw=2.0,
             max_discharge_kw=2.0,
         )
 
-        self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
+        self.assertEqual(current_mode, "laden_van_net")
+        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+
+    def test_discharge_session_allows_charge_after_soc_dropped_below_threshold(self):
+        now = datetime(2026, 6, 24, 5, 30)
+        cycle_end = datetime(2026, 6, 25, 0, 0)
+        slots = []
+        for hour in range(5, 22):
+            start = now.replace(hour=hour, minute=0)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.20 if 11 <= hour < 14 else (0.80 if hour >= 20 else 0.35),
+                    "export_price": 0.20 if 11 <= hour < 14 else (0.80 if hour >= 20 else 0.35),
+                    "hours": 1.0,
+                    "net_solar_kwh": 1.0 if 11 <= hour < 14 else (-0.3 if hour >= 20 else 0.0),
+                    "demand_kwh": 0.0 if hour < 20 else 0.3,
+                    "solar_kwh": 1.0 if 11 <= hour < 14 else 0.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = True
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": now.replace(hour=11, minute=0).isoformat(),
+                    "end": now.replace(hour=14, minute=0).isoformat(),
+                    "price": 0.20,
+                    "usable_hours": 3.0,
+                }
+            ],
+            planned_grid_charge_windows=[
+                {
+                    "start": now.replace(hour=10, minute=0).isoformat(),
+                    "end": now.replace(hour=11, minute=0).isoformat(),
+                    "price": 0.20,
+                    "usable_hours": 1.0,
+                }
+            ],
+            initial_usable_energy_kwh=1.7,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=29.0,
+            average_price=0.40,
+            average_export_price=0.40,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, "accu_uit")
         self.assertIn(
-            ("laden_van_net", cycle_end.isoformat()),
+            ("laden_met_zonne_energie", now.replace(hour=11, minute=0).isoformat()),
             {(window["mode"], window["start"]) for window in mode_windows},
         )
+        self.assertIn(
+            ("laden_van_net", now.replace(hour=10, minute=0).isoformat()),
+            {(window["mode"], window["start"]) for window in mode_windows},
+        )
+
+    def test_discharge_session_blocks_charge_until_soc_drops_below_threshold(self):
+        now = datetime(2026, 6, 24, 20, 0)
+        cycle_end = datetime(2026, 6, 25, 0, 0)
+        slots = []
+        for hour in range(20, 24):
+            start = now.replace(hour=hour, minute=0)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.20 if hour == 22 else 0.80,
+                    "export_price": 0.20 if hour == 22 else 0.80,
+                    "hours": 1.0,
+                    "net_solar_kwh": -0.3,
+                    "demand_kwh": 0.3,
+                    "solar_kwh": 0.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = True
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[],
+            planned_grid_charge_windows=[
+                {
+                    "start": now.replace(hour=22, minute=0).isoformat(),
+                    "end": now.replace(hour=23, minute=0).isoformat(),
+                    "price": 0.20,
+                    "usable_hours": 1.0,
+                }
+            ],
+            initial_usable_energy_kwh=3.7,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=37.0,
+            average_price=0.40,
+            average_export_price=0.40,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
 

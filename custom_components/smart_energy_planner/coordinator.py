@@ -126,6 +126,8 @@ _DEMAND_PROFILE_ALPHA = 0.35
 _DEMAND_PROFILE_MAX_KWH_PER_HOUR = 10.0
 _DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
 _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
+_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT = 30.0
+_BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT = 90.0
 
 
 class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
@@ -149,7 +151,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
         self._source_error_retry_unsub: object | None = None
         self._discharge_session_started: bool = False
-        self._discharge_session_block_until: datetime | None = None
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -1771,6 +1772,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
+            battery_soc_percent=battery_soc_percent,
             average_price=average_price,
             average_export_price=export_price_average if export_price_average is not None else average_price,
             max_charge_kw=max_charge,
@@ -2298,31 +2300,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
-        # Discharge cycle tracking: once actual discharge has started, suppress
-        # current-cycle grid charging to prevent brief laden_van_net windows from
-        # interrupting the active discharge session.  A well-charged battery also
-        # suppresses extra current-cycle grid charging, but it does not start the
-        # irreversible discharge session by itself.
-        # The cycle resets when an active charge phase resumes or the battery is
-        # critically low (safety valve for winter / no-solar scenarios).
         usable_soc_fraction = (
             current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
         )
-        discharge_block_until = getattr(self, "_discharge_session_block_until", None)
-        if discharge_block_until is not None and discharge_block_until <= now:
-            self._discharge_session_started = False
-            self._discharge_session_block_until = None
-        if self._active_charge_phase_end is not None and self._active_charge_phase_end > now:
-            # Charge phase is actively running â€” not a discharge cycle.
-            self._discharge_session_started = False
-            self._discharge_session_block_until = None
-        elif usable_soc_fraction < 0.15:
-            # Safety valve: battery nearly empty â€” allow grid charging regardless.
-            self._discharge_session_started = False
-            self._discharge_session_block_until = None
-        # Between 15 % and 70 %: flag coasts - maintains state from previous tick.
 
-        if self._discharge_session_started or usable_soc_fraction >= 0.70:
+        if usable_soc_fraction >= 0.70:
             current_grid_limit_kwh = 0.0
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
@@ -2711,6 +2693,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         average_export_price: float,
         max_charge_kw: float,
         max_discharge_kw: float,
+        battery_soc_percent: float | None = None,
     ) -> tuple[list[dict[str, str | float]], str]:
         solar_charge_starts = build_charge_window_lookup(
             planned_solar_charge_windows,
@@ -2735,29 +2718,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         discharge_session_started = self._discharge_session_started
         if discharge_session_started:
-            discharge_block_until = getattr(self, "_discharge_session_block_until", None) or cycle_end
-            if discharge_block_until <= now:
+            recharge_allowed = (
+                battery_soc_percent is not None
+                and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
+            )
+            if recharge_allowed:
                 discharge_session_started = False
                 self._discharge_session_started = False
-                self._discharge_session_block_until = None
-            else:
+            elif battery_soc_percent is not None:
                 self._active_charge_phase_end = None
                 self._active_charge_phase_mode = "accu_uit"
-                charge_windows = [
-                    window
-                    for window in charge_windows
-                    if cast(datetime, window["start"]) >= discharge_block_until
-                ]
-                solar_charge_starts = {
-                    start: window
-                    for start, window in solar_charge_starts.items()
-                    if start >= discharge_block_until
-                }
-                grid_charge_starts = {
-                    start: window
-                    for start, window in grid_charge_starts.items()
-                    if start >= discharge_block_until
-                }
+                charge_windows = []
+                grid_charge_starts = {}
+                solar_charge_starts = {}
                 charge_starts = {
                     **solar_charge_starts,
                     **grid_charge_starts,
@@ -2780,6 +2753,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
         last_charge_mode = "accu_uit"
+        simulated_discharge_session_started = discharge_session_started
 
         slot_index = 0
         while slot_index < len(slots):
@@ -2925,7 +2899,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     _export_allowed_from is not None
                     and segment_slot_start >= _export_allowed_from
                 )
-                segment_export_kwh = float(forced_export_kwh.get(segment_slot_start, 0.0))
+                segment_export_kwh = (
+                    float(forced_export_kwh.get(segment_slot_start, 0.0))
+                    if not before_first_charge_phase
+                    else 0.0
+                )
                 within_charge_phase = (
                     any(
                         segment_slot_end > cluster["start"] and segment_slot_start < cluster["end"]
@@ -2958,6 +2936,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and (hold_charge_mode or within_charge_phase)
                     and more_todays_charge_ahead
                 )
+                simulated_soc_percent = (
+                    (sim_usable_energy_kwh / usable_capacity_kwh) * 100.0
+                    if usable_capacity_kwh > 0
+                    else 0.0
+                )
+                discharge_allowed_by_soc = (
+                    simulated_discharge_session_started
+                    or simulated_soc_percent >= _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT
+                )
 
                 # Discharge takes priority over charging, except between charge
                 # windows within today's cycle (suppress_discharge).
@@ -2965,6 +2952,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if (
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
+                    and discharge_allowed_by_soc
                     and not suppress_discharge
                     and not within_charge_phase
                 ):
@@ -2979,6 +2967,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     else:
                         mode = "ontladen"
                         sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_discharge_kwh)
+                    simulated_discharge_session_started = True
                 elif within_charge_phase:
                     # A charge window always beats a plain export slot.  Export
                     # that is a forced part of a segment is handled separately
@@ -3027,11 +3016,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if discharge_session_started:
             self._discharge_session_started = True
-            self._discharge_session_block_until = getattr(
-                self,
-                "_discharge_session_block_until",
-                None,
-            ) or cycle_end
 
         self._update_active_charge_phase_state(
             now=now,
