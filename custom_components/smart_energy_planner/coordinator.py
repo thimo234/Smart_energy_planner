@@ -2728,13 +2728,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             elif battery_soc_percent is not None:
                 self._active_charge_phase_end = None
                 self._active_charge_phase_mode = "accu_uit"
-                charge_windows = []
-                grid_charge_starts = {}
-                solar_charge_starts = {}
-                charge_starts = {
-                    **solar_charge_starts,
-                    **grid_charge_starts,
-                }
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
@@ -2755,6 +2748,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         last_charge_mode = "accu_uit"
         simulated_discharge_session_started = discharge_session_started
 
+        def _charge_allowed_now() -> bool:
+            return (
+                not simulated_discharge_session_started
+                or sim_usable_energy_kwh <= 0.01
+            )
+
         slot_index = 0
         while slot_index < len(slots):
             slot = slots[slot_index]
@@ -2770,7 +2769,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ),
                 None,
             )
-            if overlapping_charge_window is not None and slot_start not in charge_starts:
+            if (
+                overlapping_charge_window is not None
+                and slot_start not in charge_starts
+                and _charge_allowed_now()
+            ):
                 charge_mode = str(overlapping_charge_window["mode"])
                 current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
                     hourly_modes=hourly_modes,
@@ -2797,6 +2800,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 (solar_charge_starts, "laden_met_zonne_energie", "export_price"),
             ):
                 if slot_start not in charge_lookup:
+                    continue
+                if not _charge_allowed_now():
                     continue
                 current_mode, sim_usable_energy_kwh, charge_end = self._append_charge_window_mode(
                     hourly_modes=hourly_modes,
