@@ -2899,9 +2899,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     _export_allowed_from is not None
                     and segment_slot_start >= _export_allowed_from
                 )
+                drain_before_charge_phase = (
+                    before_first_charge_phase
+                    and first_charge_phase_start is not None
+                    and sim_usable_energy_kwh > 0
+                )
                 segment_export_kwh = (
                     float(forced_export_kwh.get(segment_slot_start, 0.0))
-                    if not before_first_charge_phase
+                    if (not before_first_charge_phase or drain_before_charge_phase)
                     else 0.0
                 )
                 within_charge_phase = (
@@ -2942,7 +2947,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     else 0.0
                 )
                 discharge_allowed_by_soc = (
-                    simulated_discharge_session_started
+                    drain_before_charge_phase
+                    or simulated_discharge_session_started
                     or simulated_soc_percent >= _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT
                 )
 
