@@ -584,6 +584,7 @@ class BatteryPlannerTest(unittest.TestCase):
 
         today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
+        self.assertTrue(any(datetime.fromisoformat(window["start"]) >= today_end for window in solar_windows))
 
         mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
             coordinator,

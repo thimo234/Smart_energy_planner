@@ -2270,11 +2270,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if usable_capacity_kwh > 0
             else 0.0
         )
+        discharge_latch_active = False
         if (
             self._discharge_session_started
             and current_usable_soc_percent > _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
         ):
-            return planned_solar_charge_windows, planned_grid_charge_windows
+            discharge_latch_active = True
+            recharge_time = self._estimate_forced_battery_depletion_time(
+                now=now,
+                initial_usable_energy_kwh=current_usable_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
+            if recharge_time is None:
+                return planned_solar_charge_windows, planned_grid_charge_windows
+            future_slots = [slot for slot in future_slots if slot["start"] >= recharge_time]
+            if not future_slots:
+                return planned_solar_charge_windows, planned_grid_charge_windows
+            current_usable_kwh = 0.0
+            current_remaining_capacity_kwh = usable_capacity_kwh
 
         # Inflate the planning target by the safety margin so the selection loop
         # picks more and earlier solar slots as a buffer against solar underperformance.
@@ -2560,6 +2573,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     "usable_hours": round(slot_charge_kwh / max_charge_kw, 3),
                 }
             )
+
+        if discharge_latch_active:
+            planned_grid_charge_windows = [
+                window
+                for window in planned_grid_charge_windows
+                if datetime.fromisoformat(str(window["start"])) >= cycle_end
+            ]
 
         return (
             merge_planned_windows(planned_solar_charge_windows),
