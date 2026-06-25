@@ -261,7 +261,7 @@ class BatteryPlannerTest(unittest.TestCase):
 
         self.assertTrue(grid_windows)
 
-    def test_full_battery_safety_margin_does_not_create_current_charge_window(self):
+    def test_full_battery_safety_margin_does_not_create_charge_window(self):
         now = datetime(2026, 6, 25, 15, 45)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -312,9 +312,34 @@ class BatteryPlannerTest(unittest.TestCase):
             charge_safety_margin=0.5,
         )
 
-        today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in solar_windows))
-        self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
+        self.assertEqual(solar_windows, [])
+        self.assertEqual(grid_windows, [])
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": now.replace(hour=16, minute=30).isoformat(),
+                    "end": now.replace(hour=19, minute=45).isoformat(),
+                    "price": 0.30,
+                    "usable_hours": 3.25,
+                },
+                *solar_windows,
+            ],
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=8.0,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=100.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
+        self.assertNotEqual(current_mode, "laden_met_zonne_energie")
 
     def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)

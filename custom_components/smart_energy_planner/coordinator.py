@@ -2259,6 +2259,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        if current_remaining_capacity_kwh <= 0.05:
+            return planned_solar_charge_windows, planned_grid_charge_windows
+
         current_usable_soc_percent = (
             (current_usable_kwh / usable_capacity_kwh) * 100.0
             if usable_capacity_kwh > 0
@@ -2275,12 +2278,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
         # and stops; when solar falls short the extra selected slots cover the gap.
         planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
-        current_cycle_target_capacity_kwh = (
-            usable_capacity_kwh
-            if current_remaining_capacity_kwh <= 0.05
-            else planning_capacity_kwh
-        )
-        target_charge_kwh = round(current_cycle_target_capacity_kwh - current_usable_kwh, 6)
+        target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
 
         productive_solar_slot_starts = select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
@@ -2314,7 +2312,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_grid_limit_kwh = max(
             0.0,
-            round(current_cycle_target_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
@@ -2726,6 +2724,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for start, window in solar_charge_starts.items()
         ]
         cycle_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        battery_is_full = (
+            battery_soc_percent is not None and battery_soc_percent >= 99.5
+        ) or (
+            usable_capacity_kwh > 0 and initial_usable_energy_kwh >= usable_capacity_kwh - 0.05
+        )
+        if battery_is_full:
+            solar_charge_starts = {}
+            grid_charge_starts = {}
+            charge_starts = {}
+            charge_windows = []
+            self._active_charge_phase_end = None
+            self._active_charge_phase_mode = "accu_uit"
         discharge_session_started = self._discharge_session_started
         if discharge_session_started:
             recharge_allowed = (
