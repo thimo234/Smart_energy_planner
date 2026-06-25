@@ -263,7 +263,7 @@ class BatteryPlannerTest(unittest.TestCase):
 
         self.assertTrue(grid_windows)
 
-    def test_full_battery_safety_margin_does_not_create_charge_window(self):
+    def test_full_battery_ignores_charge_before_it_can_be_emptied(self):
         now = datetime(2026, 6, 25, 15, 45)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -315,7 +315,7 @@ class BatteryPlannerTest(unittest.TestCase):
             charge_safety_margin=0.5,
         )
 
-        self.assertEqual(solar_windows, [])
+        self.assertTrue(solar_windows)
         self.assertEqual(grid_windows, [])
 
         mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
@@ -341,7 +341,10 @@ class BatteryPlannerTest(unittest.TestCase):
             max_discharge_kw=3.0,
         )
 
-        self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
+        self.assertNotIn(
+            ("laden_met_zonne_energie", now.replace(hour=16, minute=30).isoformat()),
+            {(window["mode"], window["start"]) for window in mode_windows},
+        )
         self.assertNotEqual(current_mode, "laden_met_zonne_energie")
 
     def test_full_battery_keeps_later_charge_after_expected_depletion(self):
@@ -399,6 +402,72 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertEqual(grid_windows, [])
         self.assertTrue(solar_windows)
         self.assertGreaterEqual(datetime.fromisoformat(solar_windows[0]["start"]), day + timedelta(days=1, hours=10))
+
+    def test_full_battery_exports_surplus_to_be_empty_before_charge_window(self):
+        now = datetime(2026, 6, 25, 12, 0)
+        charge_start = now + timedelta(hours=6)
+        slots = []
+        for offset in range(6):
+            start = now + timedelta(hours=offset)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.45 if offset in (1, 2) else 0.30,
+                    "export_price": 0.50 if offset in (1, 2) else 0.20,
+                    "hours": 1.0,
+                    "net_solar_kwh": -0.4,
+                    "demand_kwh": 0.4,
+                    "solar_kwh": 0.0,
+                }
+            )
+        for offset in range(4):
+            start = charge_start + timedelta(hours=offset)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.18,
+                    "export_price": 0.18,
+                    "hours": 1.0,
+                    "net_solar_kwh": 2.0,
+                    "demand_kwh": 0.0,
+                    "solar_kwh": 2.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": charge_start.isoformat(),
+                    "end": (charge_start + timedelta(hours=4)).isoformat(),
+                    "price": 0.18,
+                    "usable_hours": 4.0,
+                }
+            ],
+            planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=8.0,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=100.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertIn("ontladen_naar_net", {window["mode"] for window in mode_windows})
+        self.assertIn(
+            ("laden_met_zonne_energie", charge_start.isoformat()),
+            {(window["mode"], window["start"]) for window in mode_windows},
+        )
 
     def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)

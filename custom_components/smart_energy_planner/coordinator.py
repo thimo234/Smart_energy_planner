@@ -2262,8 +2262,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
         if current_remaining_capacity_kwh <= 0.05:
-            depletion_time = self._estimate_battery_depletion_time(
-                slots=future_slots,
+            depletion_time = self._estimate_forced_battery_depletion_time(
                 now=now,
                 initial_usable_energy_kwh=current_usable_kwh,
                 max_discharge_kw=max_discharge_kw,
@@ -2707,42 +2706,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._active_charge_phase_end = None
         self._active_charge_phase_mode = "accu_uit"
 
-    def _estimate_battery_depletion_time(
+    def _estimate_forced_battery_depletion_time(
         self,
         *,
-        slots: list[dict[str, Any]],
         now: datetime,
         initial_usable_energy_kwh: float,
         max_discharge_kw: float,
     ) -> datetime | None:
-        if initial_usable_energy_kwh <= 0 or max_discharge_kw <= 0:
+        if initial_usable_energy_kwh <= 0:
             return now
-
-        remaining_kwh = initial_usable_energy_kwh
-        for slot in slots:
-            slot_start = cast(datetime, slot["start"])
-            slot_end = cast(datetime, slot["end"])
-            if slot_end <= now:
-                continue
-
-            usable_start = max(slot_start, now)
-            usable_hours = max((slot_end - usable_start).total_seconds() / 3600, 0.0)
-            if usable_hours <= 0:
-                continue
-
-            slot_hours = max((slot_end - slot_start).total_seconds() / 3600, 0.0001)
-            deficit_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * (usable_hours / slot_hours)
-            discharge_kwh = min(max_discharge_kw * usable_hours, deficit_kwh)
-            if discharge_kwh <= 0:
-                continue
-
-            if discharge_kwh >= remaining_kwh:
-                fraction = remaining_kwh / discharge_kwh
-                return usable_start + timedelta(seconds=usable_hours * 3600 * fraction)
-
-            remaining_kwh -= discharge_kwh
-
-        return None
+        if max_discharge_kw <= 0:
+            return None
+        return now + timedelta(hours=initial_usable_energy_kwh / max_discharge_kw)
 
     def _build_mode_windows_from_hourly_plan(
         self,
@@ -2786,8 +2761,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh > 0 and initial_usable_energy_kwh >= usable_capacity_kwh - 0.05
         )
         if battery_is_full:
-            depletion_time = self._estimate_battery_depletion_time(
-                slots=slots,
+            depletion_time = self._estimate_forced_battery_depletion_time(
                 now=now,
                 initial_usable_energy_kwh=initial_usable_energy_kwh,
                 max_discharge_kw=max_discharge_kw,
