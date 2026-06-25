@@ -338,7 +338,7 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         )
 
-    def test_charge_window_overrides_active_discharge_session(self):
+    def test_active_discharge_session_blocks_charge_until_soc_threshold(self):
         now = datetime(2026, 6, 22, 17, 45)
         slots = []
         for hour in range(17, 21):
@@ -383,9 +383,9 @@ class BatteryPlannerTest(unittest.TestCase):
             max_discharge_kw=2.0,
         )
 
-        self.assertEqual(current_mode, "laden_van_net")
+        self.assertEqual(current_mode, "ontladen")
         self.assertTrue(coordinator._discharge_session_started)
-        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
         self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
 
     def test_active_discharge_session_allows_charge_when_soc_is_below_threshold(self):
@@ -514,7 +514,7 @@ class BatteryPlannerTest(unittest.TestCase):
             {(window["mode"], window["start"]) for window in mode_windows},
         )
 
-    def test_discharge_session_allows_charge_after_simulated_drain(self):
+    def test_discharge_session_blocks_charge_after_simulated_drain_above_soc_threshold(self):
         now = datetime(2026, 6, 24, 20, 0)
         cycle_end = datetime(2026, 6, 25, 0, 0)
         slots = []
@@ -561,7 +561,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
-        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
         self.assertTrue(
             any(
                 window["mode"] in ("ontladen", "ontladen_naar_net")
@@ -628,7 +628,7 @@ class BatteryPlannerTest(unittest.TestCase):
             {(window["mode"], window["start"]) for window in mode_windows},
         )
 
-    def test_discharge_latch_keeps_charge_window_after_predrain(self):
+    def test_discharge_latch_blocks_charge_window_after_predrain_above_soc_threshold(self):
         now = datetime(2026, 6, 24, 5, 45)
         slots = []
         for hour in range(5, 15):
@@ -674,10 +674,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
-        self.assertIn(
-            ("laden_met_zonne_energie", now.replace(hour=11, minute=0).isoformat()),
-            {(window["mode"], window["start"]) for window in mode_windows},
-        )
+        self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
 
     def test_charge_windows_less_than_three_hours_apart_form_one_phase(self):
         now = datetime(2026, 6, 24, 9, 0)

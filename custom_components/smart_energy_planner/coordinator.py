@@ -2259,6 +2259,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        current_usable_soc_percent = (
+            (current_usable_kwh / usable_capacity_kwh) * 100.0
+            if usable_capacity_kwh > 0
+            else 0.0
+        )
+        if (
+            self._discharge_session_started
+            and current_usable_soc_percent > _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
+        ):
+            return planned_solar_charge_windows, planned_grid_charge_windows
+
         # Inflate the planning target by the safety margin so the selection loop
         # picks more and earlier solar slots as a buffer against solar underperformance.
         # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
@@ -2300,12 +2311,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
-
-        usable_soc_fraction = (
-            current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
-        )
-        if usable_soc_fraction >= 0.70 and self._discharge_session_started:
-            current_grid_limit_kwh = 0.0
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
         next_grid_limit_kwh = max(
@@ -2725,6 +2730,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if recharge_allowed:
                 discharge_session_started = False
                 self._discharge_session_started = False
+            else:
+                solar_charge_starts = {}
+                grid_charge_starts = {}
+                charge_starts = {}
+                charge_windows = []
+                self._active_charge_phase_end = None
+                self._active_charge_phase_mode = "accu_uit"
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
             charge_windows=charge_windows,
             now=now,
