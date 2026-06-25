@@ -128,6 +128,7 @@ _DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
 _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
 _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT = 30.0
 _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT = 90.0
+_BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT = 5.0
 _MIN_CHARGE_WINDOW_GAP = timedelta(hours=3)
 
 
@@ -2260,6 +2261,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not future_slots:
             return planned_solar_charge_windows, planned_grid_charge_windows
 
+        original_remaining_capacity_kwh = current_remaining_capacity_kwh
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
         if current_remaining_capacity_kwh <= 0.05:
             current_usable_kwh = 0.0
@@ -2331,15 +2333,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             6,
         )
 
-        current_grid_limit_kwh = max(
-            0.0,
-            round(current_cycle_target_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+        near_full_grid_topup_blocked = (
+            usable_capacity_kwh > 0
+            and 0 < original_remaining_capacity_kwh
+            <= usable_capacity_kwh * (_BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT / 100.0)
+        )
+        current_grid_limit_kwh = (
+            0.0
+            if near_full_grid_topup_blocked
+            else max(
+                0.0,
+                round(usable_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            )
         )
 
-        # Next cycle: battery assumed empty â€” must fill full planning capacity.
+        # Grid charging should only cover the real physical gap. The safety
+        # margin may select extra solar slots as a forecast buffer, but must not
+        # create artificial net-charge demand above usable capacity.
         next_grid_limit_kwh = max(
             0.0,
-            round(planning_capacity_kwh - next_cycle_solar_kwh, 6),
+            round(usable_capacity_kwh - next_cycle_solar_kwh, 6),
         )
         # Combined gate for candidate building: add a grid candidate if either
         # cycle still has a gap that solar alone cannot fill.
