@@ -2275,7 +2275,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
         # and stops; when solar falls short the extra selected slots cover the gap.
         planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
-        target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
+        current_cycle_target_capacity_kwh = (
+            usable_capacity_kwh
+            if current_remaining_capacity_kwh <= 0.05
+            else planning_capacity_kwh
+        )
+        target_charge_kwh = round(current_cycle_target_capacity_kwh - current_usable_kwh, 6)
 
         productive_solar_slot_starts = select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
@@ -2309,7 +2314,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_grid_limit_kwh = max(
             0.0,
-            round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(current_cycle_target_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
