@@ -461,6 +461,68 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
 
+    def test_small_grid_topup_keeps_actual_charge_kwh_in_mode_window(self):
+        now = datetime(2026, 6, 25, 18, 15)
+        slots = [
+            {
+                "start": now.replace(minute=0),
+                "end": now.replace(hour=19, minute=0),
+                "import_price": 0.34,
+                "export_price": 0.34,
+                "hours": 1.0,
+                "net_solar_kwh": -0.8,
+                "demand_kwh": 0.8,
+                "solar_kwh": 0.0,
+            },
+            {
+                "start": now.replace(hour=19, minute=0),
+                "end": now.replace(hour=20, minute=0),
+                "import_price": 0.50,
+                "export_price": 0.50,
+                "hours": 1.0,
+                "net_solar_kwh": -0.5,
+                "demand_kwh": 0.5,
+                "solar_kwh": 0.0,
+            },
+        ]
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[],
+            planned_grid_charge_windows=[
+                {
+                    "start": now.isoformat(),
+                    "end": now.replace(hour=19, minute=45).isoformat(),
+                    "price": 0.34,
+                    "usable_hours": 1.5,
+                    "charge_kwh": 0.2,
+                }
+            ],
+            initial_usable_energy_kwh=7.8,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=98.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, "laden_van_net")
+        charge_window = next(window for window in mode_windows if window["mode"] == "laden_van_net")
+        self.assertEqual(charge_window["usable_hours"], 0.067)
+        charge_duration_seconds = (
+            datetime.fromisoformat(charge_window["end"]) - datetime.fromisoformat(charge_window["start"])
+        ).total_seconds()
+        self.assertAlmostEqual(charge_duration_seconds, 240.0, delta=0.01)
+        self.assertIn("ontladen", {window["mode"] for window in mode_windows})
+
     def test_full_battery_exports_surplus_to_be_empty_before_charge_window(self):
         now = datetime(2026, 6, 25, 12, 0)
         charge_start = now + timedelta(hours=6)

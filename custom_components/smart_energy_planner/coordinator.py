@@ -2571,6 +2571,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     "end": slot["end"].isoformat(),
                     "price": round(float(slot["export_price"]), 6),
                     "usable_hours": round(charge_kwh / max_charge_kw, 3),
+                    "charge_kwh": round(charge_kwh, 6),
                 }
             )
 
@@ -2584,6 +2585,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     "end": slot["end"].isoformat(),
                     "price": round(float(slot["import_price"]), 6),
                     "usable_hours": round(slot_charge_kwh / max_charge_kw, 3),
+                    "charge_kwh": round(slot_charge_kwh, 6),
                 }
             )
 
@@ -2690,6 +2692,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             float(charge_window.get("charge_kwh", 0.0)),
             max(0.0, usable_hours * max_charge_kw),
         )
+        if max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
+            usable_hours = round(charge_kwh / max_charge_kw, 6)
+            charge_end = mode_start + timedelta(hours=usable_hours)
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
         if mode_start <= now < charge_end:
             current_mode = mode

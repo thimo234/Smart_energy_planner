@@ -174,10 +174,14 @@ def build_charge_window_lookup(
         if parsed_start is None or parsed_end is None:
             continue
         usable_hours = float(window.get("usable_hours", 0.0))
+        charge_kwh = float(window.get("charge_kwh", usable_hours * max_charge_kw))
+        if max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
+            usable_hours = charge_kwh / max_charge_kw
+            parsed_end = parsed_start + timedelta(hours=usable_hours)
         lookup[parsed_start] = {
             "end": parsed_end,
-            "usable_hours": usable_hours,
-            "charge_kwh": round(max(0.0, usable_hours * max_charge_kw), 6),
+            "usable_hours": round(usable_hours, 6),
+            "charge_kwh": round(max(0.0, charge_kwh), 6),
         }
     return lookup
 
@@ -544,6 +548,11 @@ def merge_windows(
                 float(previous.get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
                 3,
             )
+            if "charge_kwh" in previous or "charge_kwh" in window:
+                previous["charge_kwh"] = round(
+                    float(previous.get("charge_kwh", 0.0)) + float(window.get("charge_kwh", 0.0)),
+                    6,
+                )
             prev_price = float(previous.get("price", 0.0))
             curr_price = float(window.get("price", 0.0))
             previous["price"] = max(prev_price, curr_price) if pick_max_price else min(prev_price, curr_price)
