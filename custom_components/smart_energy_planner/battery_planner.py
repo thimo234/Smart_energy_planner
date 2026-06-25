@@ -164,6 +164,7 @@ def build_charge_window_lookup(
     windows: list[dict[str, str | float]],
     *,
     max_charge_kw: float,
+    trim_to_charge_amount: bool = False,
 ) -> dict[datetime, dict[str, float | datetime]]:
     """Index planned charge windows by parsed start time."""
 
@@ -175,7 +176,7 @@ def build_charge_window_lookup(
             continue
         usable_hours = float(window.get("usable_hours", 0.0))
         charge_kwh = float(window.get("charge_kwh", usable_hours * max_charge_kw))
-        if max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
+        if trim_to_charge_amount and max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
             usable_hours = charge_kwh / max_charge_kw
             parsed_end = parsed_start + timedelta(hours=usable_hours)
         lookup[parsed_start] = {

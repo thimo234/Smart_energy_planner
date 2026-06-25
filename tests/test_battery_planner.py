@@ -283,6 +283,60 @@ class BatteryPlannerTest(unittest.TestCase):
         )
         self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T10:00:00")
 
+    def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
+        now = datetime(2026, 6, 25, 18, 30)
+        slots = self._feedback_state_slots(now)
+        tomorrow = datetime(2026, 6, 26)
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=0.4,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+            charge_safety_margin=0.5,
+        )
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=7.6,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=96.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+        )
+        cycle_summary = summarize_battery_cycles(
+            full_planned_mode_windows=mode_windows,
+            energy_balance_slots=slots,
+            now=now,
+        )
+
+        self.assertNotEqual(current_mode, "laden_van_net")
+        self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
+        self.assertFalse(
+            any(
+                window["mode"] == "laden_van_net"
+                and datetime.fromisoformat(str(window["start"])) < tomorrow
+                for window in mode_windows
+            )
+        )
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T10:00:00")
+        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T16:00:00")
+
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
             mode=BATTERY_MODE_GRID_CHARGE,

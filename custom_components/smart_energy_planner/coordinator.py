@@ -2336,7 +2336,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         near_full_grid_topup_blocked = (
             usable_capacity_kwh > 0
             and 0 < original_remaining_capacity_kwh
-            <= usable_capacity_kwh * (_BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT / 100.0)
+            <= usable_capacity_kwh * (_BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT / 100.0) + 1e-9
         )
         current_grid_limit_kwh = (
             0.0
@@ -2354,15 +2354,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             0.0,
             round(usable_capacity_kwh - next_cycle_solar_kwh, 6),
         )
-        # Combined gate for candidate building: add a grid candidate if either
-        # cycle still has a gap that solar alone cannot fill.
-        grid_charge_limit_kwh = max(current_grid_limit_kwh, next_grid_limit_kwh)
         selected_solar_charge_by_start: dict[datetime, float] = {}
         selected_grid_charge_by_start: dict[datetime, float] = {}
         charge_candidates: list[dict[str, Any]] = []
 
         for slot in future_slots:
             slot_capacity_kwh = max_charge_kw * float(slot["hours"])
+            slot_grid_charge_limit_kwh = (
+                current_grid_limit_kwh
+                if slot["start"] < cycle_end
+                else next_grid_limit_kwh
+            )
 
             # Negative import price: grid pays us to consume â€” always charge from
             # the grid at full rate regardless of solar or profit margin.
@@ -2398,7 +2400,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # Non-solar slots with cheaper prices are selected first (kind=2 sorted
                 # by effective_price), so this only kicks in when no better option exists.
                 remaining_after_solar_kwh = slot_capacity_kwh - solar_charge_kwh
-                if grid_charge_limit_kwh > 0 and remaining_after_solar_kwh > 0:
+                if slot_grid_charge_limit_kwh > 0 and remaining_after_solar_kwh > 0:
                     solar_slot_peak_price = calculate_next_battery_peak_price(
                         future_slots,
                         slot["end"],
@@ -2414,14 +2416,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                                 "start": slot["start"],
                                 "end": slot["end"],
                                 "charge_kwh": round(
-                                    min(remaining_after_solar_kwh, grid_charge_limit_kwh), 6
+                                    min(remaining_after_solar_kwh, slot_grid_charge_limit_kwh), 6
                                 ),
                                 "effective_price": round(float(slot["import_price"]), 6),
                             }
                         )
                 continue
 
-            if grid_charge_limit_kwh <= 0 or (
+            if slot_grid_charge_limit_kwh <= 0 or (
                 next_peak_price := calculate_next_battery_peak_price(
                     future_slots,
                     slot["end"],
@@ -2438,7 +2440,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     "kind": "grid",
                     "start": slot["start"],
                     "end": slot["end"],
-                    "charge_kwh": round(min(grid_charge_kwh, grid_charge_limit_kwh), 6),
+                    "charge_kwh": round(min(grid_charge_kwh, slot_grid_charge_limit_kwh), 6),
                     "effective_price": round(float(slot["import_price"]), 6),
                 }
             )
@@ -2692,7 +2694,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             float(charge_window.get("charge_kwh", 0.0)),
             max(0.0, usable_hours * max_charge_kw),
         )
-        if max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
+        if mode == "laden_van_net" and max_charge_kw > 0 and 0 < charge_kwh < usable_hours * max_charge_kw:
             usable_hours = round(charge_kwh / max_charge_kw, 6)
             charge_end = mode_start + timedelta(hours=usable_hours)
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
@@ -2769,6 +2771,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         grid_charge_starts = build_charge_window_lookup(
             planned_grid_charge_windows,
             max_charge_kw=max_charge_kw,
+            trim_to_charge_amount=True,
         )
 
         charge_starts = {
