@@ -1721,6 +1721,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh=usable_battery_capacity_kwh,
             current_remaining_capacity_kwh=remaining_usable_capacity_kwh,
             max_charge_kw=max_charge,
+            max_discharge_kw=max_discharge,
             battery_min_profit=battery_min_profit,
             charge_safety_margin=charge_safety_margin,
         )
@@ -2249,6 +2250,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         current_remaining_capacity_kwh: float,
         max_charge_kw: float,
+        max_discharge_kw: float,
         battery_min_profit: float,
         charge_safety_margin: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
@@ -2260,7 +2262,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
         if current_remaining_capacity_kwh <= 0.05:
-            return planned_solar_charge_windows, planned_grid_charge_windows
+            depletion_time = self._estimate_battery_depletion_time(
+                slots=future_slots,
+                now=now,
+                initial_usable_energy_kwh=current_usable_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
+            if depletion_time is None:
+                return planned_solar_charge_windows, planned_grid_charge_windows
+            future_slots = [slot for slot in future_slots if slot["start"] >= depletion_time]
+            if not future_slots:
+                return planned_solar_charge_windows, planned_grid_charge_windows
+            current_usable_kwh = 0.0
+            current_remaining_capacity_kwh = usable_capacity_kwh
 
         current_usable_soc_percent = (
             (current_usable_kwh / usable_capacity_kwh) * 100.0
@@ -2278,7 +2292,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # When solar delivers the full forecast the battery simply fills at usable_capacity_kwh
         # and stops; when solar falls short the extra selected slots cover the gap.
         planning_capacity_kwh = round(usable_capacity_kwh * (1.0 + charge_safety_margin), 6)
-        target_charge_kwh = round(planning_capacity_kwh - current_usable_kwh, 6)
+        current_cycle_target_capacity_kwh = (
+            usable_capacity_kwh
+            if current_remaining_capacity_kwh <= 0.05
+            else planning_capacity_kwh
+        )
+        target_charge_kwh = round(current_cycle_target_capacity_kwh - current_usable_kwh, 6)
 
         productive_solar_slot_starts = select_contiguous_productive_solar_slot_starts(
             slots=future_slots,
@@ -2312,7 +2331,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_grid_limit_kwh = max(
             0.0,
-            round(planning_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
+            round(current_cycle_target_capacity_kwh - current_usable_kwh - current_cycle_solar_kwh, 6),
         )
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.
@@ -2688,6 +2707,43 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._active_charge_phase_end = None
         self._active_charge_phase_mode = "accu_uit"
 
+    def _estimate_battery_depletion_time(
+        self,
+        *,
+        slots: list[dict[str, Any]],
+        now: datetime,
+        initial_usable_energy_kwh: float,
+        max_discharge_kw: float,
+    ) -> datetime | None:
+        if initial_usable_energy_kwh <= 0 or max_discharge_kw <= 0:
+            return now
+
+        remaining_kwh = initial_usable_energy_kwh
+        for slot in slots:
+            slot_start = cast(datetime, slot["start"])
+            slot_end = cast(datetime, slot["end"])
+            if slot_end <= now:
+                continue
+
+            usable_start = max(slot_start, now)
+            usable_hours = max((slot_end - usable_start).total_seconds() / 3600, 0.0)
+            if usable_hours <= 0:
+                continue
+
+            slot_hours = max((slot_end - slot_start).total_seconds() / 3600, 0.0001)
+            deficit_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * (usable_hours / slot_hours)
+            discharge_kwh = min(max_discharge_kw * usable_hours, deficit_kwh)
+            if discharge_kwh <= 0:
+                continue
+
+            if discharge_kwh >= remaining_kwh:
+                fraction = remaining_kwh / discharge_kwh
+                return usable_start + timedelta(seconds=usable_hours * 3600 * fraction)
+
+            remaining_kwh -= discharge_kwh
+
+        return None
+
     def _build_mode_windows_from_hourly_plan(
         self,
         *,
@@ -2730,10 +2786,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh > 0 and initial_usable_energy_kwh >= usable_capacity_kwh - 0.05
         )
         if battery_is_full:
-            solar_charge_starts = {}
-            grid_charge_starts = {}
-            charge_starts = {}
-            charge_windows = []
+            depletion_time = self._estimate_battery_depletion_time(
+                slots=slots,
+                now=now,
+                initial_usable_energy_kwh=initial_usable_energy_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
+            solar_charge_starts = {
+                start: window
+                for start, window in solar_charge_starts.items()
+                if depletion_time is not None and start >= depletion_time
+            }
+            grid_charge_starts = {
+                start: window
+                for start, window in grid_charge_starts.items()
+                if depletion_time is not None and start >= depletion_time
+            }
+            charge_starts = {
+                **solar_charge_starts,
+                **grid_charge_starts,
+            }
+            charge_windows = [
+                window
+                for window in charge_windows
+                if depletion_time is not None and cast(datetime, window["start"]) >= depletion_time
+            ]
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
         discharge_session_started = self._discharge_session_started

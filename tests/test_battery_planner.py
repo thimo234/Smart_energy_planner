@@ -190,6 +190,7 @@ class BatteryPlannerTest(unittest.TestCase):
             usable_capacity_kwh=8.0,
             current_remaining_capacity_kwh=2.0,
             max_charge_kw=1.0,
+            max_discharge_kw=3.0,
             battery_min_profit=0.08,
         )
 
@@ -256,6 +257,7 @@ class BatteryPlannerTest(unittest.TestCase):
             usable_capacity_kwh=8.0,
             current_remaining_capacity_kwh=1.9,
             max_charge_kw=1.0,
+            max_discharge_kw=3.0,
             battery_min_profit=0.08,
         )
 
@@ -308,6 +310,7 @@ class BatteryPlannerTest(unittest.TestCase):
             usable_capacity_kwh=8.0,
             current_remaining_capacity_kwh=0.0,
             max_charge_kw=1.0,
+            max_discharge_kw=3.0,
             battery_min_profit=0.08,
             charge_safety_margin=0.5,
         )
@@ -340,6 +343,62 @@ class BatteryPlannerTest(unittest.TestCase):
 
         self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
         self.assertNotEqual(current_mode, "laden_met_zonne_energie")
+
+    def test_full_battery_keeps_later_charge_after_expected_depletion(self):
+        now = datetime(2026, 6, 25, 15, 45)
+        slots = []
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for offset in range(18):
+            start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=offset + 1)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.45 if offset < 6 else 0.30,
+                    "export_price": 0.45 if offset < 6 else 0.30,
+                    "hours": 1.0,
+                    "net_solar_kwh": -0.7,
+                    "demand_kwh": 0.7,
+                    "solar_kwh": 0.0,
+                }
+            )
+        for hour in range(10, 16):
+            start = day + timedelta(days=1, hours=hour)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.18,
+                    "export_price": 0.18,
+                    "hours": 1.0,
+                    "net_solar_kwh": 1.0,
+                    "demand_kwh": 0.0,
+                    "solar_kwh": 1.0,
+                }
+            )
+        slots.sort(key=lambda slot: slot["start"])
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=0.0,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+            charge_safety_margin=0.0,
+        )
+
+        self.assertEqual(grid_windows, [])
+        self.assertTrue(solar_windows)
+        self.assertGreaterEqual(datetime.fromisoformat(solar_windows[0]["start"]), day + timedelta(days=1, hours=10))
 
     def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)
@@ -381,6 +440,7 @@ class BatteryPlannerTest(unittest.TestCase):
             usable_capacity_kwh=8.0,
             current_remaining_capacity_kwh=1.9,
             max_charge_kw=1.0,
+            max_discharge_kw=3.0,
             battery_min_profit=0.08,
         )
 
