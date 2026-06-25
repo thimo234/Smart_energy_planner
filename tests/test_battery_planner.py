@@ -338,6 +338,63 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         )
 
+    def test_export_waits_when_battery_can_cover_own_demand_earlier(self):
+        now = datetime(2026, 6, 25, 6, 0)
+        slots = []
+        for hour in range(6, 10):
+            start = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            demand_kwh = 0.6 if hour == 7 else 1.0
+            solar_kwh = 0.66 if hour == 7 else 0.0
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.50 if hour == 8 else 0.30,
+                    "export_price": 0.70 if hour == 7 else 0.20,
+                    "hours": 1.0,
+                    "net_solar_kwh": round(solar_kwh - demand_kwh, 3),
+                    "demand_kwh": demand_kwh,
+                    "solar_kwh": solar_kwh,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": now.replace(hour=10).isoformat(),
+                    "end": now.replace(hour=11).isoformat(),
+                    "price": 0.20,
+                    "usable_hours": 1.0,
+                }
+            ],
+            planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=2.0,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=25.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=1.0,
+            max_discharge_kw=1.0,
+        )
+
+        self.assertNotIn("ontladen_naar_net", {window["mode"] for window in mode_windows})
+        self.assertTrue(
+            any(
+                window["mode"] == "ontladen"
+                and window["start"] <= now.replace(hour=8).isoformat()
+                and window["end"] >= now.replace(hour=9).isoformat()
+                for window in mode_windows
+            )
+        )
+
     def test_active_discharge_session_blocks_charge_until_soc_threshold(self):
         now = datetime(2026, 6, 22, 17, 45)
         slots = []

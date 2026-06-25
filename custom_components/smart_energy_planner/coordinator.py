@@ -2855,11 +2855,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             total_segment_demand_kwh = sum(
                 float(slot.get("demand_kwh", 0.0)) for slot in segment_slots
             )
-            # Surplus = battery energy minus what is actually planned to discharge
-            # for home demand (NOT total segment demand).  The segment may span
-            # until the next charge window (e.g. 06:00-12:00) while the battery
-            # only covers the expensive early hours; the remaining energy would
-            # otherwise sit idle and represents genuine export surplus.
+            # Export is only true surplus when the battery holds more energy
+            # than all remaining own demand in the segment.  Prefer covering
+            # cheaper home-demand hours over exporting just because the price
+            # optimized discharge plan picked only the most expensive hours.
             total_planned_discharge_kwh = sum(planned_discharge_kwh.values())
             # Plan export for any genuine surplus: battery energy above what the
             # discharge plan needs.  The within_export_window gate (8 h before
@@ -2867,10 +2866,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
                 available_energy_kwh=sim_usable_energy_kwh,
-                total_segment_demand_kwh=total_planned_discharge_kwh,
+                total_segment_demand_kwh=total_segment_demand_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
-            has_export_surplus = sim_usable_energy_kwh > total_planned_discharge_kwh
+            has_export_surplus = sim_usable_energy_kwh > total_segment_demand_kwh
 
             # Export to grid is only allowed within 8 hours before the next
             # planned charge phase.  Exporting earlier risks draining the
@@ -2890,10 +2889,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
             # total planned discharge for all segment slots that start AFTER s.
             suffix_discharge_kwh: dict[datetime, float] = {}
+            suffix_demand_kwh: dict[datetime, float] = {}
             running_suffix = 0.0
+            running_demand_suffix = 0.0
             for _slot in reversed(segment_slots):
                 suffix_discharge_kwh[_slot["start"]] = running_suffix
+                suffix_demand_kwh[_slot["start"]] = running_demand_suffix
                 running_suffix += float(planned_discharge_kwh.get(_slot["start"], 0.0))
+                running_demand_suffix += float(_slot.get("demand_kwh", 0.0))
 
             for segment_slot in segment_slots:
                 segment_slot_start = segment_slot["start"]
@@ -2992,7 +2995,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     last_charge_mode = "accu_uit"
                     sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - segment_export_kwh)
                 else:
-                    exportable_kwh = max(0.0, sim_usable_energy_kwh - remaining_planned_discharge_kwh)
+                    exportable_kwh = max(0.0, sim_usable_energy_kwh - suffix_demand_kwh[segment_slot_start])
                     slot_export_capacity_kwh = max_discharge_kw * float(segment_slot["hours"])
                     slot_solar_kwh = float(segment_slot.get("net_solar_kwh", 0))
                     if (
