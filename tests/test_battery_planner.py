@@ -223,6 +223,119 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         )
 
+    def test_high_soc_grid_topup_waits_until_discharge_started(self):
+        now = datetime(2026, 6, 25, 13, 30)
+        slots = []
+        for hour in range(14, 17):
+            start = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.14,
+                    "export_price": 0.14,
+                    "hours": 1.0,
+                    "net_solar_kwh": 0.2,
+                    "demand_kwh": 0.0,
+                    "solar_kwh": 0.2,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        _, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=1.9,
+            max_charge_kw=1.0,
+            battery_min_profit=0.08,
+        )
+
+        self.assertEqual(grid_windows, [])
+
+    def test_grid_topup_after_discharge_prevents_solar_charge_hold_from_spilling_to_tomorrow(self):
+        now = datetime(2026, 6, 25, 13, 30)
+        slots = []
+        for day_offset in range(2):
+            day = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=day_offset)
+            for hour in range(24):
+                start = day + timedelta(hours=hour)
+                if start <= now:
+                    continue
+                price = 0.50 if hour in (20, 21) else (0.14 if hour in (14, 15) else 0.28)
+                if day_offset == 0:
+                    net_solar_kwh = 1.4 if hour == 14 else (0.2 if hour == 15 else -0.8)
+                else:
+                    net_solar_kwh = 1.0 if 11 <= hour < 16 else -0.4
+                slots.append(
+                    {
+                        "start": start,
+                        "end": start + timedelta(hours=1),
+                        "import_price": price,
+                        "export_price": price,
+                        "hours": 1.0,
+                        "net_solar_kwh": net_solar_kwh,
+                        "demand_kwh": max(0.0, -net_solar_kwh),
+                        "solar_kwh": max(0.0, net_solar_kwh),
+                    }
+                )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = True
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=1.9,
+            max_charge_kw=1.0,
+            battery_min_profit=0.08,
+        )
+
+        today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        self.assertTrue(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
+
+        mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=6.1,
+            usable_capacity_kwh=8.0,
+            average_price=0.28,
+            average_export_price=0.28,
+            max_charge_kw=1.0,
+            max_discharge_kw=3.0,
+            battery_soc_percent=76.25,
+        )
+
+        self.assertFalse(
+            any(
+                window["mode"] == BATTERY_MODE_SOLAR_CHARGE
+                and datetime.fromisoformat(window["start"]) < today_end
+                and datetime.fromisoformat(window["end"]) > today_end
+                for window in mode_windows
+            )
+        )
+        self.assertTrue(
+            any(
+                window["mode"] == "ontladen"
+                and datetime.fromisoformat(window["start"]).date() == now.date()
+                for window in mode_windows
+            )
+        )
+
     def test_charge_window_overrides_active_discharge_session(self):
         now = datetime(2026, 6, 22, 17, 45)
         slots = []
