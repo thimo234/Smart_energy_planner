@@ -2304,7 +2304,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_soc_fraction = (
             current_usable_kwh / usable_capacity_kwh if usable_capacity_kwh > 0 else 0.0
         )
-        if usable_soc_fraction >= 0.70 and not self._discharge_session_started:
+        if usable_soc_fraction >= 0.70 and self._discharge_session_started:
             current_grid_limit_kwh = 0.0
 
         # Next cycle: battery assumed empty â€” must fill full planning capacity.

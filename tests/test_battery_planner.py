@@ -223,21 +223,23 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         )
 
-    def test_high_soc_grid_topup_waits_until_discharge_started(self):
+    def test_high_soc_grid_topup_allowed_before_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)
         slots = []
-        for hour in range(14, 17):
+        for hour in range(14, 21):
             start = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            price = 0.50 if hour == 20 else 0.14
+            net_solar_kwh = 0.2 if hour < 17 else -0.8
             slots.append(
                 {
                     "start": start,
                     "end": start + timedelta(hours=1),
-                    "import_price": 0.14,
-                    "export_price": 0.14,
+                    "import_price": price,
+                    "export_price": price,
                     "hours": 1.0,
-                    "net_solar_kwh": 0.2,
-                    "demand_kwh": 0.0,
-                    "solar_kwh": 0.2,
+                    "net_solar_kwh": net_solar_kwh,
+                    "demand_kwh": max(0.0, -net_solar_kwh),
+                    "solar_kwh": max(0.0, net_solar_kwh),
                 }
             )
 
@@ -257,9 +259,9 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertEqual(grid_windows, [])
+        self.assertTrue(grid_windows)
 
-    def test_grid_topup_after_discharge_prevents_solar_charge_hold_from_spilling_to_tomorrow(self):
+    def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)
         slots = []
         for day_offset in range(2):
@@ -303,7 +305,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        self.assertTrue(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
+        self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
 
         mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
             coordinator,
