@@ -2262,16 +2262,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
         if current_remaining_capacity_kwh <= 0.05:
-            depletion_time = self._estimate_forced_battery_depletion_time(
-                now=now,
-                initial_usable_energy_kwh=current_usable_kwh,
-                max_discharge_kw=max_discharge_kw,
-            )
-            if depletion_time is None:
-                return planned_solar_charge_windows, planned_grid_charge_windows
-            future_slots = [slot for slot in future_slots if slot["start"] >= depletion_time]
-            if not future_slots:
-                return planned_solar_charge_windows, planned_grid_charge_windows
             current_usable_kwh = 0.0
             current_remaining_capacity_kwh = usable_capacity_kwh
 
@@ -2761,20 +2751,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh > 0 and initial_usable_energy_kwh >= usable_capacity_kwh - 0.05
         )
         if battery_is_full:
-            depletion_time = self._estimate_forced_battery_depletion_time(
-                now=now,
-                initial_usable_energy_kwh=initial_usable_energy_kwh,
-                max_discharge_kw=max_discharge_kw,
-            )
             solar_charge_starts = {
                 start: window
                 for start, window in solar_charge_starts.items()
-                if depletion_time is not None and start >= depletion_time
+                if not (start <= now < cast(datetime, window["end"]))
             }
             grid_charge_starts = {
                 start: window
                 for start, window in grid_charge_starts.items()
-                if depletion_time is not None and start >= depletion_time
+                if not (start <= now < cast(datetime, window["end"]))
             }
             charge_starts = {
                 **solar_charge_starts,
@@ -2783,7 +2768,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             charge_windows = [
                 window
                 for window in charge_windows
-                if depletion_time is not None and cast(datetime, window["start"]) >= depletion_time
+                if not (cast(datetime, window["start"]) <= now < cast(datetime, window["end"]))
             ]
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
@@ -2797,10 +2782,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 discharge_session_started = False
                 self._discharge_session_started = False
             else:
-                solar_charge_starts = {}
-                grid_charge_starts = {}
-                charge_starts = {}
-                charge_windows = []
+                recharge_time = self._estimate_forced_battery_depletion_time(
+                    now=now,
+                    initial_usable_energy_kwh=initial_usable_energy_kwh,
+                    max_discharge_kw=max_discharge_kw,
+                )
+                solar_charge_starts = {
+                    start: window
+                    for start, window in solar_charge_starts.items()
+                    if recharge_time is not None and start >= recharge_time
+                }
+                grid_charge_starts = {
+                    start: window
+                    for start, window in grid_charge_starts.items()
+                    if recharge_time is not None and start >= recharge_time
+                }
+                charge_starts = {
+                    **solar_charge_starts,
+                    **grid_charge_starts,
+                }
+                charge_windows = [
+                    window
+                    for window in charge_windows
+                    if recharge_time is not None and cast(datetime, window["start"]) >= recharge_time
+                ]
                 self._active_charge_phase_end = None
                 self._active_charge_phase_mode = "accu_uit"
         charge_phase_clusters, active_charge_phase_mode = self._resolve_charge_phase_bounds(
