@@ -13,6 +13,7 @@ from custom_components.smart_energy_planner.battery_planner import (
     collapse_short_off_mode_windows,
     normalize_full_battery_charge_mode,
     normalize_full_battery_mode_windows,
+    summarize_battery_cycles,
 )
 
 
@@ -80,6 +81,208 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
+    def _feedback_state_slots(self, start_at: datetime) -> list[dict[str, float | datetime]]:
+        prices = {
+            "2026-06-25T17:00:00": 0.259,
+            "2026-06-25T18:00:00": 0.295,
+            "2026-06-25T19:00:00": 0.37925,
+            "2026-06-25T20:00:00": 0.4925,
+            "2026-06-25T21:00:00": 0.4365,
+            "2026-06-25T22:00:00": 0.36075,
+            "2026-06-25T23:00:00": 0.32525,
+            "2026-06-26T00:00:00": 0.30525,
+            "2026-06-26T01:00:00": 0.2885,
+            "2026-06-26T02:00:00": 0.278,
+            "2026-06-26T03:00:00": 0.27725,
+            "2026-06-26T04:00:00": 0.27875,
+            "2026-06-26T05:00:00": 0.2875,
+            "2026-06-26T06:00:00": 0.31025,
+            "2026-06-26T07:00:00": 0.2985,
+            "2026-06-26T08:00:00": 0.27475,
+            "2026-06-26T09:00:00": 0.25975,
+            "2026-06-26T10:00:00": 0.24475,
+            "2026-06-26T11:00:00": 0.2155,
+            "2026-06-26T12:00:00": 0.16675,
+            "2026-06-26T13:00:00": 0.144,
+            "2026-06-26T14:00:00": 0.173,
+            "2026-06-26T15:00:00": 0.21925,
+            "2026-06-26T16:00:00": 0.24525,
+            "2026-06-26T17:00:00": 0.26725,
+            "2026-06-26T18:00:00": 0.31425,
+            "2026-06-26T19:00:00": 0.4285,
+            "2026-06-26T20:00:00": 0.56275,
+            "2026-06-26T21:00:00": 0.49425,
+            "2026-06-26T22:00:00": 0.37725,
+            "2026-06-26T23:00:00": 0.319,
+        }
+        demand = {
+            "2026-06-25T17:00:00": 1.368,
+            "2026-06-25T18:00:00": 0.572,
+            "2026-06-25T19:00:00": 0.488,
+            "2026-06-25T20:00:00": 0.398,
+            "2026-06-25T21:00:00": 0.492,
+            "2026-06-25T22:00:00": 0.692,
+            "2026-06-25T23:00:00": 0.391,
+            "2026-06-26T00:00:00": 0.511,
+            "2026-06-26T01:00:00": 0.278,
+            "2026-06-26T02:00:00": 0.281,
+            "2026-06-26T03:00:00": 0.21,
+            "2026-06-26T04:00:00": 0.332,
+            "2026-06-26T05:00:00": 0.191,
+            "2026-06-26T06:00:00": 1.796,
+            "2026-06-26T07:00:00": 0.614,
+            "2026-06-26T08:00:00": 1.588,
+            "2026-06-26T09:00:00": 2.246,
+            "2026-06-26T10:00:00": 2.246,
+            "2026-06-26T11:00:00": 1.337,
+            "2026-06-26T12:00:00": 1.574,
+            "2026-06-26T13:00:00": 2.246,
+            "2026-06-26T14:00:00": 2.246,
+            "2026-06-26T15:00:00": 1.75,
+            "2026-06-26T16:00:00": 1.572,
+            "2026-06-26T17:00:00": 0.949,
+            "2026-06-26T18:00:00": 0.761,
+            "2026-06-26T19:00:00": 0.748,
+            "2026-06-26T20:00:00": 0.661,
+            "2026-06-26T21:00:00": 0.876,
+            "2026-06-26T22:00:00": 0.65,
+            "2026-06-26T23:00:00": 1.082,
+        }
+        solar = {
+            "2026-06-26T07:00:00": 0.655,
+            "2026-06-26T08:00:00": 1.637,
+            "2026-06-26T09:00:00": 2.947,
+            "2026-06-26T10:00:00": 4.257,
+            "2026-06-26T11:00:00": 5.239,
+            "2026-06-26T12:00:00": 5.567,
+            "2026-06-26T13:00:00": 4.912,
+            "2026-06-26T14:00:00": 3.602,
+            "2026-06-26T15:00:00": 2.292,
+            "2026-06-26T16:00:00": 1.31,
+            "2026-06-26T17:00:00": 0.327,
+        }
+        slots = []
+        for stamp, price in prices.items():
+            slot_start = datetime.fromisoformat(stamp)
+            if slot_start + timedelta(hours=1) <= start_at:
+                continue
+            demand_kwh = demand.get(stamp, 0.0)
+            solar_kwh = solar.get(stamp, 0.0)
+            slots.append(
+                {
+                    "start": slot_start,
+                    "end": slot_start + timedelta(hours=1),
+                    "import_price": price,
+                    "export_price": price,
+                    "hours": 1.0,
+                    "net_solar_kwh": round(solar_kwh - demand_kwh, 6),
+                    "demand_kwh": demand_kwh,
+                    "solar_kwh": solar_kwh,
+                }
+            )
+        return slots
+
+    def test_feedback_state_keeps_tomorrow_solar_charge_window_during_discharge_latch(self):
+        now = datetime(2026, 6, 25, 17, 0)
+        slots = self._feedback_state_slots(now)
+        tomorrow = datetime(2026, 6, 26)
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = True
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=0.2,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+            charge_safety_margin=0.5,
+        )
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=7.8,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=98.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+        )
+        cycle_summary = summarize_battery_cycles(
+            full_planned_mode_windows=mode_windows,
+            energy_balance_slots=slots,
+            now=now,
+        )
+
+        self.assertIn(current_mode, ("accu_uit", "ontladen", "ontladen_naar_net"))
+        self.assertTrue(solar_windows)
+        self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T10:00:00")
+        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T16:00:00")
+
+    def test_feedback_state_near_full_battery_does_not_show_evening_grid_charge(self):
+        now = datetime(2026, 6, 25, 18, 15)
+        slots = self._feedback_state_slots(now)
+        tomorrow = datetime(2026, 6, 26)
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=0.2,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+            charge_safety_margin=0.5,
+        )
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=7.8,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=98.0,
+            average_price=0.30,
+            average_export_price=0.30,
+            max_charge_kw=3.0,
+            max_discharge_kw=3.0,
+        )
+        cycle_summary = summarize_battery_cycles(
+            full_planned_mode_windows=mode_windows,
+            energy_balance_slots=slots,
+            now=now,
+        )
+
+        self.assertNotEqual(current_mode, "laden_van_net")
+        self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
+        self.assertFalse(
+            any(
+                window["mode"] == "laden_van_net"
+                and datetime.fromisoformat(str(window["start"])) < tomorrow
+                for window in mode_windows
+            )
+        )
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T10:00:00")
+
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
             mode=BATTERY_MODE_GRID_CHARGE,
