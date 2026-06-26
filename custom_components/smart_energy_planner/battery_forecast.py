@@ -91,13 +91,40 @@ def observed_hourly_demand_table(
 
     observed_keys = {str(slot) for slot in (observed_slots or [])}
     if not observed_keys:
-        observed_keys = set(table.keys())
+        return _legacy_observed_hourly_demand_table(table)
 
     return {
         slot: value
         for slot in observed_keys
         if (value := _coerce_float(table.get(slot))) is not None and value >= 0
     }
+
+
+def _legacy_observed_hourly_demand_table(table: dict[str, Any]) -> dict[str, float]:
+    """Infer measured slots from old persisted tables without observed-slot metadata."""
+
+    coerced = {
+        str(slot): value
+        for slot, raw_value in table.items()
+        if (value := _coerce_float(raw_value)) is not None and value >= 0
+    }
+    if len(coerced) < HOURS_PER_WEEK:
+        return coerced
+
+    inferred: dict[str, float] = {}
+    for weekday in range(7):
+        day_items = [
+            (str(weekday * 24 + hour), coerced.get(str(weekday * 24 + hour)))
+            for hour in range(24)
+        ]
+        values = [value for _, value in day_items if value is not None]
+        if len(values) < 24:
+            continue
+        if max(values) - min(values) < 0.15:
+            continue
+        inferred.update({slot: value for slot, value in day_items if value is not None})
+
+    return inferred
 
 
 def _hourly_demand_value(

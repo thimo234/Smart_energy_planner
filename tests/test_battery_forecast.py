@@ -195,6 +195,32 @@ class BatteryForecastTest(unittest.TestCase):
         ]
         self.assertGreater(max(tomorrow_values) - min(tomorrow_values), 0.5)
 
+    def test_forecast_migrates_legacy_flat_filled_days(self):
+        now = datetime.now().astimezone()
+        varied_weekday = now.weekday()
+        flat_weekday = (varied_weekday + 1) % 7
+        table = {
+            str(weekday * 24 + hour): 1.2
+            for weekday in range(7)
+            for hour in range(24)
+        }
+        for hour in range(24):
+            table[str(varied_weekday * 24 + hour)] = 0.25 + (hour * 0.04)
+
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=18.0,
+            heating_estimate_kwh=0.0,
+            hourly_demand_table=observed_hourly_demand_table(table, []),
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2),
+        )
+
+        flat_day_values = [
+            float(slot["estimated_kwh"])
+            for slot in forecast
+            if datetime.fromisoformat(str(slot["start"])).weekday() == flat_weekday
+        ]
+        self.assertGreater(max(flat_day_values) - min(flat_day_values), 0.5)
+
     def test_populate_hourly_demand_table_fills_week_from_observed_slots(self):
         table = {
             "10": 0.7,

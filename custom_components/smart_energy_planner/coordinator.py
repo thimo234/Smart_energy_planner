@@ -936,13 +936,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self.config_entry.entry_id, {}
         )
         table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
-        observed_slots = {
-            str(slot)
-            for slot in (
-                runtime_state.get("hourly_demand_observed_slots")
-                or table.keys()
-            )
-        }
+        stored_observed_slots = runtime_state.get("hourly_demand_observed_slots") or []
+        observed_slots = {str(slot) for slot in stored_observed_slots}
+        if not observed_slots:
+            observed_slots = set(observed_hourly_demand_table(table, None).keys())
         last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
         last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
         last_ts_raw = runtime_state.get("hourly_demand_last_ts")
