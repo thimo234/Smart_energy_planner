@@ -150,7 +150,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._locked_preheat_end: datetime | None = None
         self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
         self._source_error_retry_unsub: object | None = None
+        self._charge_session_started: bool = False
         self._discharge_session_started: bool = False
+        self._battery_cycle_state_initialized: bool = False
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -2024,7 +2026,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_relevant_battery_window_expected_solar_kwh=float(
                 battery_cycle_summary["current_relevant_battery_window_expected_solar_kwh"]
             ),
-            battery_charge_cycle_active=self._active_charge_phase_end is not None,
+            battery_charge_cycle_active=getattr(self, "_charge_session_started", False),
             battery_discharge_cycle_active=self._discharge_session_started,
             home_demand_until_next_charge_kwh=home_demand_until_next_charge_kwh,
             battery_reserved_energy_kwh=battery_reserved_energy_kwh,
@@ -2798,6 +2800,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_capacity_kwh > 0 and initial_usable_energy_kwh >= usable_capacity_kwh - 0.05
         )
         if battery_is_full:
+            self._charge_session_started = False
+            self._discharge_session_started = True
             solar_charge_starts = {
                 start: window
                 for start, window in solar_charge_starts.items()
@@ -2819,8 +2823,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ]
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
+
+        charge_session_started = getattr(self, "_charge_session_started", False)
         discharge_session_started = self._discharge_session_started
-        if discharge_session_started:
+        cycle_state_initialized = getattr(self, "_battery_cycle_state_initialized", False)
+        recharge_reached = (
+            battery_soc_percent is not None
+            and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
+        ) or (
+            battery_soc_percent is None
+            and usable_capacity_kwh > 0
+            and initial_usable_energy_kwh <= usable_capacity_kwh * (_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT / 100.0)
+        )
+        if cycle_state_initialized and not battery_is_full and recharge_reached:
+            charge_session_started = True
+            discharge_session_started = False
+            self._charge_session_started = True
+            self._discharge_session_started = False
+
+        if charge_session_started:
+            discharge_session_started = False
+            self._discharge_session_started = False
+        elif discharge_session_started and not battery_is_full:
             recharge_allowed = (
                 battery_soc_percent is not None
                 and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
@@ -2870,6 +2894,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             None,
         )
+        if active_charge_phase is not None and not battery_is_full:
+            charge_session_started = True
+            discharge_session_started = False
+            self._charge_session_started = True
+            self._discharge_session_started = False
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []
@@ -3048,7 +3077,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 segment_export_kwh = (
                     float(forced_export_kwh.get(segment_slot_start, 0.0))
-                    if (not before_first_charge_phase or drain_before_charge_phase)
+                    if (
+                        not charge_session_started
+                        and (
+                            not before_first_charge_phase
+                            or drain_before_charge_phase
+                        )
+                    )
                     else 0.0
                 )
                 within_charge_phase = (
@@ -3071,8 +3106,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     for cluster in charge_phase_clusters
                 )
                 suppress_discharge = (
-                    not before_first_charge_phase
-                    and more_todays_charge_ahead
+                    charge_session_started
+                    or (
+                        not before_first_charge_phase
+                        and more_todays_charge_ahead
+                    )
                 )
                 simulated_soc_percent = (
                     (sim_usable_energy_kwh / usable_capacity_kwh) * 100.0
@@ -3123,6 +3161,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     slot_solar_kwh = float(segment_slot.get("net_solar_kwh", 0))
                     if (
                         not before_first_charge_phase
+                        and not charge_session_started
                         and has_export_surplus
                         and exportable_kwh > 0
                         and slot_solar_kwh >= 0
@@ -3136,8 +3175,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
+                    if not cycle_state_initialized and mode in ("laden_met_zonne_energie", "laden_van_net"):
+                        charge_session_started = True
+                        discharge_session_started = False
                     if mode in ("ontladen", "ontladen_naar_net"):
                         discharge_session_started = True
+                        charge_session_started = False
 
                 hourly_modes.append(
                     {
@@ -3153,6 +3196,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if discharge_session_started:
             self._discharge_session_started = True
+        self._charge_session_started = charge_session_started and not battery_is_full
+        self._battery_cycle_state_initialized = True
 
         self._update_active_charge_phase_state(
             now=now,
