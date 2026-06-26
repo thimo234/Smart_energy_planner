@@ -2374,17 +2374,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         cursor = first_charge_not_before
         cycle_index = 0
+        previous_charge_end: datetime | None = None
         while cursor < horizon_end:
-            target_kwh = (
-                max(0.0, usable_capacity_kwh - current_usable_kwh)
-                if cycle_index == 0 and cursor <= now
-                else usable_capacity_kwh
-            )
-            if target_kwh <= 0.05:
-                cursor = now + min_discharge_gap
-                cycle_index += 1
-                continue
-
             selected_for_cycle: list[dict[str, Any]] = []
             charged_kwh = 0.0
             cycle_candidates = _slot_candidates(cursor)
@@ -2422,6 +2413,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             if best_index is None:
                 break
+
+            if cycle_index == 0 and cursor <= now:
+                target_kwh = max(0.0, usable_capacity_kwh - current_usable_kwh)
+            elif previous_charge_end is not None:
+                target_kwh = min(
+                    usable_capacity_kwh,
+                    sum(
+                        max(0.0, -float(slot.get("net_solar_kwh", 0.0)))
+                        for slot in future_slots
+                        if previous_charge_end <= cast(datetime, slot["start"]) < cast(datetime, best_candidate["start"])
+                    ),
+                )
+            else:
+                target_kwh = usable_capacity_kwh
+            if target_kwh <= 0.05:
+                next_cursor = cast(datetime, best_candidate["end"])
+                if next_cursor <= cursor:
+                    next_cursor = cursor + timedelta(minutes=1)
+                cursor = next_cursor
+                cycle_index += 1
+                continue
 
             valley_indexes = {best_index}
             left_index = best_index - 1
@@ -2517,6 +2529,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
 
             cycle_end = max(cast(datetime, selected["end"]) for selected in selected_for_cycle)
+            previous_charge_end = cycle_end
             cursor = cycle_end + min_discharge_gap
             cycle_index += 1
 
@@ -2652,6 +2665,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         max_charge_kw: float,
         mode_start: datetime | None = None,
+        assume_full_at_end: bool = False,
     ) -> tuple[str, float, datetime]:
         charge_start = cast(datetime, charge_window.get("start", slot["start"]))
         charge_end = cast(datetime, charge_window["end"])
@@ -2665,6 +2679,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_hours = round(charge_kwh / max_charge_kw, 6)
             charge_end = mode_start + timedelta(hours=usable_hours)
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
+        if assume_full_at_end:
+            sim_usable_energy_kwh = usable_capacity_kwh
         if mode_start <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
@@ -2894,6 +2910,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ),
             None,
         )
+        active_charge_phase_end = active_charge_phase["end"] if active_charge_phase is not None else None
         if active_charge_phase is not None and not battery_is_full:
             charge_session_started = True
             discharge_session_started = False
@@ -2938,6 +2955,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     usable_capacity_kwh=usable_capacity_kwh,
                     max_charge_kw=max_charge_kw,
                     mode_start=max(slot_start, cast(datetime, overlapping_charge_window["start"])),
+                    assume_full_at_end=True,
                 )
                 last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
@@ -2963,6 +2981,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     sim_usable_energy_kwh=sim_usable_energy_kwh,
                     usable_capacity_kwh=usable_capacity_kwh,
                     max_charge_kw=max_charge_kw,
+                    assume_full_at_end=True,
                 )
                 last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
@@ -3106,7 +3125,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     for cluster in charge_phase_clusters
                 )
                 suppress_discharge = (
-                    charge_session_started
+                    (
+                        charge_session_started
+                        and active_charge_phase_end is not None
+                        and segment_slot_start < active_charge_phase_end
+                    )
                     or (
                         not before_first_charge_phase
                         and more_todays_charge_ahead
