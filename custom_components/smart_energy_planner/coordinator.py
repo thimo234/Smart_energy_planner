@@ -714,6 +714,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_relevant_battery_window_mode=None,
             current_relevant_battery_window_expected_demand_kwh=0.0,
             current_relevant_battery_window_expected_solar_kwh=0.0,
+            battery_charge_cycle_active=False,
+            battery_discharge_cycle_active=False,
             home_demand_until_next_charge_kwh=0.0,
             battery_reserved_energy_kwh=0.0,
             battery_energy_available_for_discharge_kwh=0.0,
@@ -2022,6 +2024,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_relevant_battery_window_expected_solar_kwh=float(
                 battery_cycle_summary["current_relevant_battery_window_expected_solar_kwh"]
             ),
+            battery_charge_cycle_active=self._active_charge_phase_end is not None,
+            battery_discharge_cycle_active=self._discharge_session_started,
             home_demand_until_next_charge_kwh=home_demand_until_next_charge_kwh,
             battery_reserved_energy_kwh=battery_reserved_energy_kwh,
             battery_energy_available_for_discharge_kwh=battery_energy_available_for_discharge_kwh,
@@ -3025,14 +3029,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
                 remaining_planned_discharge_kwh = suffix_discharge_kwh[segment_slot_start]
+                charge_phase_imminent = (
+                    first_charge_phase_start is not None
+                    and before_first_charge_phase
+                    and segment_slot_start < first_charge_phase_start
+                    and segment_slot_end >= first_charge_phase_start - timedelta(minutes=30)
+                )
                 within_export_window = (
                     _export_allowed_from is not None
                     and segment_slot_start >= _export_allowed_from
+                    and not charge_phase_imminent
                 )
                 drain_before_charge_phase = (
                     before_first_charge_phase
                     and first_charge_phase_start is not None
                     and sim_usable_energy_kwh > 0
+                    and not charge_phase_imminent
                 )
                 segment_export_kwh = (
                     float(forced_export_kwh.get(segment_slot_start, 0.0))

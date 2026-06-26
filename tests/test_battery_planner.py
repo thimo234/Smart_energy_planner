@@ -1143,6 +1143,66 @@ class BatteryPlannerTest(unittest.TestCase):
             {(window["mode"], window["start"]) for window in mode_windows},
         )
 
+    def test_no_grid_export_in_immediate_lead_in_to_charge_window(self):
+        now = datetime(2026, 6, 26, 11, 30)
+        charge_start = now + timedelta(minutes=15)
+        slots = [
+            {
+                "start": now,
+                "end": charge_start,
+                "import_price": 0.2155,
+                "export_price": 0.209,
+                "hours": 0.25,
+                "net_solar_kwh": 0.964,
+                "demand_kwh": 0.355,
+                "solar_kwh": 1.319,
+            },
+            {
+                "start": charge_start,
+                "end": charge_start + timedelta(hours=4, minutes=15),
+                "import_price": 0.16675,
+                "export_price": 0.15675,
+                "hours": 4.25,
+                "net_solar_kwh": 7.9,
+                "demand_kwh": 0.0,
+                "solar_kwh": 7.9,
+            },
+        ]
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": charge_start.isoformat(),
+                    "end": (charge_start + timedelta(hours=4, minutes=15)).isoformat(),
+                    "price": 0.15675,
+                    "usable_hours": 4.25,
+                }
+            ],
+            planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=0.1,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=21.0,
+            average_price=0.30,
+            average_export_price=0.20,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, BATTERY_MODE_OFF)
+        self.assertNotIn("ontladen_naar_net", {window["mode"] for window in mode_windows})
+        self.assertIn(
+            (BATTERY_MODE_SOLAR_CHARGE, charge_start.isoformat()),
+            {(window["mode"], window["start"]) for window in mode_windows},
+        )
+
     def test_discharge_latch_blocks_charge_until_net_demand_reaches_threshold(self):
         now = datetime(2026, 6, 25, 12, 0)
         charge_start = now + timedelta(hours=6)

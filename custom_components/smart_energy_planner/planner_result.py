@@ -62,6 +62,8 @@ class PlannerResult:
     current_relevant_battery_window_mode: str | None
     current_relevant_battery_window_expected_demand_kwh: float
     current_relevant_battery_window_expected_solar_kwh: float
+    battery_charge_cycle_active: bool
+    battery_discharge_cycle_active: bool
     home_demand_until_next_charge_kwh: float
     battery_reserved_energy_kwh: float
     battery_energy_available_for_discharge_kwh: float

@@ -179,6 +179,8 @@ class BatteryPlannerSensor(PlannerSensor):
             "current_relevant_battery_window_expected_solar_kwh": getattr(
                 data, "current_relevant_battery_window_expected_solar_kwh", 0.0
             ),
+            "battery_charge_cycle_active": getattr(data, "battery_charge_cycle_active", False),
+            "battery_discharge_cycle_active": getattr(data, "battery_discharge_cycle_active", False),
             "home_demand_until_next_charge_kwh": getattr(data, "home_demand_until_next_charge_kwh", 0.0),
             "battery_reserved_energy_kwh": getattr(data, "battery_reserved_energy_kwh", 0.0),
             "battery_energy_available_for_discharge_kwh": getattr(
