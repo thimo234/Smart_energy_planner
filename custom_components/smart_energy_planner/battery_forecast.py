@@ -84,57 +84,20 @@ def observed_hourly_demand_table(
     table: dict[str, Any] | None,
     observed_slots: Iterable[str] | None,
 ) -> dict[str, float]:
-    """Return only measured demand slots, keeping old full tables usable."""
+    """Return the planned demand table values that are available."""
 
     if not table:
         return {}
 
     observed_keys = {str(slot) for slot in (observed_slots or [])}
     if not observed_keys:
-        return _legacy_observed_hourly_demand_table(table)
+        observed_keys = set(table.keys())
 
-    observed_table = {
+    return {
         slot: value
         for slot in observed_keys
         if (value := _coerce_float(table.get(slot))) is not None and value >= 0
     }
-    return _drop_flat_full_days(observed_table)
-
-
-def _legacy_observed_hourly_demand_table(table: dict[str, Any]) -> dict[str, float]:
-    """Infer measured slots from old persisted tables without observed-slot metadata."""
-
-    coerced = {
-        str(slot): value
-        for slot, raw_value in table.items()
-        if (value := _coerce_float(raw_value)) is not None and value >= 0
-    }
-    if len(coerced) < HOURS_PER_WEEK:
-        return coerced
-
-    return _drop_flat_full_days(coerced)
-
-
-def _drop_flat_full_days(table: dict[str, float]) -> dict[str, float]:
-    """Remove synthetic full-day fills that were persisted as if observed."""
-
-    if len(table) < HOURS_PER_WEEK:
-        return table
-
-    inferred: dict[str, float] = {}
-    for weekday in range(7):
-        day_items = [
-            (str(weekday * 24 + hour), table.get(str(weekday * 24 + hour)))
-            for hour in range(24)
-        ]
-        values = [value for _, value in day_items if value is not None]
-        if len(values) < 24:
-            continue
-        if max(values) - min(values) < 0.15:
-            continue
-        inferred.update({slot: value for slot, value in day_items if value is not None})
-
-    return inferred
 
 
 def _hourly_demand_value(

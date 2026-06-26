@@ -938,8 +938,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
         stored_observed_slots = runtime_state.get("hourly_demand_observed_slots") or []
         observed_slots = {str(slot) for slot in stored_observed_slots}
-        if not observed_slots:
-            observed_slots = set(observed_hourly_demand_table(table, None).keys())
         last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
         last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
         last_ts_raw = runtime_state.get("hourly_demand_last_ts")
@@ -1013,7 +1011,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             runtime_state["hourly_demand_observed_slots"] = sorted(observed_slots)
             await self._async_persist_runtime_state(runtime_state)
 
-        return observed_hourly_demand_table(table, observed_slots)
+        return observed_hourly_demand_table(table, None)
 
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
