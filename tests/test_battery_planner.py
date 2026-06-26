@@ -1331,6 +1331,71 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(coordinator._charge_session_started)
         self.assertFalse(coordinator._discharge_session_started)
 
+    def test_charge_planning_keeps_current_in_progress_solar_slot(self):
+        now = datetime(2026, 6, 26, 13, 30)
+        slots = [
+            {
+                "start": now.replace(minute=0),
+                "end": now.replace(hour=14, minute=0),
+                "import_price": 0.144,
+                "export_price": 0.044,
+                "hours": 1.0,
+                "net_solar_kwh": 2.5,
+                "demand_kwh": 2.4,
+                "solar_kwh": 4.9,
+            },
+            {
+                "start": now.replace(hour=20, minute=0),
+                "end": now.replace(hour=21, minute=0),
+                "import_price": 0.56,
+                "export_price": 0.46,
+                "hours": 1.0,
+                "net_solar_kwh": -0.7,
+                "demand_kwh": 0.7,
+                "solar_kwh": 0.0,
+            },
+        ]
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+        coordinator._charge_session_started = True
+        coordinator._discharge_session_started = False
+        coordinator._battery_cycle_state_initialized = True
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=6.8,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+        )
+
+        self.assertEqual(grid_windows, [])
+        self.assertEqual(solar_windows[0]["start"], now.isoformat())
+        self.assertEqual(solar_windows[0]["end"], now.replace(hour=14, minute=0).isoformat())
+
+        mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows,
+            initial_usable_energy_kwh=1.2,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=32.0,
+            average_price=0.30,
+            average_export_price=0.20,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, BATTERY_MODE_SOLAR_CHARGE)
+        self.assertEqual(mode_windows[0]["mode"], BATTERY_MODE_SOLAR_CHARGE)
+
     def test_active_charge_cycle_simulates_full_battery_for_future_discharge(self):
         now = datetime(2026, 6, 26, 12, 0)
         slots = []

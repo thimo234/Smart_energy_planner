@@ -2322,16 +2322,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         def _slot_candidates(after: datetime) -> list[dict[str, Any]]:
             candidates: list[dict[str, Any]] = []
             for slot in future_slots:
-                if cast(datetime, slot["start"]) < after:
+                slot_start = cast(datetime, slot["start"])
+                slot_end = cast(datetime, slot["end"])
+                if slot_end <= after:
                     continue
-                slot_capacity_kwh = max_charge_kw * float(slot["hours"])
-                solar_kwh = min(slot_capacity_kwh, max(0.0, float(slot["net_solar_kwh"])))
+                active_start = max(slot_start, after)
+                active_hours = max((slot_end - active_start).total_seconds() / 3600, 0.0)
+                if active_hours <= 0:
+                    continue
+                slot_hours = max(float(slot["hours"]), 1e-9)
+                active_fraction = min(1.0, active_hours / slot_hours)
+                slot_capacity_kwh = max_charge_kw * active_hours
+                solar_kwh = min(slot_capacity_kwh, max(0.0, float(slot["net_solar_kwh"])) * active_fraction)
                 if solar_kwh > 0:
                     candidates.append(
                         {
                             "kind": "solar",
-                            "start": slot["start"],
-                            "end": slot["end"],
+                            "start": slot_start,
+                            "end": slot_end,
                             "charge_kwh": round(solar_kwh, 6),
                             "cost": round(_solar_cost(slot), 6),
                         }
@@ -2341,8 +2349,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     candidates.append(
                         {
                             "kind": "grid",
-                            "start": slot["start"],
-                            "end": slot["end"],
+                            "start": slot_start,
+                            "end": slot_end,
                             "charge_kwh": round(grid_kwh, 6),
                             "cost": round(float(slot["import_price"]), 6),
                         }
@@ -2351,8 +2359,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     candidates.append(
                         {
                             "kind": "grid",
-                            "start": slot["start"],
-                            "end": slot["end"],
+                            "start": slot_start,
+                            "end": slot_end,
                             "charge_kwh": round(grid_kwh, 6),
                             "cost": round(float(slot["import_price"]), 6),
                         }
@@ -2417,7 +2425,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             valley_slots = [
                 slot for slot in future_slots
-                if cast(datetime, slot["start"]) >= cursor
+                if cast(datetime, slot["end"]) > cursor
             ]
             best_index = next(
                 (
@@ -2559,13 +2567,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slot_end = cast(datetime, slot["end"])
             charge_kwh = float(selected_solar_charge_by_start.get(slot_start, 0.0))
             if charge_kwh > 0:
-                slot_hours = float(slot["hours"])
+                active_start = max(slot_start, now) if slot_start <= now < slot_end else slot_start
+                slot_hours = max((slot_end - active_start).total_seconds() / 3600, 0.0)
+                full_slot_hours = max(float(slot["hours"]), 1e-9)
+                active_fraction = min(1.0, slot_hours / full_slot_hours)
                 slot_solar_charge_kwh = min(
                     max_charge_kw * slot_hours,
-                    max(0.0, float(slot["net_solar_kwh"])),
+                    max(0.0, float(slot["net_solar_kwh"])) * active_fraction,
                 )
                 usable_hours = slot_hours
-                charge_start = slot_start
+                charge_start = active_start
                 charge_end = slot_end
                 if 0 < charge_kwh < slot_solar_charge_kwh:
                     usable_hours = slot_hours * (charge_kwh / slot_solar_charge_kwh)
