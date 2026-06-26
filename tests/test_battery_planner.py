@@ -934,6 +934,46 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertEqual(solar_windows[0]["end"], (day + timedelta(hours=12)).isoformat())
         self.assertFalse(any(window["start"] == (day + timedelta(hours=13)).isoformat() for window in solar_windows))
 
+    def test_charge_planning_skips_grid_topup_when_solar_can_fill_battery(self):
+        now = datetime(2026, 6, 26, 7, 30)
+        slots = []
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for hour in range(8, 18):
+            start = day + timedelta(hours=hour)
+            has_solar = 8 <= hour < 16
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.319,
+                    "export_price": 0.319,
+                    "hours": 1.0,
+                    "net_solar_kwh": 2.0 if has_solar else -0.5,
+                    "demand_kwh": 0.0 if has_solar else 0.5,
+                    "solar_kwh": 2.0 if has_solar else 0.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = "accu_uit"
+        coordinator._discharge_session_started = False
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=8.0,
+            max_charge_kw=2.0,
+            max_discharge_kw=2.0,
+            battery_min_profit=0.08,
+        )
+
+        self.assertTrue(solar_windows)
+        self.assertEqual(grid_windows, [])
+
     def test_small_grid_topup_keeps_actual_charge_kwh_in_mode_window(self):
         now = datetime(2026, 6, 25, 18, 15)
         slots = [

@@ -2479,6 +2479,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 grid_candidates = [
                     candidate for candidate in cycle_candidates
                     if candidate["kind"] == "grid" and float(candidate["cost"]) >= 0
+                    and _is_profitable_charge(candidate)
                     and valley_block_start <= cast(datetime, candidate["start"]) < valley_block_end
                 ]
                 for candidate in sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])):
