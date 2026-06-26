@@ -54,6 +54,18 @@ class BatteryForecastTest(unittest.TestCase):
         self.assertEqual(len(forecast), 48)
         self.assertTrue(all(slot["estimated_kwh"] >= 0 for slot in forecast))
 
+    def test_build_hourly_home_demand_forecast_uses_profile_fallback(self):
+        now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=24.0,
+            heating_estimate_kwh=0.0,
+            horizon_end=now + timedelta(days=1),
+        )
+
+        values = [float(slot["estimated_kwh"]) for slot in forecast[:24]]
+        self.assertGreater(max(values) - min(values), 0.5)
+        self.assertEqual(round(sum(values), 1), 24.0)
+
     def test_build_hourly_home_demand_forecast_uses_same_hour_history_fallback(self):
         now = datetime.now().astimezone()
         opposite_day_type_weekday = 0 if now.weekday() >= 5 else 5

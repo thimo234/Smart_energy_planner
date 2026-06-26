@@ -23,8 +23,7 @@ def build_hourly_home_demand_forecast(
 ) -> list[dict[str, str | float]]:
     """Build an hourly demand forecast from the 168-slot demand profile."""
 
-    base_hourly = non_heating_daily_average_kwh / 24 if non_heating_daily_average_kwh > 0 else 0.0
-    fallback_hourly = base_hourly
+    fallback_profile = _fallback_hourly_demand_profile(non_heating_daily_average_kwh)
     table = hourly_demand_table or {}
     adjustment_factor = min(1.35, max(0.75, demand_adjustment_factor))
 
@@ -53,7 +52,7 @@ def build_hourly_home_demand_forecast(
                     slot_key=slot_key,
                     weekday=slot_start.weekday(),
                     hour=hour,
-                    fallback_hourly=fallback_hourly,
+                    fallback_hourly=fallback_profile[hour],
                 )
             )
 
@@ -109,6 +108,21 @@ def _hourly_demand_value(
         return min(_median(same_hour_values), 3.0)
 
     return fallback_hourly
+
+
+def _fallback_hourly_demand_profile(daily_kwh: float) -> list[float]:
+    """Return a non-flat default home demand profile scaled to the daily total."""
+
+    if daily_kwh <= 0:
+        return [0.0] * 24
+    weights = [
+        0.036, 0.031, 0.029, 0.029, 0.031, 0.035,
+        0.044, 0.053, 0.063, 0.072, 0.078, 0.073,
+        0.068, 0.068, 0.072, 0.067, 0.058, 0.050,
+        0.046, 0.046, 0.050, 0.054, 0.053, 0.044,
+    ]
+    total_weight = sum(weights) or 1.0
+    return [daily_kwh * weight / total_weight for weight in weights]
 
 
 def _same_hour_values(

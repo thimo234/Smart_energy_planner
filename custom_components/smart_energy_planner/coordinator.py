@@ -384,9 +384,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 all_solar_windows.extend(fallback_tomorrow_windows)
             solar_windows = merge_solar_windows(solar_windows)
             all_solar_windows = merge_solar_windows(all_solar_windows)
+            battery_min_horizon_end: datetime | None = None
             if planner_kind == PLANNER_KIND_BATTERY:
+                battery_min_horizon_end = (now + timedelta(days=1)).replace(
+                    hour=18,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+                if battery_min_horizon_end <= now:
+                    battery_min_horizon_end += timedelta(days=1)
                 battery_price_horizon_end = max(
-                    [window.end for window in [*all_windows, *all_solar_windows]],
+                    [window.end for window in [*all_windows, *all_solar_windows]] + [battery_min_horizon_end],
                     default=now + timedelta(days=1),
                 )
                 all_windows = extend_price_window_tail(
@@ -1389,7 +1398,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         future_solar_windows = [window for window in solar_windows if window.start.date() > now.date()]
         best_solar_window = select_best_solar_window(today_solar_windows or solar_windows)
         planning_horizon_end = max(
-            [window.end for window in [*all_windows, *all_solar_windows]],
+            [window.end for window in [*all_windows, *all_solar_windows]]
+            + ([battery_min_horizon_end] if planner_kind == PLANNER_KIND_BATTERY and battery_min_horizon_end else []),
             default=now + timedelta(days=1),
         )
         planning_start = min(
