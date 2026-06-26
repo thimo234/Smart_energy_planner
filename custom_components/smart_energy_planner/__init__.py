@@ -171,7 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             event.data.get("entity_id", "?"),
             new_state.state,
         )
-        hass.async_create_task(coordinator.async_refresh())
+        hass.async_create_task(coordinator.async_request_refresh())
 
     entry.async_on_unload(
         async_track_state_change_event(
@@ -191,7 +191,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     #    refresh immediately and schedule a 30-second delayed refresh.
     @callback
     def _do_refresh(_=None) -> None:
-        hass.async_create_task(coordinator.async_refresh())
+        hass.async_create_task(coordinator.async_request_refresh())
 
     @callback
     def _on_ha_started(_event=None) -> None:
@@ -213,7 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = coordinator.data
         if data is None:
             _LOGGER.info("Smart Energy Planner backup recovery: no data yet, triggering refresh")
-            hass.async_create_task(coordinator.async_refresh())
+            hass.async_create_task(coordinator.async_request_refresh())
             return
         errors = getattr(data, "source_errors", None)
         if errors:
@@ -221,7 +221,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "Smart Energy Planner backup recovery: source errors present (%s), triggering refresh",
                 errors,
             )
-            hass.async_create_task(coordinator.async_refresh())
+            hass.async_create_task(coordinator.async_request_refresh())
         else:
             _LOGGER.debug("Smart Energy Planner backup recovery: no errors, skipping")
 

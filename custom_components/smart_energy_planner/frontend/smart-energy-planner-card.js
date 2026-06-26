@@ -65,18 +65,17 @@ class SmartEnergyPlannerCard extends HTMLElement {
     now.setSeconds(0, 0);
     const horizonStart = this.getHorizonStart(plannerState, now);
     const allPriceWindows = this.extractAllPriceWindows(plannerState, priceState);
-    const horizonEnd = this.getHorizonEnd(allPriceWindows, horizonStart);
-    const priceWindows = this.clipPriceWindows(allPriceWindows, horizonStart, horizonEnd);
+    const fallbackHorizonEnd = this.getFallbackHorizonEnd(plannerState, demandState, horizonStart);
+    const horizonEnd = this.getHorizonEnd(allPriceWindows, horizonStart, fallbackHorizonEnd);
+    let priceWindows = this.clipPriceWindows(allPriceWindows, horizonStart, horizonEnd);
+    if (!priceWindows.length) {
+      priceWindows = this.neutralPriceWindows(plannerState, horizonStart, horizonEnd);
+    }
     const demandPoints = this.extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd);
     const solarPoints = this.extractSolarPoints(plannerState, horizonStart, horizonEnd);
     const modeSchedule = this.extractModeSchedule(plannerState, horizonStart, horizonEnd);
     const modeBands = this.modeBands(modeSchedule, horizonStart, horizonEnd);
     const chartWidth = this.chartWidth(priceWindows, horizonStart, horizonEnd);
-
-    if (!priceWindows.length) {
-      this.updateHtml(this.renderError("No price windows found on the selected planner"));
-      return;
-    }
 
     this.updateHtml(`
       <ha-card>
@@ -116,7 +115,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return start;
   }
 
-  getHorizonEnd(priceWindows, horizonStart) {
+  getHorizonEnd(priceWindows, horizonStart, fallbackHorizonEnd) {
     const configuredHours = this.parseNumber(this.config.max_hours_to_show);
     if (configuredHours !== undefined && configuredHours > 0) {
       return new Date(horizonStart.getTime() + configuredHours * 60 * 60 * 1000);
@@ -129,7 +128,42 @@ class SmartEnergyPlannerCard extends HTMLElement {
     if (lastKnownEnd > horizonStart.getTime()) {
       return new Date(lastKnownEnd);
     }
-    return new Date(horizonStart.getTime() + 24 * 60 * 60 * 1000);
+    return fallbackHorizonEnd || new Date(horizonStart.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  getFallbackHorizonEnd(plannerState, demandState, horizonStart) {
+    const candidates = [];
+    const collectEnd = (items) => {
+      if (!Array.isArray(items)) {
+        return;
+      }
+      items.forEach((item) => {
+        const end = this.parseDate(item.end || item.to);
+        if (end && end > horizonStart) {
+          candidates.push(end.getTime());
+        }
+      });
+    };
+    collectEnd(plannerState?.attributes?.estimated_hourly_home_demand);
+    collectEnd(demandState?.attributes?.estimated_hourly_home_demand);
+    collectEnd(plannerState?.attributes?.estimated_hourly_solar_forecast);
+    collectEnd(plannerState?.attributes?.planned_battery_mode_windows);
+    const latest = Math.max(...candidates, 0);
+    return latest > horizonStart.getTime()
+      ? new Date(latest)
+      : new Date(horizonStart.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  neutralPriceWindows(plannerState, horizonStart, horizonEnd) {
+    const fallbackPrice = this.parseNumber(plannerState?.attributes?.current_price) ?? 0;
+    const windows = [];
+    let cursor = new Date(horizonStart);
+    while (cursor < horizonEnd) {
+      const end = new Date(Math.min(cursor.getTime() + 60 * 60 * 1000, horizonEnd.getTime()));
+      windows.push({ start: cursor, end, price: fallbackPrice });
+      cursor = end;
+    }
+    return windows;
   }
 
   currentSlotStart(plannerState, now) {
