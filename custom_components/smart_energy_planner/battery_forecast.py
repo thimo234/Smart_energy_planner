@@ -93,11 +93,12 @@ def observed_hourly_demand_table(
     if not observed_keys:
         return _legacy_observed_hourly_demand_table(table)
 
-    return {
+    observed_table = {
         slot: value
         for slot in observed_keys
         if (value := _coerce_float(table.get(slot))) is not None and value >= 0
     }
+    return _drop_flat_full_days(observed_table)
 
 
 def _legacy_observed_hourly_demand_table(table: dict[str, Any]) -> dict[str, float]:
@@ -111,10 +112,19 @@ def _legacy_observed_hourly_demand_table(table: dict[str, Any]) -> dict[str, flo
     if len(coerced) < HOURS_PER_WEEK:
         return coerced
 
+    return _drop_flat_full_days(coerced)
+
+
+def _drop_flat_full_days(table: dict[str, float]) -> dict[str, float]:
+    """Remove synthetic full-day fills that were persisted as if observed."""
+
+    if len(table) < HOURS_PER_WEEK:
+        return table
+
     inferred: dict[str, float] = {}
     for weekday in range(7):
         day_items = [
-            (str(weekday * 24 + hour), coerced.get(str(weekday * 24 + hour)))
+            (str(weekday * 24 + hour), table.get(str(weekday * 24 + hour)))
             for hour in range(24)
         ]
         values = [value for _, value in day_items if value is not None]
