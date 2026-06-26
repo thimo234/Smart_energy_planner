@@ -81,6 +81,20 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
+    def test_runtime_error_fallback_uses_valid_battery_enum_mode(self):
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+
+        result = SmartEnergyPlannerCoordinator._build_pending_result(
+            coordinator,
+            "planner_runtime_error",
+            "battery",
+            {"price_sensor": "unknown"},
+            ["planner_runtime_error: boom"],
+        )
+
+        self.assertEqual(result.battery_strategy, BATTERY_MODE_OFF)
+
     def _feedback_state_slots(self, start_at: datetime) -> list[dict[str, float | datetime]]:
         prices = {
             "2026-06-25T17:00:00": 0.259,

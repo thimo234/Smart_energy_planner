@@ -255,6 +255,8 @@ class BatteryStrategySensor(BatteryPlannerSensor):
             usable_energy_kwh=usable_energy_kwh,
             usable_capacity_kwh=usable_capacity_kwh,
         )
+        if normalized_mode not in _BATTERY_STRATEGY_OPTIONS:
+            return "accu_uit"
 
         battery_is_physically_full = getattr(data, "battery_remaining_capacity_kwh", 0.0) <= 0.05
         if battery_is_physically_full and normalized_mode in ("laden_van_net", "laden_met_zonne_energie"):

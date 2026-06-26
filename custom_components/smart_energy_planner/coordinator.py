@@ -384,18 +384,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 all_solar_windows.extend(fallback_tomorrow_windows)
             solar_windows = merge_solar_windows(solar_windows)
             all_solar_windows = merge_solar_windows(all_solar_windows)
-            battery_min_horizon_end: datetime | None = None
             if planner_kind == PLANNER_KIND_BATTERY:
-                battery_min_horizon_end = (now + timedelta(days=1)).replace(
+                battery_price_horizon_end = (now + timedelta(days=1)).replace(
                     hour=18,
                     minute=0,
                     second=0,
                     microsecond=0,
                 )
-                if battery_min_horizon_end <= now:
-                    battery_min_horizon_end += timedelta(days=1)
+                if battery_price_horizon_end <= now:
+                    battery_price_horizon_end += timedelta(days=1)
                 battery_price_horizon_end = max(
-                    [window.end for window in [*all_windows, *all_solar_windows]] + [battery_min_horizon_end],
+                    [window.end for window in [*all_windows, *all_solar_windows]] + [battery_price_horizon_end],
                     default=now + timedelta(days=1),
                 )
                 all_windows = extend_price_window_tail(
@@ -662,9 +661,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self, status: str, planner_kind: str, source_status: dict[str, str], source_errors: list[str]
     ) -> PlannerResult:
         battery_strategy = "accu_uit"
-        if planner_kind == PLANNER_KIND_BATTERY and status == "planner_runtime_error":
-            battery_strategy = "zelfvoorzienend"
-        elif planner_kind == PLANNER_KIND_THERMOSTAT:
+        if planner_kind == PLANNER_KIND_THERMOSTAT:
             battery_strategy = "not_applicable"
 
         return PlannerResult(
@@ -1301,6 +1298,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             all_export_windows = list(export_windows)
         if not battery_switch_windows:
             battery_switch_windows = list(all_windows)
+        battery_min_horizon_end: datetime | None = None
+        if planner_kind == PLANNER_KIND_BATTERY:
+            battery_min_horizon_end = (now + timedelta(days=1)).replace(
+                hour=18,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            if battery_min_horizon_end <= now:
+                battery_min_horizon_end += timedelta(days=1)
 
         sorted_by_price = sorted(windows, key=lambda item: item.price)
         cheapest = sorted_by_price[0]
