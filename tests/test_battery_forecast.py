@@ -7,6 +7,7 @@ install_package_stub()
 from custom_components.smart_energy_planner.battery_forecast import (
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
+    observed_hourly_demand_table,
     populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
@@ -164,6 +165,35 @@ class BatteryForecastTest(unittest.TestCase):
         tomorrow_total = sum(float(slot["estimated_kwh"]) for slot in forecast[24:48])
         self.assertEqual(round(today_total, 1), 32.4)
         self.assertEqual(round(tomorrow_total, 1), 24.0)
+
+    def test_forecast_ignores_synthetic_filled_slots(self):
+        now = datetime.now().astimezone()
+        tomorrow_weekday = (now.weekday() + 1) % 7
+        observed_weekday = now.weekday()
+        table = {
+            str(weekday * 24 + hour): 1.2
+            for weekday in range(7)
+            for hour in range(24)
+        }
+        observed_slots = []
+        for hour in range(24):
+            slot = str(observed_weekday * 24 + hour)
+            table[slot] = 0.3 + (hour * 0.03)
+            observed_slots.append(slot)
+
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=18.0,
+            heating_estimate_kwh=0.0,
+            hourly_demand_table=observed_hourly_demand_table(table, observed_slots),
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2),
+        )
+
+        tomorrow_values = [
+            float(slot["estimated_kwh"])
+            for slot in forecast
+            if datetime.fromisoformat(str(slot["start"])).weekday() == tomorrow_weekday
+        ]
+        self.assertGreater(max(tomorrow_values) - min(tomorrow_values), 0.5)
 
     def test_populate_hourly_demand_table_fills_week_from_observed_slots(self):
         table = {

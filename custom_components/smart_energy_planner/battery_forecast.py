@@ -80,6 +80,26 @@ def build_hourly_home_demand_forecast(
     return forecast
 
 
+def observed_hourly_demand_table(
+    table: dict[str, Any] | None,
+    observed_slots: Iterable[str] | None,
+) -> dict[str, float]:
+    """Return only measured demand slots, keeping old full tables usable."""
+
+    if not table:
+        return {}
+
+    observed_keys = {str(slot) for slot in (observed_slots or [])}
+    if not observed_keys:
+        observed_keys = set(table.keys())
+
+    return {
+        slot: value
+        for slot in observed_keys
+        if (value := _coerce_float(table.get(slot))) is not None and value >= 0
+    }
+
+
 def _hourly_demand_value(
     *,
     table: dict[str, float],

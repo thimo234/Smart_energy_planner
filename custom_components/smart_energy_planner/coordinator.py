@@ -24,6 +24,7 @@ from .battery_forecast import (
     extract_solar_windows,
     get_solar_day_end,
     merge_solar_windows,
+    observed_hourly_demand_table,
     populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
@@ -467,6 +468,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 hourly_demand_table = {}
                 demand_adjustment_factor = 1.0
                 if total_energy_sensor and total_energy_state:
+                    runtime_state = (
+                        self.hass.data.get(RUNTIME_STATE, {})
+                        .get(self.config_entry.entry_id, {})
+                    )
                     current_energy = _coerce_float(total_energy_state.state)
                     if current_energy is not None:
                         hourly_demand_table = await self._async_update_hourly_demand_table(
@@ -475,10 +480,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                             now=now,
                         )
                     else:
-                        hourly_demand_table = dict(
-                            (self.hass.data.get(RUNTIME_STATE, {})
-                             .get(self.config_entry.entry_id, {})
-                             .get("hourly_demand_table") or {})
+                        hourly_demand_table = observed_hourly_demand_table(
+                            runtime_state.get("hourly_demand_table"),
+                            runtime_state.get("hourly_demand_observed_slots"),
                         )
                     demand_adjustment_factor = (
                         _coerce_float(
@@ -1012,7 +1016,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             runtime_state["hourly_demand_observed_slots"] = sorted(observed_slots)
             await self._async_persist_runtime_state(runtime_state)
 
-        return table
+        return observed_hourly_demand_table(table, observed_slots)
 
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
