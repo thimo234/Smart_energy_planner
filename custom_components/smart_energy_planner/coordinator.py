@@ -2328,6 +2328,35 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
             return candidates
 
+        def _future_peak_price(after: datetime) -> float | None:
+            prices = [
+                float(slot["import_price"])
+                for slot in future_slots
+                if cast(datetime, slot["start"]) >= after
+            ]
+            return max(prices, default=None)
+
+        def _is_profitable_charge(candidate: dict[str, Any]) -> bool:
+            if float(candidate["cost"]) < 0:
+                return True
+            peak_price = _future_peak_price(cast(datetime, candidate["end"]))
+            return (
+                peak_price is not None
+                and peak_price - float(candidate["cost"]) >= battery_min_profit
+            )
+
+        def _primary_charge_cost(candidates: list[dict[str, Any]]) -> float | None:
+            primary_costs = [
+                float(candidate["cost"])
+                for candidate in candidates
+                if (
+                    candidate["kind"] == "solar"
+                    or float(candidate["cost"]) < 0
+                )
+                and _is_profitable_charge(candidate)
+            ]
+            return min(primary_costs, default=None)
+
         cursor = first_charge_not_before
         cycle_index = 0
         while cursor < horizon_end:
@@ -2344,22 +2373,83 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_for_cycle: list[dict[str, Any]] = []
             charged_kwh = 0.0
             cycle_candidates = _slot_candidates(cursor)
-            negative_grid_candidates = [
+            profitable_primary_candidates = [
                 candidate for candidate in cycle_candidates
-                if candidate["kind"] == "grid" and float(candidate["cost"]) < 0
+                if (
+                    candidate["kind"] == "solar"
+                    or float(candidate["cost"]) < 0
+                )
+                and _is_profitable_charge(candidate)
             ]
-            solar_candidates = [
-                candidate for candidate in cycle_candidates
-                if candidate["kind"] == "solar"
-            ]
-            if not solar_candidates and not negative_grid_candidates:
+            if not profitable_primary_candidates:
                 break
 
-            ordered_candidates = sorted(
-                [*negative_grid_candidates, *solar_candidates],
+            best_candidate = min(
+                profitable_primary_candidates,
                 key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"]),
             )
-            for candidate in ordered_candidates:
+
+            candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
+            for candidate in cycle_candidates:
+                candidates_by_start.setdefault(cast(datetime, candidate["start"]), []).append(candidate)
+
+            valley_slots = [
+                slot for slot in future_slots
+                if cast(datetime, slot["start"]) >= cursor
+            ]
+            best_index = next(
+                (
+                    index
+                    for index, slot in enumerate(valley_slots)
+                    if cast(datetime, slot["start"]) == cast(datetime, best_candidate["start"])
+                ),
+                None,
+            )
+            if best_index is None:
+                break
+
+            valley_indexes = {best_index}
+            left_index = best_index - 1
+            right_index = best_index + 1
+            while True:
+                options: list[tuple[float, int]] = []
+                if left_index >= 0:
+                    left_slot = valley_slots[left_index]
+                    left_next = valley_slots[left_index + 1]
+                    left_start = cast(datetime, left_slot["start"])
+                    if cast(datetime, left_slot["end"]) == cast(datetime, left_next["start"]):
+                        left_cost = _primary_charge_cost(candidates_by_start.get(left_start, []))
+                        if left_cost is not None:
+                            options.append((left_cost, left_index))
+                if right_index < len(valley_slots):
+                    right_slot = valley_slots[right_index]
+                    right_prev = valley_slots[right_index - 1]
+                    right_start = cast(datetime, right_slot["start"])
+                    if cast(datetime, right_prev["end"]) == cast(datetime, right_slot["start"]):
+                        right_cost = _primary_charge_cost(candidates_by_start.get(right_start, []))
+                        if right_cost is not None:
+                            options.append((right_cost, right_index))
+                if not options:
+                    break
+                _, selected_index = min(options, key=lambda item: (item[0], valley_slots[item[1]]["start"]))
+                valley_indexes.add(selected_index)
+                if selected_index == left_index:
+                    left_index -= 1
+                else:
+                    right_index += 1
+
+            valley_starts = {
+                cast(datetime, valley_slots[index]["start"])
+                for index in valley_indexes
+            }
+            primary_candidates = [
+                candidate for candidate in profitable_primary_candidates
+                if cast(datetime, candidate["start"]) in valley_starts
+            ]
+            for candidate in sorted(
+                primary_candidates,
+                key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"]),
+            ):
                 if charged_kwh >= target_kwh:
                     break
                 take_kwh = min(float(candidate["charge_kwh"]), target_kwh - charged_kwh)
@@ -2370,23 +2460,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 selected_for_cycle.append(selected)
                 charged_kwh += take_kwh
 
-            if charged_kwh < target_kwh and solar_candidates:
-                selected_solar_starts = [
-                    cast(datetime, selected["start"])
-                    for selected in selected_for_cycle
-                    if selected["kind"] == "solar"
+            if charged_kwh < target_kwh:
+                valley_block_slots = [
+                    slot for slot in valley_slots
+                    if cast(datetime, slot["start"]) in valley_starts
                 ]
-                selected_solar_ends = [
-                    cast(datetime, selected["end"])
-                    for selected in selected_for_cycle
-                    if selected["kind"] == "solar"
-                ]
-                solar_block_start = min(selected_solar_starts) if selected_solar_starts else cursor
-                solar_block_end = max(selected_solar_ends) if selected_solar_ends else cursor
+                valley_block_start = min(cast(datetime, slot["start"]) for slot in valley_block_slots)
+                valley_block_end = max(cast(datetime, slot["end"]) for slot in valley_block_slots)
                 grid_candidates = [
                     candidate for candidate in cycle_candidates
                     if candidate["kind"] == "grid" and float(candidate["cost"]) >= 0
-                    and solar_block_start <= cast(datetime, candidate["start"]) < solar_block_end
+                    and valley_block_start <= cast(datetime, candidate["start"]) < valley_block_end
                 ]
                 for candidate in sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])):
                     if charged_kwh >= target_kwh:
