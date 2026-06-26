@@ -2514,16 +2514,35 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             cursor = cycle_end + min_discharge_gap
             cycle_index += 1
 
+        selected_solar_starts = {
+            start
+            for start, charge_kwh in selected_solar_charge_by_start.items()
+            if charge_kwh > 0
+        }
         for slot in future_slots:
             slot_start = cast(datetime, slot["start"])
+            slot_end = cast(datetime, slot["end"])
             charge_kwh = float(selected_solar_charge_by_start.get(slot_start, 0.0))
             if charge_kwh > 0:
+                slot_hours = float(slot["hours"])
+                slot_solar_charge_kwh = min(
+                    max_charge_kw * slot_hours,
+                    max(0.0, float(slot["net_solar_kwh"])),
+                )
+                usable_hours = slot_hours
+                charge_start = slot_start
+                charge_end = slot_end
+                if 0 < charge_kwh < slot_solar_charge_kwh:
+                    usable_hours = slot_hours * (charge_kwh / slot_solar_charge_kwh)
+                    if slot_end in selected_solar_starts:
+                        charge_start = slot_end - timedelta(hours=usable_hours)
+                    charge_end = charge_start + timedelta(hours=usable_hours)
                 planned_solar_charge_windows.append(
                     {
-                        "start": slot_start.isoformat(),
-                        "end": cast(datetime, slot["end"]).isoformat(),
+                        "start": charge_start.isoformat(),
+                        "end": charge_end.isoformat(),
                         "price": round(_solar_cost(slot), 6),
-                        "usable_hours": round(float(slot["hours"]), 3),
+                        "usable_hours": round(usable_hours, 3),
                         "charge_kwh": round(charge_kwh, 6),
                     }
                 )
@@ -2923,11 +2942,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             segment_end_index = slot_index
             while segment_end_index < len(slots):
                 segment_slot_start = slots[segment_end_index]["start"]
+                segment_slot_end = slots[segment_end_index]["end"]
                 if (
                     segment_end_index > slot_index
                     and (
                         segment_slot_start in solar_charge_starts
                         or segment_slot_start in grid_charge_starts
+                        or any(
+                            segment_slot_end > cast(datetime, window["start"])
+                            and segment_slot_start < cast(datetime, window["end"])
+                            for window in charge_windows
+                        )
                     )
                 ):
                     break
