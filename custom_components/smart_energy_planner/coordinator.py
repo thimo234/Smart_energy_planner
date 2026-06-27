@@ -172,6 +172,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._charge_session_started: bool = False
         self._discharge_session_started: bool = False
         self._battery_cycle_state_initialized: bool = False
+        self._battery_cycle_state_restored_recent: bool = False
         self._restore_recent_battery_cycle_state()
 
     def _restore_recent_battery_cycle_state(self) -> None:
@@ -196,6 +197,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             or self._charge_session_started
             or self._discharge_session_started
         )
+        self._battery_cycle_state_restored_recent = True
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -2941,7 +2943,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             and usable_capacity_kwh > 0
             and initial_usable_energy_kwh <= usable_capacity_kwh * (_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT / 100.0)
         )
-        if cycle_state_initialized and not battery_is_full and recharge_reached:
+        restored_discharge_latch = (
+            getattr(self, "_battery_cycle_state_restored_recent", False)
+            and discharge_session_started
+        )
+        if cycle_state_initialized and not battery_is_full and recharge_reached and not restored_discharge_latch:
             charge_session_started = True
             discharge_session_started = False
             self._charge_session_started = True
@@ -2955,7 +2961,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 battery_soc_percent is not None
                 and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
             )
-            if recharge_allowed:
+            if recharge_allowed and not restored_discharge_latch:
                 discharge_session_started = False
                 self._discharge_session_started = False
             else:
@@ -3006,6 +3012,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             discharge_session_started = False
             self._charge_session_started = True
             self._discharge_session_started = False
+            self._battery_cycle_state_restored_recent = False
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         hourly_modes: list[dict[str, str | float]] = []

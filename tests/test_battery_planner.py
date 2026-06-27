@@ -108,6 +108,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(coordinator._charge_session_started)
         self.assertFalse(coordinator._discharge_session_started)
         self.assertTrue(coordinator._battery_cycle_state_initialized)
+        self.assertTrue(coordinator._battery_cycle_state_restored_recent)
 
     def test_stale_battery_cycle_state_is_recomputed_after_restart(self):
         now = datetime.now()
@@ -136,6 +137,56 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertFalse(coordinator._charge_session_started)
         self.assertFalse(coordinator._discharge_session_started)
         self.assertFalse(coordinator._battery_cycle_state_initialized)
+
+    def test_restored_discharge_cycle_does_not_flip_to_charge_at_recharge_threshold(self):
+        now = datetime(2026, 6, 26, 12, 0)
+        slots = [
+            {
+                "start": now,
+                "end": now + timedelta(hours=1),
+                "import_price": 0.40,
+                "export_price": 0.30,
+                "hours": 1.0,
+                "net_solar_kwh": -0.8,
+                "demand_kwh": 0.8,
+                "solar_kwh": 0.0,
+            },
+            {
+                "start": now + timedelta(hours=1),
+                "end": now + timedelta(hours=2),
+                "import_price": 0.35,
+                "export_price": 0.25,
+                "hours": 1.0,
+                "net_solar_kwh": -0.7,
+                "demand_kwh": 0.7,
+                "solar_kwh": 0.0,
+            },
+        ]
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+        coordinator._charge_session_started = False
+        coordinator._discharge_session_started = True
+        coordinator._battery_cycle_state_initialized = True
+        coordinator._battery_cycle_state_restored_recent = True
+
+        SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[],
+            planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=1.0,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=20.0,
+            average_price=0.30,
+            average_export_price=0.20,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertFalse(coordinator._charge_session_started)
+        self.assertTrue(coordinator._discharge_session_started)
 
     def test_runtime_error_fallback_uses_valid_battery_enum_mode(self):
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
