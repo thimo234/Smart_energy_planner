@@ -251,9 +251,14 @@ class BatteryForecastTest(unittest.TestCase):
 
         populated = populate_hourly_demand_table(table, observed_slots=table.keys())
 
-        self.assertEqual(len(populated), 168)
         self.assertEqual(populated["10"], 0.7)
         self.assertEqual(populated[str(2 * 24 + 10)], 0.75)
+        self.assertNotIn("11", populated)
+
+    def test_populate_hourly_demand_table_does_not_fill_week_from_single_value(self):
+        populated = populate_hourly_demand_table({"10": 1.2}, observed_slots=["10"])
+
+        self.assertEqual(populated, {"10": 1.2})
 
     def test_populate_hourly_demand_table_tempers_sparse_high_outlier(self):
         table = {

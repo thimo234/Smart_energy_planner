@@ -163,7 +163,7 @@ def populate_hourly_demand_table(
     *,
     observed_slots: Iterable[str] | None = None,
 ) -> dict[str, float]:
-    """Return a full 168-slot demand table using observed slots as source data."""
+    """Return observed demand slots plus same-hour estimates where available."""
 
     observed_keys = set(observed_slots or table.keys())
     observed_table = {
@@ -179,7 +179,6 @@ def populate_hourly_demand_table(
         }
 
     source_table = _stabilize_sparse_observed_table(observed_table)
-    fallback_hourly = _median(list(source_table.values()))
     populated = dict(source_table)
     for slot_index in range(HOURS_PER_WEEK):
         slot_key = str(slot_index)
@@ -187,16 +186,15 @@ def populate_hourly_demand_table(
             continue
         weekday = slot_index // 24
         hour = slot_index % 24
-        populated[slot_key] = round(
-            _hourly_demand_value(
-                table=source_table,
-                slot_key=slot_key,
-                weekday=weekday,
-                hour=hour,
-                fallback_hourly=fallback_hourly,
-            ),
-            4,
+        peer_values = _same_hour_values(
+            source_table,
+            hour=hour,
+            weekdays=[5, 6] if weekday >= 5 else [0, 1, 2, 3, 4],
         )
+        if not peer_values:
+            peer_values = _same_hour_values(source_table, hour=hour, weekdays=range(7))
+        if len(peer_values) >= 2:
+            populated[slot_key] = round(_median(peer_values), 4)
 
     return populated
 
