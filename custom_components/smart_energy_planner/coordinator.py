@@ -2396,6 +2396,31 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ]
             return min(primary_costs, default=None)
 
+        def _append_charge_candidates(
+            selected_for_cycle: list[dict[str, Any]],
+            candidates: list[dict[str, Any]],
+            *,
+            target_kwh: float,
+            charged_kwh: float,
+            used_starts: set[datetime] | None = None,
+        ) -> float:
+            for candidate in candidates:
+                if charged_kwh >= target_kwh:
+                    break
+                candidate_start = cast(datetime, candidate["start"])
+                if used_starts is not None and candidate_start in used_starts:
+                    continue
+                take_kwh = min(float(candidate["charge_kwh"]), target_kwh - charged_kwh)
+                if take_kwh <= 0:
+                    continue
+                selected = dict(candidate)
+                selected["charge_kwh"] = round(take_kwh, 6)
+                selected_for_cycle.append(selected)
+                charged_kwh += take_kwh
+                if used_starts is not None:
+                    used_starts.add(candidate_start)
+            return charged_kwh
+
         cursor = first_charge_not_before
         cycle_index = 0
         previous_charge_end: datetime | None = None
@@ -2497,21 +2522,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 candidate for candidate in profitable_primary_candidates
                 if cast(datetime, candidate["start"]) in valley_starts
             ]
-            for candidate in sorted(
-                primary_candidates,
-                key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"]),
-            ):
-                if charged_kwh >= target_kwh:
-                    break
-                take_kwh = min(float(candidate["charge_kwh"]), target_kwh - charged_kwh)
-                if take_kwh <= 0:
-                    continue
-                selected = dict(candidate)
-                selected["charge_kwh"] = round(take_kwh, 6)
-                selected_for_cycle.append(selected)
-                charged_kwh += take_kwh
+            charged_kwh = _append_charge_candidates(
+                selected_for_cycle,
+                sorted(
+                    primary_candidates,
+                    key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"]),
+                ),
+                target_kwh=target_kwh,
+                charged_kwh=charged_kwh,
+            )
 
-            if charged_kwh < target_kwh:
+            active_charge_cycle_needs_topup = (
+                getattr(self, "_charge_session_started", False)
+                and self._active_charge_phase_end is not None
+                and self._active_charge_phase_end > now
+                and cursor <= now
+            )
+            regular_grid_topup_allowed = (
+                not self._discharge_session_started
+                and current_usable_soc_percent < 95.0
+            )
+            if charged_kwh < target_kwh and (regular_grid_topup_allowed or active_charge_cycle_needs_topup):
                 valley_block_slots = [
                     slot for slot in valley_slots
                     if cast(datetime, slot["start"]) in valley_starts
@@ -2524,16 +2555,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and _is_profitable_charge(candidate)
                     and valley_block_start <= cast(datetime, candidate["start"]) < valley_block_end
                 ]
-                for candidate in sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])):
-                    if charged_kwh >= target_kwh:
-                        break
-                    take_kwh = min(float(candidate["charge_kwh"]), target_kwh - charged_kwh)
-                    if take_kwh <= 0:
-                        continue
-                    selected = dict(candidate)
-                    selected["charge_kwh"] = round(take_kwh, 6)
-                    selected_for_cycle.append(selected)
-                    charged_kwh += take_kwh
+                charged_kwh = _append_charge_candidates(
+                    selected_for_cycle,
+                    sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])),
+                    target_kwh=target_kwh,
+                    charged_kwh=charged_kwh,
+                )
+
+            if charged_kwh < target_kwh and active_charge_cycle_needs_topup:
+                grid_candidates = [
+                    candidate for candidate in cycle_candidates
+                    if candidate["kind"] == "grid"
+                    and float(candidate["cost"]) >= 0
+                    and _is_profitable_charge(candidate)
+                    and cast(datetime, candidate["start"]) >= cursor
+                ]
+                used_grid_starts = {
+                    cast(datetime, selected["start"])
+                    for selected in selected_for_cycle
+                    if selected["kind"] == "grid"
+                }
+                charged_kwh = _append_charge_candidates(
+                    selected_for_cycle,
+                    sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])),
+                    target_kwh=target_kwh,
+                    charged_kwh=charged_kwh,
+                    used_starts=used_grid_starts,
+                )
 
             if not selected_for_cycle:
                 break

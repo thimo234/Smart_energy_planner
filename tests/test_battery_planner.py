@@ -988,6 +988,50 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertEqual(grid_windows, [])
 
+    def test_charge_planning_adds_grid_topup_when_solar_cycle_cannot_fill_battery(self):
+        now = datetime(2026, 6, 26, 11, 30)
+        slots = []
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for hour in range(12, 22):
+            start = day + timedelta(hours=hour)
+            has_solar = hour in (12, 13)
+            evening_peak = hour in (20, 21)
+            slots.append(
+                {
+                    "start": start,
+                    "end": start + timedelta(hours=1),
+                    "import_price": 0.50 if evening_peak else 0.16,
+                    "export_price": 0.06 if has_solar else (0.50 if evening_peak else 0.16),
+                    "hours": 1.0,
+                    "net_solar_kwh": 1.0 if has_solar else -0.6,
+                    "demand_kwh": 0.0 if has_solar else 0.6,
+                    "solar_kwh": 1.0 if has_solar else 0.0,
+                }
+            )
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(data={}, options={})
+        coordinator._active_charge_phase_end = day + timedelta(hours=14)
+        coordinator._active_charge_phase_mode = BATTERY_MODE_SOLAR_CHARGE
+        coordinator._charge_session_started = True
+        coordinator._discharge_session_started = False
+        coordinator._battery_cycle_state_initialized = True
+
+        solar_windows, grid_windows = SmartEnergyPlannerCoordinator._plan_charge_windows_for_horizon(
+            coordinator,
+            slots=slots,
+            now=now,
+            usable_capacity_kwh=8.0,
+            current_remaining_capacity_kwh=6.0,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+            battery_min_profit=0.08,
+        )
+
+        self.assertTrue(solar_windows)
+        self.assertTrue(grid_windows)
+        self.assertLess(datetime.fromisoformat(grid_windows[0]["start"]), day + timedelta(hours=20))
+
     def test_solar_charge_window_ends_when_selected_energy_is_loaded(self):
         now = datetime(2026, 6, 26, 7, 30)
         slots = []
@@ -2064,4 +2108,3 @@ class BatteryPlannerTest(unittest.TestCase):
                 for window in mode_windows
             )
         )
-
