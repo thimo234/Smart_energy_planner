@@ -117,11 +117,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "battery_profit_tracked_energy_kwh": persisted_state.get("battery_profit_tracked_energy_kwh", 0.0),
         "battery_profit_last_energy_kwh": persisted_state.get("battery_profit_last_energy_kwh"),
         "battery_profit_last_updated": persisted_state.get("battery_profit_last_updated"),
-        "hourly_demand_table": persisted_state.get("hourly_demand_table", {}),
-        "hourly_demand_observed_slots": persisted_state.get("hourly_demand_observed_slots", []),
-        "hourly_demand_last_value": persisted_state.get("hourly_demand_last_value"),
-        "hourly_demand_last_hour_key": persisted_state.get("hourly_demand_last_hour_key"),
-        "hourly_demand_last_ts": persisted_state.get("hourly_demand_last_ts"),
+        "expected_hourly_demand_stats": persisted_state.get("expected_hourly_demand_stats", {}),
+        "expected_hourly_demand_table": persisted_state.get("expected_hourly_demand_table", {}),
+        "expected_hourly_demand_adjustment_factor": persisted_state.get(
+            "expected_hourly_demand_adjustment_factor",
+            1.0,
+        ),
+        "expected_hourly_demand_last_value": persisted_state.get("expected_hourly_demand_last_value"),
+        "expected_hourly_demand_last_hour_key": persisted_state.get("expected_hourly_demand_last_hour_key"),
+        "expected_hourly_demand_last_ts": persisted_state.get("expected_hourly_demand_last_ts"),
+        "expected_hourly_demand_today": persisted_state.get("expected_hourly_demand_today", {}),
         "smoothed_eco_hours": persisted_state.get("smoothed_eco_hours"),
     }
 

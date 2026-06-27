@@ -5,12 +5,14 @@ from test_support import install_package_stub
 
 install_package_stub()
 from custom_components.smart_energy_planner.battery_forecast import (
+    build_expected_hourly_demand_table,
+    build_expected_hourly_demand_table_from_observations,
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
     observed_hourly_demand_table,
-    populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
+    update_expected_hourly_demand_stats,
 )
 from custom_components.smart_energy_planner.battery_models import SolarWindow
 
@@ -243,33 +245,57 @@ class BatteryForecastTest(unittest.TestCase):
         ]
         self.assertEqual(tomorrow_values, [1.205] * 24)
 
-    def test_populate_hourly_demand_table_fills_week_from_observed_slots(self):
+    def test_build_expected_hourly_demand_table_learns_same_hour_pattern(self):
         table = {
             "10": 0.7,
             str(1 * 24 + 10): 0.8,
         }
 
-        populated = populate_hourly_demand_table(table, observed_slots=table.keys())
+        expected = build_expected_hourly_demand_table_from_observations(
+            table,
+            observed_slots=table.keys(),
+            daily_average_kwh=12.0,
+        )
 
-        self.assertEqual(populated["10"], 0.7)
-        self.assertEqual(populated[str(2 * 24 + 10)], 0.75)
-        self.assertNotIn("11", populated)
+        self.assertEqual(len(expected), 168)
+        self.assertGreater(expected["10"], expected["11"])
+        self.assertGreater(expected[str(2 * 24 + 10)], expected[str(2 * 24 + 11)])
 
-    def test_populate_hourly_demand_table_does_not_fill_week_from_single_value(self):
-        populated = populate_hourly_demand_table({"10": 1.2}, observed_slots=["10"])
+    def test_build_expected_hourly_demand_table_does_not_flatten_from_single_value(self):
+        expected = build_expected_hourly_demand_table_from_observations(
+            {"10": 1.2},
+            observed_slots=["10"],
+            daily_average_kwh=24.0,
+        )
 
-        self.assertEqual(populated, {"10": 1.2})
+        self.assertEqual(len(expected), 168)
+        self.assertNotEqual(set(expected.values()), {1.2})
+        self.assertGreater(max(expected.values()) - min(expected.values()), 0.4)
 
-    def test_populate_hourly_demand_table_tempers_sparse_high_outlier(self):
+    def test_build_expected_hourly_demand_table_tempers_sparse_high_outlier(self):
         table = {
             str(0 * 24 + 18): 0.4,
             str(1 * 24 + 18): 0.5,
             str(2 * 24 + 18): 3.0,
         }
 
-        populated = populate_hourly_demand_table(table, observed_slots=table.keys())
+        expected = build_expected_hourly_demand_table_from_observations(
+            table,
+            observed_slots=table.keys(),
+            daily_average_kwh=12.0,
+        )
 
-        self.assertEqual(populated[str(2 * 24 + 18)], 0.45)
+        self.assertLess(expected[str(2 * 24 + 18)], 1.0)
+
+    def test_expected_hourly_demand_stats_store_compact_running_means(self):
+        stats = {}
+        stats = update_expected_hourly_demand_stats(stats, slot_key="10", measured_kwh=1.0)
+        stats = update_expected_hourly_demand_stats(stats, slot_key="10", measured_kwh=2.0)
+        expected = build_expected_hourly_demand_table(stats, daily_average_kwh=24.0)
+
+        self.assertEqual(stats["10"]["count"], 2)
+        self.assertLess(len(str(stats)), 100)
+        self.assertGreater(expected["10"], expected["11"])
 
     def test_build_fallback_solar_windows_for_tomorrow_has_daylight_windows(self):
         windows = build_fallback_solar_windows_for_day(10.0, day_offset=1)

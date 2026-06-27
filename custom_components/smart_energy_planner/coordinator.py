@@ -18,6 +18,7 @@ from homeassistant.util import dt as dt_util
 
 from .battery_forecast import (
     build_energy_balance_slots,
+    build_expected_hourly_demand_table,
     build_fallback_solar_windows,
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
@@ -25,10 +26,10 @@ from .battery_forecast import (
     get_solar_day_end,
     merge_solar_windows,
     observed_hourly_demand_table,
-    populate_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
     select_best_solar_window,
+    update_expected_hourly_demand_stats,
 )
 from .battery_models import SolarWindow
 from .battery_planner import (
@@ -125,6 +126,21 @@ _DEMAND_PROFILE_ALPHA = 0.35
 _DEMAND_PROFILE_MAX_KWH_PER_HOUR = 10.0
 _DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
 _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
+_EXPECTED_DEMAND_STATS_KEY = "expected_hourly_demand_stats"
+_EXPECTED_DEMAND_TABLE_KEY = "expected_hourly_demand_table"
+_EXPECTED_DEMAND_ADJUSTMENT_KEY = "expected_hourly_demand_adjustment_factor"
+_EXPECTED_DEMAND_LAST_VALUE_KEY = "expected_hourly_demand_last_value"
+_EXPECTED_DEMAND_LAST_HOUR_KEY = "expected_hourly_demand_last_hour_key"
+_EXPECTED_DEMAND_LAST_TS_KEY = "expected_hourly_demand_last_ts"
+_EXPECTED_DEMAND_TODAY_KEY = "expected_hourly_demand_today"
+_LEGACY_DEMAND_KEYS = (
+    "hourly_demand_table",
+    "hourly_demand_observed_slots",
+    "hourly_demand_adjustment_factor",
+    "hourly_demand_last_value",
+    "hourly_demand_last_hour_key",
+    "hourly_demand_last_ts",
+)
 _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT = 30.0
 _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT = 90.0
 _BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT = 5.0
@@ -474,21 +490,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
                     current_energy = _coerce_float(total_energy_state.state)
                     if current_energy is not None:
-                        hourly_demand_table = await self._async_update_hourly_demand_table(
+                        hourly_demand_table = await self._async_update_expected_hourly_demand_table(
                             current_value=current_energy,
-                            entity_id=total_energy_sensor,
                             now=now,
+                            daily_average_kwh=non_heating_daily_average,
                         )
                     else:
                         hourly_demand_table = observed_hourly_demand_table(
-                            runtime_state.get("hourly_demand_table"),
-                            runtime_state.get("hourly_demand_observed_slots"),
+                            runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY),
+                            None,
                         )
                     demand_adjustment_factor = (
                         _coerce_float(
                             self.hass.data.get(RUNTIME_STATE, {})
                             .get(self.config_entry.entry_id, {})
-                            .get("hourly_demand_adjustment_factor")
+                            .get(_EXPECTED_DEMAND_ADJUSTMENT_KEY)
                         )
                         or 1.0
                     )
@@ -916,66 +932,32 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         runtime_state["battery_profit_last_updated"] = now
         await self._async_persist_runtime_state(runtime_state)
 
-    async def _async_update_hourly_demand_table(
+    async def _async_update_expected_hourly_demand_table(
         self,
         *,
         current_value: float,
-        entity_id: str | None = None,
         now: datetime,
+        daily_average_kwh: float,
     ) -> dict[str, float]:
-        """Maintain a 168-slot (7 Ã— 24) table of hourly energy consumption.
-
-        Each slot key is str(weekday * 24 + hour). Complete recorder history
-        hours are preferred because they line up with real hour boundaries. A
-        recorder-derived slot replaces the previous slot value instead of being
-        EMA-applied on every refresh; otherwise the same history sample would be
-        counted over and over. If recorder history is not available yet we fall
-        back to the previous incremental EMA update path.
-        """
+        """Maintain compact learned hourly demand stats and an expected table."""
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
             self.config_entry.entry_id, {}
         )
-        table: dict[str, float] = dict(runtime_state.get("hourly_demand_table") or {})
-        stored_observed_slots = runtime_state.get("hourly_demand_observed_slots") or []
-        observed_slots = {str(slot) for slot in stored_observed_slots}
-        last_value = _coerce_float(runtime_state.get("hourly_demand_last_value"))
-        last_hour_key = runtime_state.get("hourly_demand_last_hour_key")
-        last_ts_raw = runtime_state.get("hourly_demand_last_ts")
+        stats: dict[str, dict[str, Any]] = dict(runtime_state.get(_EXPECTED_DEMAND_STATS_KEY) or {})
+        table: dict[str, float] = dict(runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY) or {})
+        last_value = _coerce_float(runtime_state.get(_EXPECTED_DEMAND_LAST_VALUE_KEY))
+        last_hour_key = runtime_state.get(_EXPECTED_DEMAND_LAST_HOUR_KEY)
+        last_ts_raw = runtime_state.get(_EXPECTED_DEMAND_LAST_TS_KEY)
         current_hour_key = now.weekday() * 24 + now.hour
         changed = False
-        updated_from_history = False
-
-        if entity_id:
-            hourly_usage = await self._async_get_hourly_energy_usage(entity_id, horizon_end=now)
-            runtime_state["hourly_demand_adjustment_factor"] = _calculate_demand_adjustment_factor(
-                hourly_usage=hourly_usage,
-                table=table,
-                now=now,
-            )
-            usage_by_slot: dict[str, list[float]] = {}
-            for hour_start, usage_kwh in hourly_usage.items():
-                if hour_start + timedelta(hours=1) > now:
-                    continue
-                if not 0.0 <= usage_kwh <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR:
-                    continue
-                slot = str(hour_start.weekday() * 24 + hour_start.hour)
-                usage_by_slot.setdefault(slot, []).append(usage_kwh)
-
-            for slot, values in usage_by_slot.items():
-                historical_hourly = _robust_hourly_demand(values)
-                if historical_hourly is None:
-                    continue
-                table[slot] = round(historical_hourly, 4)
-                observed_slots.add(slot)
-                updated_from_history = True
 
         if last_value is None or last_hour_key is None:
             # First call: store the baseline without updating any slot.
-            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
-            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
-            runtime_state["hourly_demand_last_ts"] = now.isoformat()
+            runtime_state[_EXPECTED_DEMAND_LAST_VALUE_KEY] = round(current_value, 3)
+            runtime_state[_EXPECTED_DEMAND_LAST_HOUR_KEY] = current_hour_key
+            runtime_state[_EXPECTED_DEMAND_LAST_TS_KEY] = now.isoformat()
             changed = True
-        elif last_hour_key != current_hour_key and not updated_from_history:
+        elif last_hour_key != current_hour_key:
             # The hour has turned: compute consumption of the completed hour.
             last_ts = dt_util.parse_datetime(last_ts_raw) if last_ts_raw else None
             elapsed_hours = (
@@ -987,36 +969,93 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Cap and reject negatives (meter reset / rollover).
             if 0.0 <= hourly_delta <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR:
                 slot = str(last_hour_key)
-                existing = _coerce_float(table.get(slot))
-                if existing is None:
-                    table[slot] = round(hourly_delta, 4)
-                else:
-                    table[slot] = round(existing + (hourly_delta - existing) * 0.2, 4)
-                observed_slots.add(slot)
-            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
-            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
-            runtime_state["hourly_demand_last_ts"] = now.isoformat()
-            runtime_state["hourly_demand_table"] = table
-            changed = True
-        elif updated_from_history:
-            runtime_state["hourly_demand_last_value"] = round(current_value, 3)
-            runtime_state["hourly_demand_last_hour_key"] = current_hour_key
-            runtime_state["hourly_demand_last_ts"] = now.isoformat()
-            runtime_state["hourly_demand_table"] = table
+                completed_hour_start = (last_ts or now).replace(minute=0, second=0, microsecond=0)
+                self._update_today_demand_adjustment(
+                    runtime_state,
+                    hour_start=completed_hour_start,
+                    actual_kwh=hourly_delta,
+                    expected_kwh=_demand_profile_value_for_time(table, completed_hour_start),
+                    now=now,
+                )
+                stats = update_expected_hourly_demand_stats(
+                    stats,
+                    slot_key=slot,
+                    measured_kwh=hourly_delta,
+                )
+            runtime_state[_EXPECTED_DEMAND_LAST_VALUE_KEY] = round(current_value, 3)
+            runtime_state[_EXPECTED_DEMAND_LAST_HOUR_KEY] = current_hour_key
+            runtime_state[_EXPECTED_DEMAND_LAST_TS_KEY] = now.isoformat()
+            runtime_state[_EXPECTED_DEMAND_STATS_KEY] = stats
             changed = True
 
-        if changed:
-            table = populate_hourly_demand_table(table, observed_slots=observed_slots)
-            runtime_state["hourly_demand_table"] = table
-            runtime_state["hourly_demand_observed_slots"] = sorted(observed_slots)
+        if changed or not table:
+            table = build_expected_hourly_demand_table(
+                stats,
+                daily_average_kwh=daily_average_kwh,
+            )
+            runtime_state[_EXPECTED_DEMAND_TABLE_KEY] = table
+            runtime_state[_EXPECTED_DEMAND_STATS_KEY] = stats
             await self._async_persist_runtime_state(runtime_state)
 
         return observed_hourly_demand_table(table, None)
 
+    def _update_today_demand_adjustment(
+        self,
+        runtime_state: dict[str, Any],
+        *,
+        hour_start: datetime,
+        actual_kwh: float,
+        expected_kwh: float | None,
+        now: datetime,
+    ) -> None:
+        today_key = dt_util.as_local(now).date().isoformat()
+        today_state = runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY)
+        if not isinstance(today_state, dict) or today_state.get("date") != today_key:
+            today_state = {
+                "date": today_key,
+                "actual_kwh": 0.0,
+                "expected_kwh": 0.0,
+                "completed_hours": 0,
+                "seen_slots": [],
+            }
+
+        slot_key = str(dt_util.as_local(hour_start).weekday() * 24 + dt_util.as_local(hour_start).hour)
+        seen_slots = {str(slot) for slot in today_state.get("seen_slots", [])}
+        if slot_key in seen_slots:
+            runtime_state[_EXPECTED_DEMAND_TODAY_KEY] = today_state
+            return
+        seen_slots.add(slot_key)
+
+        today_state["actual_kwh"] = round(
+            _coerce_float(today_state.get("actual_kwh"), default=0.0) + actual_kwh,
+            4,
+        )
+        if expected_kwh is not None and expected_kwh > 0:
+            today_state["expected_kwh"] = round(
+                _coerce_float(today_state.get("expected_kwh"), default=0.0) + expected_kwh,
+                4,
+            )
+        today_state["completed_hours"] = int(today_state.get("completed_hours", 0)) + 1
+        today_state["seen_slots"] = sorted(seen_slots)
+        runtime_state[_EXPECTED_DEMAND_TODAY_KEY] = today_state
+
+        if (
+            today_state["completed_hours"] >= _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS
+            and _coerce_float(today_state.get("expected_kwh"), default=0.0) >= 0.5
+        ):
+            actual_total = _coerce_float(today_state.get("actual_kwh"), default=0.0) or 0.0
+            expected_total = _coerce_float(today_state.get("expected_kwh"), default=0.0) or 0.0
+            raw_factor = actual_total / expected_total
+            damped_factor = 1.0 + ((raw_factor - 1.0) * _DEMAND_TODAY_ADJUSTMENT_WEIGHT)
+            runtime_state[_EXPECTED_DEMAND_ADJUSTMENT_KEY] = round(
+                min(1.35, max(0.75, damped_factor)),
+                3,
+            )
+
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
         data = await store.async_load() or {}
-        data[self.config_entry.entry_id] = {
+        entry_state = {
             **(data.get(self.config_entry.entry_id, {}) or {}),
             "manual_temperature": runtime_state.get("manual_temperature"),
             "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
@@ -1032,14 +1071,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
-            "hourly_demand_table": runtime_state.get("hourly_demand_table", {}),
-            "hourly_demand_observed_slots": runtime_state.get("hourly_demand_observed_slots", []),
-            "hourly_demand_adjustment_factor": runtime_state.get("hourly_demand_adjustment_factor", 1.0),
-            "hourly_demand_last_value": runtime_state.get("hourly_demand_last_value"),
-            "hourly_demand_last_hour_key": runtime_state.get("hourly_demand_last_hour_key"),
-            "hourly_demand_last_ts": runtime_state.get("hourly_demand_last_ts"),
+            _EXPECTED_DEMAND_STATS_KEY: runtime_state.get(_EXPECTED_DEMAND_STATS_KEY, {}),
+            _EXPECTED_DEMAND_TABLE_KEY: runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY, {}),
+            _EXPECTED_DEMAND_ADJUSTMENT_KEY: runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY, 1.0),
+            _EXPECTED_DEMAND_LAST_VALUE_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_VALUE_KEY),
+            _EXPECTED_DEMAND_LAST_HOUR_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_HOUR_KEY),
+            _EXPECTED_DEMAND_LAST_TS_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_TS_KEY),
+            _EXPECTED_DEMAND_TODAY_KEY: runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY, {}),
             "smoothed_eco_hours": runtime_state.get("smoothed_eco_hours"),
         }
+        for legacy_key in _LEGACY_DEMAND_KEYS:
+            entry_state.pop(legacy_key, None)
+        data[self.config_entry.entry_id] = entry_state
         await store.async_save(data)
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
@@ -1086,82 +1129,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not deltas:
             return 0.0
         return round(statistics.fmean(deltas), 2)
-
-    async def _async_get_hourly_energy_usage(
-        self,
-        entity_id: str,
-        *,
-        horizon_end: datetime | None = None,
-    ) -> dict[datetime, float]:
-        """Estimate hourly usage from a cumulative energy sensor by distributing deltas over time."""
-        lookback_days = _HISTORY_LOOKBACK_DAYS
-        end = horizon_end or dt_util.now()
-        start = (dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(lookback_days, 8)))
-
-        try:
-            def _load_history():
-                return history.get_significant_states(
-                    self.hass,
-                    start,
-                    end,
-                    [entity_id],
-                    include_start_time_state=True,
-                    significant_changes_only=False,
-                    no_attributes=True,
-                )
-
-            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
-        except Exception:
-            return {}
-
-        states = history_result.get(entity_id, [])
-        if len(states) < 2:
-            return {}
-
-        valid_states: list[tuple[datetime, float]] = []
-        for state in states:
-            value = _coerce_float(state.state)
-            if value is None:
-                continue
-            last_updated = getattr(state, "last_updated", None)
-            if last_updated is None:
-                continue
-            if dt_util.as_local(last_updated) > dt_util.as_local(dt_util.now()):
-                continue
-            valid_states.append((dt_util.as_local(last_updated), value))
-
-        if len(valid_states) < 2:
-            return {}
-
-        hourly_usage: dict[datetime, float] = {}
-        for (previous_time, previous_value), (current_time, current_value) in zip(valid_states, valid_states[1:], strict=False):
-            if current_time <= previous_time:
-                continue
-            delta_kwh = current_value - previous_value
-            if delta_kwh < 0:
-                continue
-
-            segment_seconds = (current_time - previous_time).total_seconds()
-            if segment_seconds <= 0:
-                continue
-
-            bucket_start = previous_time.replace(minute=0, second=0, microsecond=0)
-            while bucket_start < current_time:
-                bucket_end = bucket_start + timedelta(hours=1)
-                overlap_start = max(previous_time, bucket_start)
-                overlap_end = min(current_time, bucket_end)
-                overlap_seconds = (overlap_end - overlap_start).total_seconds()
-                if overlap_seconds > 0:
-                    hourly_usage[bucket_start] = hourly_usage.get(bucket_start, 0.0) + (
-                        delta_kwh * (overlap_seconds / segment_seconds)
-                    )
-                bucket_start = bucket_end
-
-        return {
-            hour_start: round(usage_kwh, 6)
-            for hour_start, usage_kwh in hourly_usage.items()
-            if usage_kwh >= 0
-        }
 
     def _get_manual_thermostat_setpoint(self) -> float:
         runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
@@ -3540,61 +3507,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if overlap_end <= overlap_start:
             return 0.0
         return (overlap_end - overlap_start).total_seconds() / 3600
-
-
-def _robust_hourly_demand(values: list[float]) -> float | None:
-    valid_values = sorted(
-        value
-        for value in values
-        if 0.0 <= value <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR
-    )
-    if not valid_values:
-        return None
-    if len(valid_values) < 3:
-        return round(statistics.median(valid_values), 4)
-
-    median_value = statistics.median(valid_values)
-    lower_bound = 0.0 if median_value < 0.1 else median_value * 0.35
-    upper_bound = min(
-        _DEMAND_PROFILE_MAX_KWH_PER_HOUR,
-        max(0.2, median_value * 2.75),
-    )
-    trimmed_values = [
-        value
-        for value in valid_values
-        if lower_bound <= value <= upper_bound
-    ]
-    return round(statistics.median(trimmed_values or valid_values), 4)
-
-
-def _calculate_demand_adjustment_factor(
-    *,
-    hourly_usage: dict[datetime, float],
-    table: dict[str, float],
-    now: datetime,
-) -> float:
-    today = dt_util.as_local(now).date()
-    completed_today = [
-        (dt_util.as_local(hour_start), usage_kwh)
-        for hour_start, usage_kwh in hourly_usage.items()
-        if dt_util.as_local(hour_start).date() == today
-        and dt_util.as_local(hour_start) + timedelta(hours=1) <= now
-        and 0.0 <= usage_kwh <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR
-    ]
-    if len(completed_today) < _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS:
-        return 1.0
-
-    actual_kwh = sum(usage_kwh for _, usage_kwh in completed_today)
-    expected_kwh = sum(
-        _demand_profile_value_for_time(table, hour_start) or 0.0
-        for hour_start, _ in completed_today
-    )
-    if expected_kwh < 0.5:
-        return 1.0
-
-    raw_factor = actual_kwh / expected_kwh
-    damped_factor = 1.0 + ((raw_factor - 1.0) * _DEMAND_TODAY_ADJUSTMENT_WEIGHT)
-    return round(min(1.35, max(0.75, damped_factor)), 3)
 
 
 def _demand_profile_value_for_time(table: dict[str, float], hour_start: datetime) -> float | None:

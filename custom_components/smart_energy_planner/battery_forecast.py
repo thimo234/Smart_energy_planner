@@ -100,6 +100,122 @@ def observed_hourly_demand_table(
     }
 
 
+def update_expected_hourly_demand_stats(
+    stats: dict[str, dict[str, Any]],
+    *,
+    slot_key: str,
+    measured_kwh: float,
+) -> dict[str, dict[str, Any]]:
+    """Update compact per-slot demand statistics with one completed hour."""
+
+    measured_value = _coerce_float(measured_kwh)
+    if measured_value is None or measured_value < 0:
+        return stats
+
+    updated = dict(stats)
+    raw_slot = stats.get(slot_key, {})
+    count = int(_coerce_float(raw_slot.get("count"), default=0.0) or 0)
+    previous_mean = _coerce_float(raw_slot.get("mean_kwh"))
+
+    if previous_mean is None:
+        mean_kwh = measured_value
+    else:
+        alpha = 0.45 if count < 3 else 0.25 if count < 12 else 0.15
+        mean_kwh = previous_mean + ((measured_value - previous_mean) * alpha)
+
+    updated[slot_key] = {
+        "count": count + 1,
+        "mean_kwh": round(mean_kwh, 4),
+    }
+    return updated
+
+
+def build_expected_hourly_demand_table(
+    stats: dict[str, dict[str, Any]] | None,
+    *,
+    daily_average_kwh: float,
+) -> dict[str, float]:
+    """Build a 168-slot expected demand profile from compact learned stats."""
+
+    stats = stats or {}
+    fallback_profile = _fallback_hourly_demand_profile(daily_average_kwh)
+    table: dict[str, float] = {}
+    for slot_index in range(HOURS_PER_WEEK):
+        weekday = slot_index // 24
+        hour = slot_index % 24
+        baseline = fallback_profile[hour]
+        table[str(slot_index)] = round(
+            _expected_hourly_demand_value(
+                stats=stats,
+                weekday=weekday,
+                hour=hour,
+                baseline=baseline,
+            ),
+            4,
+        )
+    return table
+
+
+def _expected_hourly_demand_value(
+    *,
+    stats: dict[str, dict[str, Any]],
+    weekday: int,
+    hour: int,
+    baseline: float,
+) -> float:
+    slot_key = str(weekday * 24 + hour)
+    exact = _stat_mean(stats.get(slot_key))
+    similar_weekdays = [5, 6] if weekday >= 5 else [0, 1, 2, 3, 4]
+    similar_values = _stat_means_for_hour(stats, hour=hour, weekdays=similar_weekdays)
+    all_hour_values = _stat_means_for_hour(stats, hour=hour, weekdays=range(7))
+
+    if exact is not None:
+        peer_values = _stat_means_for_hour(
+            stats,
+            hour=hour,
+            weekdays=[peer_weekday for peer_weekday in similar_weekdays if peer_weekday != weekday],
+        )
+        peer = _median(peer_values) if len(peer_values) >= 2 else None
+        if peer is not None and baseline > 0:
+            return max(0.0, (exact * 0.65) + (peer * 0.20) + (baseline * 0.15))
+        if baseline > 0:
+            return max(0.0, (exact * 0.80) + (baseline * 0.20))
+        return max(0.0, exact)
+
+    if len(similar_values) >= 2:
+        peer = _median(similar_values)
+        return max(0.0, (peer * 0.75) + (baseline * 0.25)) if baseline > 0 else max(0.0, peer)
+
+    if len(all_hour_values) >= 2:
+        peer = _median(all_hour_values)
+        return max(0.0, (peer * 0.65) + (baseline * 0.35)) if baseline > 0 else max(0.0, peer)
+
+    return max(0.0, baseline)
+
+
+def _stat_mean(raw_stat: dict[str, Any] | None) -> float | None:
+    if not raw_stat:
+        return None
+    count = int(_coerce_float(raw_stat.get("count"), default=0.0) or 0)
+    if count <= 0:
+        return None
+    value = _coerce_float(raw_stat.get("mean_kwh"))
+    return value if value is not None and value >= 0 else None
+
+
+def _stat_means_for_hour(
+    stats: dict[str, dict[str, Any]],
+    *,
+    hour: int,
+    weekdays: Iterable[int],
+) -> list[float]:
+    return [
+        value
+        for weekday in weekdays
+        if (value := _stat_mean(stats.get(str(weekday * 24 + hour)))) is not None
+    ]
+
+
 def _hourly_demand_value(
     *,
     table: dict[str, float],
@@ -158,12 +274,13 @@ def _same_hour_values(
     ]
 
 
-def populate_hourly_demand_table(
+def build_expected_hourly_demand_table_from_observations(
     table: dict[str, float],
     *,
     observed_slots: Iterable[str] | None = None,
+    daily_average_kwh: float = 0.0,
 ) -> dict[str, float]:
-    """Return observed demand slots plus same-hour estimates where available."""
+    """Build an expected table from legacy observed slots."""
 
     observed_keys = set(observed_slots or table.keys())
     observed_table = {
@@ -179,24 +296,10 @@ def populate_hourly_demand_table(
         }
 
     source_table = _stabilize_sparse_observed_table(observed_table)
-    populated = dict(source_table)
-    for slot_index in range(HOURS_PER_WEEK):
-        slot_key = str(slot_index)
-        if slot_key in populated:
-            continue
-        weekday = slot_index // 24
-        hour = slot_index % 24
-        peer_values = _same_hour_values(
-            source_table,
-            hour=hour,
-            weekdays=[5, 6] if weekday >= 5 else [0, 1, 2, 3, 4],
-        )
-        if not peer_values:
-            peer_values = _same_hour_values(source_table, hour=hour, weekdays=range(7))
-        if len(peer_values) >= 2:
-            populated[slot_key] = round(_median(peer_values), 4)
-
-    return populated
+    stats: dict[str, dict[str, Any]] = {}
+    for slot_key, value in source_table.items():
+        stats = update_expected_hourly_demand_stats(stats, slot_key=slot_key, measured_kwh=value)
+    return build_expected_hourly_demand_table(stats, daily_average_kwh=daily_average_kwh)
 
 
 def _stabilize_sparse_observed_table(table: dict[str, float]) -> dict[str, float]:
