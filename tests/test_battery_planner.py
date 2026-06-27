@@ -81,6 +81,62 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
+    def test_recent_battery_cycle_state_is_restored_after_restart(self):
+        now = datetime.now()
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+        coordinator.hass = types.SimpleNamespace(
+            data={
+                "smart_energy_planner_runtime": {
+                    "entry-1": {
+                        "battery_cycle_state": {
+                            "charge_session_started": True,
+                            "discharge_session_started": False,
+                            "initialized": True,
+                            "updated_at": (now - timedelta(minutes=10)).isoformat(),
+                        }
+                    }
+                }
+            }
+        )
+        coordinator._charge_session_started = False
+        coordinator._discharge_session_started = False
+        coordinator._battery_cycle_state_initialized = False
+
+        SmartEnergyPlannerCoordinator._restore_recent_battery_cycle_state(coordinator)
+
+        self.assertTrue(coordinator._charge_session_started)
+        self.assertFalse(coordinator._discharge_session_started)
+        self.assertTrue(coordinator._battery_cycle_state_initialized)
+
+    def test_stale_battery_cycle_state_is_recomputed_after_restart(self):
+        now = datetime.now()
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator.config_entry = types.SimpleNamespace(entry_id="entry-1")
+        coordinator.hass = types.SimpleNamespace(
+            data={
+                "smart_energy_planner_runtime": {
+                    "entry-1": {
+                        "battery_cycle_state": {
+                            "charge_session_started": True,
+                            "discharge_session_started": False,
+                            "initialized": True,
+                            "updated_at": (now - timedelta(minutes=31)).isoformat(),
+                        }
+                    }
+                }
+            }
+        )
+        coordinator._charge_session_started = False
+        coordinator._discharge_session_started = False
+        coordinator._battery_cycle_state_initialized = False
+
+        SmartEnergyPlannerCoordinator._restore_recent_battery_cycle_state(coordinator)
+
+        self.assertFalse(coordinator._charge_session_started)
+        self.assertFalse(coordinator._discharge_session_started)
+        self.assertFalse(coordinator._battery_cycle_state_initialized)
+
     def test_runtime_error_fallback_uses_valid_battery_enum_mode(self):
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})

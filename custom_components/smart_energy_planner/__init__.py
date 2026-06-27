@@ -117,6 +117,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "battery_profit_tracked_energy_kwh": persisted_state.get("battery_profit_tracked_energy_kwh", 0.0),
         "battery_profit_last_energy_kwh": persisted_state.get("battery_profit_last_energy_kwh"),
         "battery_profit_last_updated": persisted_state.get("battery_profit_last_updated"),
+        "battery_cycle_state": persisted_state.get("battery_cycle_state", {}),
         "expected_hourly_demand_stats": persisted_state.get("expected_hourly_demand_stats", {}),
         "expected_hourly_demand_table": persisted_state.get("expected_hourly_demand_table", {}),
         "expected_hourly_demand_adjustment_factor": persisted_state.get(

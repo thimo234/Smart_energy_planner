@@ -133,6 +133,8 @@ _EXPECTED_DEMAND_LAST_VALUE_KEY = "expected_hourly_demand_last_value"
 _EXPECTED_DEMAND_LAST_HOUR_KEY = "expected_hourly_demand_last_hour_key"
 _EXPECTED_DEMAND_LAST_TS_KEY = "expected_hourly_demand_last_ts"
 _EXPECTED_DEMAND_TODAY_KEY = "expected_hourly_demand_today"
+_BATTERY_CYCLE_STATE_KEY = "battery_cycle_state"
+_BATTERY_CYCLE_STATE_MAX_RESTORE_AGE = timedelta(minutes=30)
 _LEGACY_DEMAND_KEYS = (
     "hourly_demand_table",
     "hourly_demand_observed_slots",
@@ -170,6 +172,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._charge_session_started: bool = False
         self._discharge_session_started: bool = False
         self._battery_cycle_state_initialized: bool = False
+        self._restore_recent_battery_cycle_state()
+
+    def _restore_recent_battery_cycle_state(self) -> None:
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        cycle_state = runtime_state.get(_BATTERY_CYCLE_STATE_KEY)
+        if not isinstance(cycle_state, dict):
+            return
+
+        updated_at_raw = cycle_state.get("updated_at")
+        updated_at = dt_util.parse_datetime(updated_at_raw) if isinstance(updated_at_raw, str) else None
+        if updated_at is None:
+            return
+        if dt_util.as_local(dt_util.now()) - dt_util.as_local(updated_at) > _BATTERY_CYCLE_STATE_MAX_RESTORE_AGE:
+            return
+
+        self._charge_session_started = bool(cycle_state.get("charge_session_started", False))
+        self._discharge_session_started = bool(cycle_state.get("discharge_session_started", False))
+        if self._charge_session_started and self._discharge_session_started:
+            self._discharge_session_started = False
+        self._battery_cycle_state_initialized = bool(
+            cycle_state.get("initialized", True)
+            or self._charge_session_started
+            or self._discharge_session_started
+        )
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -196,6 +222,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             _LOGGER.info("Smart Energy Planner: cancelling source error retry")
             self._source_error_retry_unsub()
             self._source_error_retry_unsub = None
+
+    def _store_battery_cycle_state_snapshot(self, now: datetime) -> None:
+        if not hasattr(self, "hass"):
+            return
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+            self.config_entry.entry_id,
+            {},
+        )
+        runtime_state[_BATTERY_CYCLE_STATE_KEY] = {
+            "charge_session_started": bool(getattr(self, "_charge_session_started", False)),
+            "discharge_session_started": bool(getattr(self, "_discharge_session_started", False)),
+            "initialized": bool(getattr(self, "_battery_cycle_state_initialized", False)),
+            "updated_at": dt_util.as_local(now).isoformat(),
+        }
 
     @property
     def _config(self) -> dict[str, Any]:
@@ -644,6 +684,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     import_price=current_price,
                     export_price=export_current_price,
                 )
+            if planner_kind == PLANNER_KIND_BATTERY:
+                runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+                    self.config_entry.entry_id,
+                    {},
+                )
+                self._store_battery_cycle_state_snapshot(now)
+                await self._async_persist_runtime_state(runtime_state)
             return result
         except Exception as err:
             _LOGGER.exception("Planner update failed")
@@ -1071,6 +1118,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
             "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
+            _BATTERY_CYCLE_STATE_KEY: runtime_state.get(_BATTERY_CYCLE_STATE_KEY, {}),
             _EXPECTED_DEMAND_STATS_KEY: runtime_state.get(_EXPECTED_DEMAND_STATS_KEY, {}),
             _EXPECTED_DEMAND_TABLE_KEY: runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY, {}),
             _EXPECTED_DEMAND_ADJUSTMENT_KEY: runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY, 1.0),
@@ -3263,6 +3311,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._discharge_session_started = True
         self._charge_session_started = charge_session_started and not battery_is_full
         self._battery_cycle_state_initialized = True
+        self._store_battery_cycle_state_snapshot(now)
 
         self._update_active_charge_phase_state(
             now=now,
