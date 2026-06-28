@@ -5,6 +5,7 @@ from test_support import install_package_stub
 
 install_package_stub()
 from custom_components.smart_energy_planner.battery_forecast import (
+    align_price_responsive_demand_to_cheap_hours,
     build_expected_hourly_demand_table,
     build_expected_hourly_demand_table_from_observations,
     build_fallback_solar_windows_for_day,
@@ -15,9 +16,57 @@ from custom_components.smart_energy_planner.battery_forecast import (
     update_expected_hourly_demand_stats,
 )
 from custom_components.smart_energy_planner.battery_models import SolarWindow
+from custom_components.smart_energy_planner.price_models import PlannerWindow
 
 
 class BatteryForecastTest(unittest.TestCase):
+    def test_price_responsive_demand_moves_peak_to_cheapest_hour(self):
+        day = datetime(2026, 6, 29)
+        demand = []
+        prices = []
+        for hour in range(24):
+            start = day + timedelta(hours=hour)
+            demand.append(
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "estimated_kwh": 3.0 if hour == 20 else 0.5,
+                }
+            )
+            prices.append(
+                PlannerWindow(
+                    start=start,
+                    end=start + timedelta(hours=1),
+                    price=0.10 if hour == 3 else 0.45,
+                )
+            )
+
+        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
+        adjusted_values = [float(slot["estimated_kwh"]) for slot in adjusted]
+
+        self.assertLess(adjusted_values[20], 3.0)
+        self.assertGreater(adjusted_values[3], 0.5)
+        self.assertEqual(round(sum(adjusted_values), 3), round(sum(float(slot["estimated_kwh"]) for slot in demand), 3))
+
+    def test_price_responsive_demand_keeps_flat_profile_unchanged(self):
+        day = datetime(2026, 6, 29)
+        demand = []
+        prices = []
+        for hour in range(24):
+            start = day + timedelta(hours=hour)
+            demand.append(
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "estimated_kwh": 0.7,
+                }
+            )
+            prices.append(PlannerWindow(start=start, end=start + timedelta(hours=1), price=0.10 + hour))
+
+        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
+
+        self.assertEqual(adjusted, demand)
+
     def test_sum_remaining_solar_until_scales_partial_overlap(self):
         now = datetime(2026, 5, 20, 10, 30)
         until = datetime(2026, 5, 20, 11, 0)

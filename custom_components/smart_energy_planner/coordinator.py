@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .battery_forecast import (
+    align_price_responsive_demand_to_cheap_hours,
     build_energy_balance_slots,
     build_expected_hourly_demand_table,
     build_fallback_solar_windows,
@@ -1435,6 +1436,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand_table=hourly_demand_table,
             demand_adjustment_factor=demand_adjustment_factor,
             horizon_end=planning_horizon_end,
+        )
+        estimated_hourly_home_demand = align_price_responsive_demand_to_cheap_hours(
+            estimated_hourly_home_demand,
+            all_windows,
         )
         demand_safety_margin = (
             self._battery_demand_safety_margin()

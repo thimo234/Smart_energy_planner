@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, cast
 
 from .battery_models import SolarWindow
@@ -78,6 +78,111 @@ def build_hourly_home_demand_forecast(
             )
 
     return forecast
+
+
+def align_price_responsive_demand_to_cheap_hours(
+    hourly_demand: list[dict[str, str | float]],
+    price_windows: list[Any],
+) -> list[dict[str, str | float]]:
+    """Move learned flexible demand peaks to the cheapest matching day hours."""
+
+    if len(hourly_demand) < 3 or len(price_windows) < 3:
+        return hourly_demand
+
+    demand_by_day: dict[date, list[dict[str, str | float]]] = {}
+    for slot in hourly_demand:
+        slot_start = _parse_datetime(slot.get("start"))
+        if slot_start is None:
+            continue
+        demand_by_day.setdefault(slot_start.date(), []).append(slot)
+
+    adjusted = [dict(slot) for slot in hourly_demand]
+    adjusted_by_start = {
+        str(slot.get("start")): slot
+        for slot in adjusted
+    }
+    for day_slots in demand_by_day.values():
+        priced_slots: list[tuple[dict[str, str | float], datetime, datetime, float, float]] = []
+        for slot in day_slots:
+            slot_start = _parse_datetime(slot.get("start"))
+            slot_end = _parse_datetime(slot.get("end"))
+            demand_kwh = _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
+            if slot_start is None or slot_end is None or demand_kwh <= 0:
+                continue
+            price = _optional_window_price(
+                start=slot_start,
+                end=slot_end,
+                windows=price_windows,
+            )
+            if price is not None:
+                priced_slots.append((slot, slot_start, slot_end, demand_kwh, price))
+
+        if len(priced_slots) < 3:
+            continue
+
+        demand_values = [demand_kwh for _, _, _, demand_kwh, _ in priced_slots]
+        median_demand = _median(demand_values)
+        high_values = sorted(demand_values)
+        upper_quartile = high_values[int(len(high_values) * 0.75)]
+        peak_threshold = max(median_demand + 0.25, upper_quartile)
+        flexible_by_start = {
+            slot_start: max(0.0, demand_kwh - peak_threshold)
+            for _, slot_start, _, demand_kwh, _ in priced_slots
+        }
+        flexible_kwh = sum(flexible_by_start.values())
+        max_flexible_kwh = sum(demand_values) * 0.35
+        flexible_kwh = min(flexible_kwh, max_flexible_kwh)
+        if flexible_kwh <= 0.05:
+            continue
+
+        source_total = sum(flexible_by_start.values())
+        if source_total <= 0:
+            continue
+
+        target_count = max(1, min(len(priced_slots), sum(1 for value in flexible_by_start.values() if value > 0)))
+        cheapest_slots = sorted(priced_slots, key=lambda item: (item[4], item[1]))[:target_count]
+        per_target_kwh = flexible_kwh / len(cheapest_slots)
+
+        for slot, slot_start, _, demand_kwh, _ in priced_slots:
+            slot_key = slot_start.isoformat()
+            adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+            if adjusted_slot is None:
+                continue
+            source_flexible = flexible_by_start.get(slot_start, 0.0)
+            removed_kwh = flexible_kwh * (source_flexible / source_total) if source_flexible > 0 else 0.0
+            adjusted_slot["estimated_kwh"] = round(max(0.0, demand_kwh - removed_kwh), 3)
+            adjusted_by_start[slot_key] = adjusted_slot
+
+        for slot, slot_start, _, _, _ in cheapest_slots:
+            adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+            if adjusted_slot is None:
+                continue
+            adjusted_slot["estimated_kwh"] = round(
+                float(adjusted_slot.get("estimated_kwh", 0.0)) + per_target_kwh,
+                3,
+            )
+
+    return adjusted
+
+
+def _optional_window_price(
+    *,
+    start: datetime,
+    end: datetime,
+    windows: list[Any],
+) -> float | None:
+    weighted_price = 0.0
+    weighted_hours = 0.0
+    for window in windows:
+        overlap_hours = _overlap_hours(start, end, window.start, window.end)
+        if overlap_hours <= 0:
+            continue
+        weighted_price += float(window.price) * overlap_hours
+        weighted_hours += overlap_hours
+
+    if weighted_hours <= 0:
+        return None
+    return round(weighted_price / weighted_hours, 6)
 
 
 def observed_hourly_demand_table(
