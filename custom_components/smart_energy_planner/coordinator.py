@@ -2653,6 +2653,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     if slot_end in selected_solar_starts:
                         charge_start = slot_end - timedelta(hours=usable_hours)
                     charge_end = charge_start + timedelta(hours=usable_hours)
+                if charge_safety_margin > 0 and usable_hours > 0:
+                    buffered_hours = min(slot_hours, usable_hours * (1.0 + charge_safety_margin))
+                    charge_start = max(active_start, charge_end - timedelta(hours=buffered_hours))
+                    usable_hours = max((charge_end - charge_start).total_seconds() / 3600, 0.0)
                 planned_solar_charge_windows.append(
                     {
                         "start": charge_start.isoformat(),
