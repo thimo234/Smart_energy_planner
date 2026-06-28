@@ -84,7 +84,7 @@ def align_price_responsive_demand_to_cheap_hours(
     hourly_demand: list[dict[str, str | float]],
     price_windows: list[Any],
 ) -> list[dict[str, str | float]]:
-    """Move learned flexible demand peaks to the cheapest matching day hours."""
+    """Move learned flexible demand from expensive hours to cheap matching day hours."""
 
     if len(hourly_demand) < 3 or len(price_windows) < 3:
         return hourly_demand
@@ -129,40 +129,121 @@ def align_price_responsive_demand_to_cheap_hours(
             slot_start: max(0.0, demand_kwh - peak_threshold)
             for _, slot_start, _, demand_kwh, _ in priced_slots
         }
-        flexible_kwh = sum(flexible_by_start.values())
-        max_flexible_kwh = sum(demand_values) * 0.35
-        flexible_kwh = min(flexible_kwh, max_flexible_kwh)
-        if flexible_kwh <= 0.05:
-            continue
-
+        peak_flexible_kwh = sum(flexible_by_start.values())
+        max_peak_flexible_kwh = sum(demand_values) * 0.35
+        peak_flexible_kwh = min(peak_flexible_kwh, max_peak_flexible_kwh)
         source_total = sum(flexible_by_start.values())
-        if source_total <= 0:
-            continue
+        if peak_flexible_kwh > 0.05 and source_total > 0:
+            target_count = max(1, min(len(priced_slots), sum(1 for value in flexible_by_start.values() if value > 0)))
+            cheapest_slots = sorted(priced_slots, key=lambda item: (item[4], item[1]))[:target_count]
+            per_target_kwh = peak_flexible_kwh / len(cheapest_slots)
 
-        target_count = max(1, min(len(priced_slots), sum(1 for value in flexible_by_start.values() if value > 0)))
-        cheapest_slots = sorted(priced_slots, key=lambda item: (item[4], item[1]))[:target_count]
-        per_target_kwh = flexible_kwh / len(cheapest_slots)
+            for slot, slot_start, _, demand_kwh, _ in priced_slots:
+                slot_key = slot_start.isoformat()
+                adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+                if adjusted_slot is None:
+                    continue
+                source_flexible = flexible_by_start.get(slot_start, 0.0)
+                removed_kwh = peak_flexible_kwh * (source_flexible / source_total) if source_flexible > 0 else 0.0
+                adjusted_slot["estimated_kwh"] = round(max(0.0, demand_kwh - removed_kwh), 3)
+                adjusted_by_start[slot_key] = adjusted_slot
 
-        for slot, slot_start, _, demand_kwh, _ in priced_slots:
-            slot_key = slot_start.isoformat()
-            adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
-            if adjusted_slot is None:
-                continue
-            source_flexible = flexible_by_start.get(slot_start, 0.0)
-            removed_kwh = flexible_kwh * (source_flexible / source_total) if source_flexible > 0 else 0.0
-            adjusted_slot["estimated_kwh"] = round(max(0.0, demand_kwh - removed_kwh), 3)
-            adjusted_by_start[slot_key] = adjusted_slot
+            for slot, _, _, _, _ in cheapest_slots:
+                adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+                if adjusted_slot is None:
+                    continue
+                adjusted_slot["estimated_kwh"] = round(
+                    float(adjusted_slot.get("estimated_kwh", 0.0)) + per_target_kwh,
+                    3,
+                )
 
-        for slot, slot_start, _, _, _ in cheapest_slots:
-            adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
-            if adjusted_slot is None:
-                continue
-            adjusted_slot["estimated_kwh"] = round(
-                float(adjusted_slot.get("estimated_kwh", 0.0)) + per_target_kwh,
-                3,
-            )
+        _shift_baseline_demand_away_from_expensive_hours(
+            adjusted_by_start=adjusted_by_start,
+            priced_slots=priced_slots,
+        )
 
     return adjusted
+
+
+def _shift_baseline_demand_away_from_expensive_hours(
+    *,
+    adjusted_by_start: dict[str, dict[str, str | float]],
+    priced_slots: list[tuple[dict[str, str | float], datetime, datetime, float, float]],
+) -> None:
+    prices = [price for _, _, _, _, price in priced_slots]
+    price_spread = max(prices) - min(prices)
+    if price_spread < 0.05:
+        return
+
+    bucket_size = max(1, len(priced_slots) // 4)
+    sorted_by_price = sorted(priced_slots, key=lambda item: (item[4], item[1]))
+    cheap_slots = sorted_by_price[:bucket_size]
+    expensive_slots = sorted_by_price[-bucket_size:]
+    median_price = _median(prices)
+    max_price = max(prices)
+    if max_price <= median_price:
+        return
+
+    before_total = sum(
+        float(adjusted_by_start.get(str(slot.get("start")), {}).get("estimated_kwh", 0.0))
+        for slot, _, _, _, _ in priced_slots
+    )
+    removals: list[tuple[dict[str, str | float], float]] = []
+    for slot, _, _, _, price in expensive_slots:
+        adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+        if adjusted_slot is None:
+            continue
+        current_kwh = max(0.0, float(adjusted_slot.get("estimated_kwh", 0.0)))
+        if current_kwh <= 0.05 or price <= median_price:
+            continue
+        price_weight = (price - median_price) / (max_price - median_price)
+        removable_kwh = min(current_kwh * 0.25 * price_weight, max(0.0, current_kwh - 0.05))
+        if removable_kwh > 0:
+            removals.append((adjusted_slot, removable_kwh))
+
+    shifted_kwh = min(sum(amount for _, amount in removals), before_total * 0.20)
+    if shifted_kwh <= 0.05:
+        return
+
+    source_total = sum(amount for _, amount in removals)
+    for adjusted_slot, removable_kwh in removals:
+        removed_kwh = shifted_kwh * (removable_kwh / source_total)
+        adjusted_slot["estimated_kwh"] = round(
+            max(0.0, float(adjusted_slot.get("estimated_kwh", 0.0)) - removed_kwh),
+            3,
+        )
+
+    cheap_weights = [
+        max(0.0, median_price - price)
+        for _, _, _, _, price in cheap_slots
+    ]
+    weight_total = sum(cheap_weights)
+    if weight_total <= 0:
+        cheap_weights = [1.0 for _ in cheap_slots]
+        weight_total = float(len(cheap_slots))
+
+    for (slot, _, _, _, _), weight in zip(cheap_slots, cheap_weights, strict=False):
+        adjusted_slot = adjusted_by_start.get(str(slot.get("start")))
+        if adjusted_slot is None:
+            continue
+        added_kwh = shifted_kwh * (weight / weight_total)
+        adjusted_slot["estimated_kwh"] = round(
+            float(adjusted_slot.get("estimated_kwh", 0.0)) + added_kwh,
+            3,
+        )
+
+    after_total = sum(
+        float(adjusted_by_start.get(str(slot.get("start")), {}).get("estimated_kwh", 0.0))
+        for slot, _, _, _, _ in priced_slots
+    )
+    rounding_delta = round(before_total - after_total, 3)
+    if abs(rounding_delta) >= 0.001:
+        first_cheap_slot = adjusted_by_start.get(str(cheap_slots[0][0].get("start")))
+        if first_cheap_slot is not None:
+            first_cheap_slot["estimated_kwh"] = round(
+                max(0.0, float(first_cheap_slot.get("estimated_kwh", 0.0)) + rounding_delta),
+                3,
+            )
 
 
 def _optional_window_price(

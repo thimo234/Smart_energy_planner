@@ -48,7 +48,7 @@ class BatteryForecastTest(unittest.TestCase):
         self.assertGreater(adjusted_values[3], 0.5)
         self.assertEqual(round(sum(adjusted_values), 3), round(sum(float(slot["estimated_kwh"]) for slot in demand), 3))
 
-    def test_price_responsive_demand_keeps_flat_profile_unchanged(self):
+    def test_price_responsive_demand_reduces_expensive_hours_even_for_flat_profile(self):
         day = datetime(2026, 6, 29)
         demand = []
         prices = []
@@ -62,6 +62,28 @@ class BatteryForecastTest(unittest.TestCase):
                 }
             )
             prices.append(PlannerWindow(start=start, end=start + timedelta(hours=1), price=0.10 + hour))
+
+        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
+        adjusted_values = [float(slot["estimated_kwh"]) for slot in adjusted]
+
+        self.assertLess(adjusted_values[23], 0.7)
+        self.assertGreater(adjusted_values[0], 0.7)
+        self.assertEqual(round(sum(adjusted_values), 3), round(sum(float(slot["estimated_kwh"]) for slot in demand), 3))
+
+    def test_price_responsive_demand_keeps_flat_profile_when_prices_are_flat(self):
+        day = datetime(2026, 6, 29)
+        demand = []
+        prices = []
+        for hour in range(24):
+            start = day + timedelta(hours=hour)
+            demand.append(
+                {
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "estimated_kwh": 0.7,
+                }
+            )
+            prices.append(PlannerWindow(start=start, end=start + timedelta(hours=1), price=0.20))
 
         adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
 
