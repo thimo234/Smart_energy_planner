@@ -2304,11 +2304,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        current_usable_soc_percent = (
-            (current_usable_kwh / usable_capacity_kwh) * 100.0
-            if usable_capacity_kwh > 0
-            else 0.0
-        )
         if max_discharge_kw <= 0:
             first_charge_not_before = now
         else:
@@ -2405,6 +2400,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ]
             return min(primary_costs, default=None)
 
+        def _project_usable_energy_until(until: datetime) -> float:
+            projected_usable_kwh = current_usable_kwh
+            for slot in future_slots:
+                slot_start = cast(datetime, slot["start"])
+                slot_end = cast(datetime, slot["end"])
+                if slot_start >= until:
+                    break
+                if slot_end <= now:
+                    continue
+                active_start = max(slot_start, now)
+                active_end = min(slot_end, until)
+                active_hours = max((active_end - active_start).total_seconds() / 3600, 0.0)
+                if active_hours <= 0:
+                    continue
+                slot_hours = max(float(slot.get("hours", active_hours)), 1e-9)
+                active_fraction = min(1.0, active_hours / slot_hours)
+                net_battery_demand_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * active_fraction
+                discharge_kwh = min(max_discharge_kw * active_hours, net_battery_demand_kwh)
+                projected_usable_kwh = max(0.0, projected_usable_kwh - discharge_kwh)
+            return projected_usable_kwh
+
         def _append_charge_candidates(
             selected_for_cycle: list[dict[str, Any]],
             candidates: list[dict[str, Any]],
@@ -2472,8 +2488,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if best_index is None:
                 break
 
+            projected_usable_at_charge_kwh = _project_usable_energy_until(cast(datetime, best_candidate["start"]))
             if cycle_index == 0 and cursor <= now:
-                target_kwh = max(0.0, usable_capacity_kwh - current_usable_kwh)
+                target_kwh = max(0.0, usable_capacity_kwh - projected_usable_at_charge_kwh)
             elif previous_charge_end is not None:
                 target_kwh = min(
                     usable_capacity_kwh,
@@ -2547,9 +2564,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 and self._active_charge_phase_end > now
                 and cursor <= now
             )
+            projected_usable_soc_percent = (
+                (projected_usable_at_charge_kwh / usable_capacity_kwh) * 100.0
+                if usable_capacity_kwh > 0
+                else 0.0
+            )
             regular_grid_topup_allowed = (
                 not self._discharge_session_started
-                and current_usable_soc_percent < 95.0
+                and projected_usable_soc_percent < 95.0
             )
             if charged_kwh < target_kwh and (regular_grid_topup_allowed or active_charge_cycle_needs_topup):
                 valley_block_slots = [
