@@ -144,7 +144,7 @@ _LEGACY_DEMAND_KEYS = (
     "hourly_demand_last_hour_key",
     "hourly_demand_last_ts",
 )
-_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT = 30.0
+_BATTERY_DEPLETION_EPSILON_KWH = 0.05
 _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT = 90.0
 _BATTERY_NEAR_FULL_GRID_TOPUP_BLOCK_PERCENT = 5.0
 _MIN_CHARGE_WINDOW_GAP = timedelta(hours=3)
@@ -2311,19 +2311,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         if max_discharge_kw <= 0:
             first_charge_not_before = now
-        elif self._discharge_session_started and current_usable_soc_percent > _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT:
-            recharge_time = self._estimate_battery_recharge_threshold_time(
-                slots=future_slots,
-                now=now,
-                initial_usable_energy_kwh=current_usable_kwh,
-                usable_capacity_kwh=usable_capacity_kwh,
-                max_discharge_kw=max_discharge_kw,
-            )
-            if recharge_time is None:
-                return planned_solar_charge_windows, planned_grid_charge_windows
-            first_charge_not_before = recharge_time
-        elif current_usable_kwh > usable_capacity_kwh * (_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT / 100.0):
-            first_charge_not_before = now + timedelta(hours=current_usable_kwh / max_discharge_kw)
         else:
             first_charge_not_before = now
 
@@ -2833,19 +2820,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return None
         return now + timedelta(hours=initial_usable_energy_kwh / max_discharge_kw)
 
-    def _estimate_battery_recharge_threshold_time(
+    def _estimate_battery_depletion_time(
         self,
         *,
         slots: list[dict[str, Any]],
         now: datetime,
         initial_usable_energy_kwh: float,
-        usable_capacity_kwh: float,
         max_discharge_kw: float,
+        floor_kwh: float = _BATTERY_DEPLETION_EPSILON_KWH,
     ) -> datetime | None:
-        threshold_kwh = usable_capacity_kwh * (_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT / 100.0)
-        if initial_usable_energy_kwh <= threshold_kwh:
+        floor_kwh = max(0.0, floor_kwh)
+        if initial_usable_energy_kwh <= floor_kwh:
             return now
-        if usable_capacity_kwh <= 0 or max_discharge_kw <= 0:
+        if max_discharge_kw <= 0:
             return None
 
         usable_energy_kwh = initial_usable_energy_kwh
@@ -2864,8 +2851,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             discharge_kwh = min(max_discharge_kw * active_hours, active_demand_kwh)
             if discharge_kwh <= 0:
                 continue
-            if usable_energy_kwh - discharge_kwh <= threshold_kwh:
-                needed_kwh = usable_energy_kwh - threshold_kwh
+            if usable_energy_kwh - discharge_kwh <= floor_kwh:
+                needed_kwh = usable_energy_kwh - floor_kwh
                 discharge_rate_kw = discharge_kwh / active_hours
                 if discharge_rate_kw <= 0:
                     return active_start
@@ -2944,19 +2931,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         charge_session_started = getattr(self, "_charge_session_started", False)
         discharge_session_started = self._discharge_session_started
         cycle_state_initialized = getattr(self, "_battery_cycle_state_initialized", False)
-        recharge_reached = (
-            battery_soc_percent is not None
-            and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
-        ) or (
-            battery_soc_percent is None
-            and usable_capacity_kwh > 0
-            and initial_usable_energy_kwh <= usable_capacity_kwh * (_BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT / 100.0)
-        )
+        usable_energy_depleted = initial_usable_energy_kwh <= _BATTERY_DEPLETION_EPSILON_KWH
         restored_discharge_latch = (
             getattr(self, "_battery_cycle_state_restored_recent", False)
             and discharge_session_started
         )
-        if cycle_state_initialized and not battery_is_full and recharge_reached and not restored_discharge_latch:
+        if cycle_state_initialized and not battery_is_full and usable_energy_depleted and not restored_discharge_latch:
             charge_session_started = True
             discharge_session_started = False
             self._charge_session_started = True
@@ -2966,30 +2946,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             discharge_session_started = False
             self._discharge_session_started = False
         elif discharge_session_started and not battery_is_full:
-            recharge_allowed = (
-                battery_soc_percent is not None
-                and battery_soc_percent <= _BATTERY_RECHARGE_SOC_THRESHOLD_PERCENT
-            )
-            if recharge_allowed and not restored_discharge_latch:
+            if usable_energy_depleted and not restored_discharge_latch:
                 discharge_session_started = False
                 self._discharge_session_started = False
             else:
-                recharge_time = self._estimate_battery_recharge_threshold_time(
+                depletion_time = self._estimate_battery_depletion_time(
                     slots=slots,
                     now=now,
                     initial_usable_energy_kwh=initial_usable_energy_kwh,
-                    usable_capacity_kwh=usable_capacity_kwh,
                     max_discharge_kw=max_discharge_kw,
                 )
-                solar_charge_starts = {
-                    start: window
-                    for start, window in solar_charge_starts.items()
-                    if recharge_time is not None and start >= recharge_time
-                }
                 grid_charge_starts = {
                     start: window
                     for start, window in grid_charge_starts.items()
-                    if recharge_time is not None and start >= recharge_time
+                    if depletion_time is not None and start >= depletion_time
                 }
                 charge_starts = {
                     **solar_charge_starts,
@@ -2998,7 +2968,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 charge_windows = [
                     window
                     for window in charge_windows
-                    if recharge_time is not None and cast(datetime, window["start"]) >= recharge_time
+                    if (
+                        str(window.get("mode")) == "laden_met_zonne_energie"
+                        or (depletion_time is not None and cast(datetime, window["start"]) >= depletion_time)
+                    )
                 ]
                 self._active_charge_phase_end = None
                 self._active_charge_phase_mode = "accu_uit"
