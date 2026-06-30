@@ -25,7 +25,7 @@ def build_hourly_home_demand_forecast(
 
     fallback_profile = _fallback_hourly_demand_profile(non_heating_daily_average_kwh)
     table = hourly_demand_table or {}
-    adjustment_factor = min(1.35, max(0.75, demand_adjustment_factor))
+    adjustment_factor = min(1.35, max(0.5, demand_adjustment_factor))
 
     heating_profile = [
         0.035, 0.03, 0.03, 0.03, 0.035, 0.045,

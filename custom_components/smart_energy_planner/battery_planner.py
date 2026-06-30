@@ -106,6 +106,26 @@ def collapse_short_off_mode_windows(
     collapsed: list[dict[str, str | float]] = []
     ordered_windows = sorted(windows, key=lambda item: str(item.get("start", "")))
     for index, window in enumerate(ordered_windows):
+        if collapsed:
+            previous = collapsed[-1]
+            previous_end = _parse_datetime(previous.get("end"))
+            current_start = _parse_datetime(window.get("start"))
+            if previous_end is not None and current_start is not None and previous_end < current_start:
+                gap_duration = current_start - previous_end
+                previous_mode = _neighbor_active_mode(collapsed, len(collapsed) - 1)
+                next_mode = _neighbor_active_mode(ordered_windows, index)
+                replacement_mode = next_mode or previous_mode
+                if gap_duration <= max_duration and replacement_mode is not None:
+                    collapsed.append(
+                        {
+                            "start": previous_end.isoformat(),
+                            "end": current_start.isoformat(),
+                            "mode": replacement_mode,
+                            "price": window.get("price", previous.get("price", 0.0)),
+                            "usable_hours": round(gap_duration.total_seconds() / 3600, 3),
+                        }
+                    )
+
         collapsed_window = dict(window)
         mode = str(collapsed_window.get("mode", BATTERY_MODE_OFF))
         start = _parse_datetime(collapsed_window.get("start"))

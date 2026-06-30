@@ -204,6 +204,20 @@ class BatteryForecastTest(unittest.TestCase):
         first_slot = forecast[0]
         self.assertEqual(first_slot["estimated_kwh"], 1.35)
 
+    def test_build_hourly_home_demand_forecast_allows_strong_downward_today_adjustment(self):
+        now = datetime.now().astimezone()
+        hourly = {str(now.weekday() * 24 + hour): 1.0 for hour in range(24)}
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=24.0,
+            heating_estimate_kwh=0.0,
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
+            hourly_demand_table=hourly,
+            demand_adjustment_factor=0.25,
+        )
+
+        first_slot = forecast[0]
+        self.assertEqual(first_slot["estimated_kwh"], 0.5)
+
     def test_build_hourly_home_demand_forecast_matches_daily_average(self):
         now = datetime.now().astimezone()
         weekday = now.weekday()

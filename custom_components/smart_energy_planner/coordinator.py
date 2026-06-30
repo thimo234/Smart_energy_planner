@@ -125,8 +125,11 @@ _HISTORY_LOOKBACK_DAYS = 7
 _BATTERY_PROFIT_NOISE_FLOOR_KWH = 0.01
 _DEMAND_PROFILE_ALPHA = 0.35
 _DEMAND_PROFILE_MAX_KWH_PER_HOUR = 10.0
-_DEMAND_TODAY_ADJUSTMENT_WEIGHT = 0.35
+_DEMAND_TODAY_ADJUSTMENT_UP_WEIGHT = 0.35
+_DEMAND_TODAY_ADJUSTMENT_DOWN_WEIGHT = 0.70
 _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS = 3
+_DEMAND_TODAY_ADJUSTMENT_MIN_EXPECTED_KWH = 0.5
+_DEMAND_TODAY_PARTIAL_MIN_HOURS = 0.25
 _EXPECTED_DEMAND_STATS_KEY = "expected_hourly_demand_stats"
 _EXPECTED_DEMAND_TABLE_KEY = "expected_hourly_demand_table"
 _EXPECTED_DEMAND_ADJUSTMENT_KEY = "expected_hourly_demand_adjustment_factor"
@@ -1037,6 +1040,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             runtime_state[_EXPECTED_DEMAND_LAST_TS_KEY] = now.isoformat()
             runtime_state[_EXPECTED_DEMAND_STATS_KEY] = stats
             changed = True
+        else:
+            last_ts = dt_util.parse_datetime(last_ts_raw) if last_ts_raw else None
+            elapsed_hours = (
+                max(0.0, (now - last_ts).total_seconds() / 3600) if last_ts else 0.0
+            )
+            partial_delta = current_value - last_value
+            if (
+                elapsed_hours >= _DEMAND_TODAY_PARTIAL_MIN_HOURS
+                and 0.0 <= partial_delta <= _DEMAND_PROFILE_MAX_KWH_PER_HOUR
+            ):
+                current_hour_start = now.replace(minute=0, second=0, microsecond=0)
+                expected_kwh = _demand_profile_value_for_time(table, current_hour_start)
+                if expected_kwh is not None and expected_kwh > 0:
+                    partial_expected_kwh = expected_kwh * min(1.0, elapsed_hours)
+                    changed = self._refresh_today_demand_adjustment(
+                        runtime_state,
+                        now=now,
+                        partial_actual_kwh=partial_delta,
+                        partial_expected_kwh=partial_expected_kwh,
+                    ) or changed
 
         if changed or not table:
             table = build_expected_hourly_demand_table(
@@ -1091,16 +1114,56 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         if (
             today_state["completed_hours"] >= _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS
-            and _coerce_float(today_state.get("expected_kwh"), default=0.0) >= 0.5
+            and _coerce_float(today_state.get("expected_kwh"), default=0.0) >= _DEMAND_TODAY_ADJUSTMENT_MIN_EXPECTED_KWH
         ):
-            actual_total = _coerce_float(today_state.get("actual_kwh"), default=0.0) or 0.0
-            expected_total = _coerce_float(today_state.get("expected_kwh"), default=0.0) or 0.0
-            raw_factor = actual_total / expected_total
-            damped_factor = 1.0 + ((raw_factor - 1.0) * _DEMAND_TODAY_ADJUSTMENT_WEIGHT)
-            runtime_state[_EXPECTED_DEMAND_ADJUSTMENT_KEY] = round(
-                min(1.35, max(0.75, damped_factor)),
-                3,
-            )
+            self._refresh_today_demand_adjustment(runtime_state, now=now)
+
+    def _refresh_today_demand_adjustment(
+        self,
+        runtime_state: dict[str, Any],
+        *,
+        now: datetime,
+        partial_actual_kwh: float = 0.0,
+        partial_expected_kwh: float = 0.0,
+    ) -> bool:
+        today_key = dt_util.as_local(now).date().isoformat()
+        today_state = runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY)
+        if not isinstance(today_state, dict) or today_state.get("date") != today_key:
+            return False
+
+        completed_hours = int(today_state.get("completed_hours", 0))
+        expected_total = (
+            (_coerce_float(today_state.get("expected_kwh"), default=0.0) or 0.0)
+            + max(0.0, partial_expected_kwh)
+        )
+        if expected_total < _DEMAND_TODAY_ADJUSTMENT_MIN_EXPECTED_KWH:
+            return False
+        if completed_hours < _DEMAND_TODAY_ADJUSTMENT_MIN_COMPLETED_HOURS and partial_expected_kwh <= 0:
+            return False
+
+        actual_total = (
+            (_coerce_float(today_state.get("actual_kwh"), default=0.0) or 0.0)
+            + max(0.0, partial_actual_kwh)
+        )
+        raw_factor = actual_total / expected_total
+        weight = (
+            _DEMAND_TODAY_ADJUSTMENT_DOWN_WEIGHT
+            if raw_factor < 1.0
+            else _DEMAND_TODAY_ADJUSTMENT_UP_WEIGHT
+        )
+        damped_factor = 1.0 + ((raw_factor - 1.0) * weight)
+        new_factor = round(min(1.35, max(0.5, damped_factor)), 3)
+        previous_factor = _coerce_float(runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY), default=1.0)
+        if previous_factor == new_factor:
+            return False
+
+        runtime_state[_EXPECTED_DEMAND_ADJUSTMENT_KEY] = new_factor
+        today_state["last_adjustment_factor"] = new_factor
+        if partial_expected_kwh > 0:
+            today_state["partial_actual_kwh"] = round(max(0.0, partial_actual_kwh), 4)
+            today_state["partial_expected_kwh"] = round(max(0.0, partial_expected_kwh), 4)
+        runtime_state[_EXPECTED_DEMAND_TODAY_KEY] = today_state
+        return True
 
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
         store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)

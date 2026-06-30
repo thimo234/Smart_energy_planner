@@ -81,6 +81,31 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
+    def test_today_demand_adjustment_uses_partial_current_hour(self):
+        now = datetime(2026, 6, 30, 11, 30)
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        runtime_state = {
+            "expected_hourly_demand_adjustment_factor": 1.0,
+            "expected_hourly_demand_today": {
+                "date": now.date().isoformat(),
+                "actual_kwh": 1.0,
+                "expected_kwh": 2.0,
+                "completed_hours": 2,
+                "seen_slots": ["225", "226"],
+            },
+        }
+
+        changed = SmartEnergyPlannerCoordinator._refresh_today_demand_adjustment(
+            coordinator,
+            runtime_state,
+            now=now,
+            partial_actual_kwh=0.1,
+            partial_expected_kwh=0.5,
+        )
+
+        self.assertTrue(changed)
+        self.assertLess(runtime_state["expected_hourly_demand_adjustment_factor"], 0.75)
+
     def test_recent_battery_cycle_state_is_restored_after_restart(self):
         now = datetime.now()
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
@@ -513,6 +538,34 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertEqual(collapsed[0]["start"], start)
         self.assertEqual(collapsed[0]["end"], start + timedelta(hours=1))
         self.assertEqual(collapsed[0]["mode"], BATTERY_MODE_SOLAR_CHARGE)
+
+    def test_short_implicit_gap_between_charge_windows_is_filled(self):
+        start = datetime(2026, 6, 30, 11, 45)
+        first_end = start + timedelta(seconds=6.6528)
+        next_start = start + timedelta(minutes=15)
+        windows = [
+            {
+                "start": start.isoformat(),
+                "end": first_end.isoformat(),
+                "mode": BATTERY_MODE_GRID_CHARGE,
+                "price": 0.2545,
+                "usable_hours": 0.002,
+            },
+            {
+                "start": next_start.isoformat(),
+                "end": (next_start + timedelta(minutes=10)).isoformat(),
+                "mode": BATTERY_MODE_GRID_CHARGE,
+                "price": 0.2515,
+                "usable_hours": 0.165,
+            },
+        ]
+
+        collapsed = collapse_short_off_mode_windows(windows)
+
+        self.assertEqual(len(collapsed), 1)
+        self.assertEqual(collapsed[0]["start"], start.isoformat())
+        self.assertEqual(collapsed[0]["end"], (next_start + timedelta(minutes=10)).isoformat())
+        self.assertEqual(collapsed[0]["mode"], BATTERY_MODE_GRID_CHARGE)
 
     def test_long_off_mode_window_is_kept(self):
         start = datetime(2026, 6, 14, 10, 0)
