@@ -225,7 +225,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const pad = { top: 26, right: horizontalPad.right, bottom: 68, left: horizontalPad.left };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
-    const priceValues = priceWindows.flatMap((window) => [window.price]);
+    const displayPriceWindows = this.displayPriceWindows(priceWindows, plannerState, horizonStart, horizonEnd);
+    const priceValues = displayPriceWindows.flatMap((window) => [window.price]);
     const energyValues = [...demandPoints, ...solarPoints].map((point) => point.value);
     const minPrice = Math.min(...priceValues, 0);
     const maxPrice = Math.max(...priceValues, 0.01);
@@ -289,14 +290,17 @@ class SmartEnergyPlannerCard extends HTMLElement {
             `).join("")}
             <text x="${pad.left - 48}" y="${height - 20}" class="axis axis-muted label-right">&euro;</text>
             <text x="${pad.left - 40}" y="${height - 20}" class="axis axis-muted">kWh</text>
-            ${priceWindows.map((window) => {
+            ${displayPriceWindows.map((window) => {
               const xStart = x(window.start);
               const xEnd = x(window.end);
               const barWidth = Math.max(7, xEnd - xStart - 4);
               const yValue = yPrice(window.price);
               const barHeight = Math.max(2, (pad.top + plotHeight) - yValue);
               const selectTime = new Date((window.start.getTime() + window.end.getTime()) / 2);
-              const values = this.selectionValues(selectTime, priceWindows, demandPoints, solarPoints);
+              const values = {
+                ...this.selectionValues(selectTime, priceWindows, demandPoints, solarPoints),
+                price: window.price,
+              };
               const selectedMode = this.modeAtTime(modeBands, selectTime) || this.currentMode(plannerState, modeBands, selectTime);
               const isCurrentWindow = window.start <= now && window.end > now;
               return `
@@ -457,6 +461,30 @@ class SmartEnergyPlannerCard extends HTMLElement {
       .sort((a, b) => a.start - b.start);
   }
 
+  displayPriceWindows(priceWindows, plannerState, horizonStart, horizonEnd) {
+    const resolution = String(plannerState?.attributes?.price_resolution || "");
+    if (resolution !== "quarter_hourly") {
+      return priceWindows;
+    }
+
+    const windows = [];
+    const cursor = new Date(horizonStart);
+    cursor.setMinutes(0, 0, 0);
+
+    while (cursor < horizonEnd) {
+      const bucketStart = new Date(Math.max(cursor.getTime(), horizonStart.getTime()));
+      const nextHour = new Date(cursor.getTime() + 60 * 60 * 1000);
+      const bucketEnd = new Date(Math.min(nextHour.getTime(), horizonEnd.getTime()));
+      const price = this.weightedAveragePrice(bucketStart, bucketEnd, priceWindows);
+      if (price !== undefined) {
+        windows.push({ start: bucketStart, end: bucketEnd, price });
+      }
+      cursor.setHours(cursor.getHours() + 1);
+    }
+
+    return windows.length ? windows : priceWindows;
+  }
+
   extractPriceWindows(plannerState, priceState, horizonStart, horizonEnd) {
     return this.clipPriceWindows(
       this.extractAllPriceWindows(plannerState, priceState),
@@ -613,8 +641,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
       const p0 = coords[Math.max(0, index - 1)];
       const p3 = coords[Math.min(coords.length - 1, index + 2)];
       const dx = p2.x - p1.x;
-      const cp1x = p1.x + (dx * 0.35);
-      const cp2x = p2.x - (dx * 0.35);
+      const cp1x = p1.x + (dx * 0.16);
+      const cp2x = p2.x - (dx * 0.16);
       const slope1 = (p2.y - p0.y) / Math.max(1, p2.x - p0.x);
       const slope2 = (p3.y - p1.y) / Math.max(1, p3.x - p1.x);
       const cp1y = p1.y + (slope1 * (cp1x - p1.x));
