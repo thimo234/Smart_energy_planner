@@ -462,10 +462,22 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   displayPriceWindows(priceWindows, plannerState, horizonStart, horizonEnd) {
+    const horizonHours = Math.max(
+      1,
+      Math.ceil((horizonEnd.getTime() - horizonStart.getTime()) / (60 * 60 * 1000)),
+    );
     const hasSubHourlyWindows = priceWindows.some((window) => (
       window.end.getTime() - window.start.getTime()
     ) < 59 * 60 * 1000);
-    if (!hasSubHourlyWindows) {
+    const hasNonHourlyBoundaries = priceWindows.some((window) => (
+      window.start.getMinutes() !== 0
+      || window.start.getSeconds() !== 0
+      || window.end.getMinutes() !== 0
+      || window.end.getSeconds() !== 0
+    ));
+    const hasMoreThanHourlyWindows = priceWindows.length > horizonHours + 1;
+
+    if (!hasSubHourlyWindows && !hasNonHourlyBoundaries && !hasMoreThanHourlyWindows) {
       return priceWindows;
     }
 
