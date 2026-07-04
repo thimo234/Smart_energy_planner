@@ -442,7 +442,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     });
 
     windows.sort((a, b) => a.start - b.start);
-    return windows;
+    return this.normalizePriceWindowEnds(windows);
   }
 
   clipPriceWindows(priceWindows, horizonStart, horizonEnd) {
@@ -510,7 +510,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
   parsePriceEntry(entry, index, todayStart) {
     if (typeof entry === "number") {
       const start = new Date(todayStart.getTime() + index * 60 * 60 * 1000);
-      return { start, end: new Date(start.getTime() + 60 * 60 * 1000), price: entry };
+      return { start, end: undefined, price: entry };
     }
     if (!entry || typeof entry !== "object") {
       return undefined;
@@ -527,10 +527,39 @@ class SmartEnergyPlannerCard extends HTMLElement {
     if (!start || price === undefined) {
       return undefined;
     }
-    if (!end) {
-      end = new Date(start.getTime() + 60 * 60 * 1000);
-    }
     return { start, end, price };
+  }
+
+  normalizePriceWindowEnds(windows) {
+    return windows
+      .map((window, index) => {
+        const nextStart = windows[index + 1]?.start;
+        const inferredEnd = nextStart && nextStart > window.start
+          ? nextStart
+          : undefined;
+        const fallbackMs = this.inferPriceWindowDurationMs(windows, index);
+        const explicitEnd = window.end && window.end > window.start
+          ? window.end
+          : undefined;
+        const end = inferredEnd && (!explicitEnd || inferredEnd < explicitEnd)
+          ? inferredEnd
+          : explicitEnd || inferredEnd || new Date(window.start.getTime() + fallbackMs);
+        return { ...window, end };
+      })
+      .filter((window) => window.end > window.start);
+  }
+
+  inferPriceWindowDurationMs(windows, index) {
+    const intervals = [];
+    for (let cursor = Math.max(0, index - 3); cursor < Math.min(windows.length - 1, index + 3); cursor += 1) {
+      const current = windows[cursor];
+      const next = windows[cursor + 1];
+      const interval = next.start.getTime() - current.start.getTime();
+      if (interval > 0 && interval <= 60 * 60 * 1000) {
+        intervals.push(interval);
+      }
+    }
+    return intervals.length ? Math.min(...intervals) : 60 * 60 * 1000;
   }
 
   extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd) {
