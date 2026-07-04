@@ -23,6 +23,8 @@ from .battery_forecast import (
     build_fallback_solar_windows,
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
+    DEMAND_ADJUSTMENT_MAX_FACTOR,
+    DEMAND_ADJUSTMENT_MIN_FACTOR,
     extract_solar_windows,
     get_solar_day_end,
     merge_solar_windows,
@@ -1152,7 +1154,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             else _DEMAND_TODAY_ADJUSTMENT_UP_WEIGHT
         )
         damped_factor = 1.0 + ((raw_factor - 1.0) * weight)
-        new_factor = round(min(1.35, max(0.5, damped_factor)), 3)
+        new_factor = round(
+            min(DEMAND_ADJUSTMENT_MAX_FACTOR, max(DEMAND_ADJUSTMENT_MIN_FACTOR, damped_factor)),
+            3,
+        )
         previous_factor = _coerce_float(runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY), default=1.0)
         if previous_factor == new_factor:
             return False

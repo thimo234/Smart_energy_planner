@@ -216,7 +216,21 @@ class BatteryForecastTest(unittest.TestCase):
         )
 
         first_slot = forecast[0]
-        self.assertEqual(first_slot["estimated_kwh"], 0.5)
+        self.assertEqual(first_slot["estimated_kwh"], 0.25)
+
+    def test_build_hourly_home_demand_forecast_can_recover_after_hot_week(self):
+        now = datetime.now().astimezone()
+        hourly = {str(now.weekday() * 24 + hour): 2.0 for hour in range(24)}
+        forecast = build_hourly_home_demand_forecast(
+            non_heating_daily_average_kwh=48.0,
+            heating_estimate_kwh=0.0,
+            horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=24),
+            hourly_demand_table=hourly,
+            demand_adjustment_factor=0.25,
+        )
+
+        today_total = sum(float(slot["estimated_kwh"]) for slot in forecast[:24])
+        self.assertEqual(round(today_total, 1), 12.0)
 
     def test_build_hourly_home_demand_forecast_matches_daily_average(self):
         now = datetime.now().astimezone()

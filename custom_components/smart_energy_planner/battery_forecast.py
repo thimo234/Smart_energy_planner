@@ -11,6 +11,8 @@ from .battery_models import SolarWindow
 
 DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN = 0.20
 HOURS_PER_WEEK = 7 * 24
+DEMAND_ADJUSTMENT_MIN_FACTOR = 0.25
+DEMAND_ADJUSTMENT_MAX_FACTOR = 1.35
 
 
 def build_hourly_home_demand_forecast(
@@ -25,7 +27,10 @@ def build_hourly_home_demand_forecast(
 
     fallback_profile = _fallback_hourly_demand_profile(non_heating_daily_average_kwh)
     table = hourly_demand_table or {}
-    adjustment_factor = min(1.35, max(0.5, demand_adjustment_factor))
+    adjustment_factor = min(
+        DEMAND_ADJUSTMENT_MAX_FACTOR,
+        max(DEMAND_ADJUSTMENT_MIN_FACTOR, demand_adjustment_factor),
+    )
 
     heating_profile = [
         0.035, 0.03, 0.03, 0.03, 0.035, 0.045,
