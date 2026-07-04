@@ -81,7 +81,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       <ha-card>
         <div class="card">
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
-          ${this.renderSummary(priceWindows, demandPoints, solarPoints, modeBands, plannerState, now)}
+          ${this.renderSummary(priceWindows, demandPoints, solarPoints, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
@@ -188,9 +188,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return Math.max(430, Math.ceil(pad.left + pad.right + (horizonHours * 28)));
   }
 
-  renderSummary(priceWindows, demandPoints, solarPoints, modeBands, plannerState, now) {
+  renderSummary(priceWindows, demandPoints, solarPoints, now) {
     const currentValues = this.selectionValues(now, priceWindows, demandPoints, solarPoints);
-    const currentMode = this.currentMode(plannerState, modeBands, now);
 
     return `
       <div class="summary">
@@ -209,10 +208,6 @@ class SmartEnergyPlannerCard extends HTMLElement {
         <div class="metric">
           <span>Zon</span>
           <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
-        </div>
-        <div class="metric">
-          <span>Modus</span>
-          <strong data-selected-mode>${this.modeLabel(currentMode)}</strong>
         </div>
       </div>
     `;
