@@ -462,8 +462,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   displayPriceWindows(priceWindows, plannerState, horizonStart, horizonEnd) {
-    const resolution = String(plannerState?.attributes?.price_resolution || "");
-    if (resolution !== "quarter_hourly") {
+    const hasSubHourlyWindows = priceWindows.some((window) => (
+      window.end.getTime() - window.start.getTime()
+    ) < 59 * 60 * 1000);
+    if (!hasSubHourlyWindows) {
       return priceWindows;
     }
 
