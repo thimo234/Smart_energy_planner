@@ -122,6 +122,12 @@ class _States:
 
 
 class PlannerThermostatEntityTest(unittest.TestCase):
+    def test_missing_restored_hvac_mode_defaults_to_off(self):
+        entity = self._entity("off")
+        entity.hass.data[RUNTIME_STATE]["entry-1"].pop("hvac_mode", None)
+
+        self.assertEqual(entity.hvac_mode, HVACMode.OFF)
+
     def _entity(self, cooling_state):
         coordinator = types.SimpleNamespace(
             data=types.SimpleNamespace(

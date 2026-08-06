@@ -104,7 +104,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "manual_preheat_temperature",
             _default_manual_preheat_temperature(merged),
         ),
-        "hvac_mode": persisted_state.get("hvac_mode", HVACMode.HEAT),
+        # Fail safe after restart: an absent/corrupt persisted mode must never
+        # turn heating on. Valid persisted heat/auto/cool modes are preserved.
+        "hvac_mode": persisted_state.get("hvac_mode", HVACMode.OFF),
         "manual_preset_mode": persisted_state.get("manual_preset_mode", PRESET_NORMAL),
         "last_switch_change": None,
         "cooling_model": persisted_state.get("cooling_model", {}),
@@ -326,14 +328,17 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
         return
 
     base_url = f"{_CARD_STATIC_URL}/{_CARD_FILENAME}"
-    resource_url = f"{base_url}?v={_CARD_VERSION}"
     existing = [
         item
         for item in resources.async_items()
-        if str(item.get("url", "")).split("?", maxsplit=1)[0] == base_url
+        if str(item.get("url", "")).split("?", maxsplit=1)[0].rstrip("/").endswith(
+            f"/{_CARD_FILENAME}"
+        )
     ]
 
     for item in existing:
+        existing_base_url = str(item.get("url", "")).split("?", maxsplit=1)[0]
+        resource_url = f"{existing_base_url}?v={_CARD_VERSION}"
         if item.get("url") != resource_url and hasattr(resources, "async_update_item"):
             await resources.async_update_item(
                 item["id"],
@@ -342,13 +347,14 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
                     "url": resource_url,
                 },
             )
+    if existing:
         return
 
     if hasattr(resources, "async_create_item"):
         await resources.async_create_item(
             {
                 "res_type": "module",
-                "url": resource_url,
+                "url": f"{base_url}?v={_CARD_VERSION}",
             }
         )
 
@@ -404,7 +410,7 @@ async def _async_apply_heating_switch_control(
     preheat_target = getattr(coordinator.data, "thermostat_preheat_setpoint_c", None)
     cooling_mode_switch_entity = merged.get(CONF_COOLING_MODE_SWITCH_ENTITY)
     cooling_mode_switch_state = hass.states.get(cooling_mode_switch_entity) if cooling_mode_switch_entity else None
-    hvac_mode = runtime_state.get("hvac_mode", HVACMode.HEAT)
+    hvac_mode = runtime_state.get("hvac_mode", HVACMode.OFF)
     cooling_mode_active = (
         hvac_mode in {HVACMode.COOL, "cool"}
         and cooling_mode_switch_state is not None
@@ -539,7 +545,7 @@ async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_
         "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
         "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
         "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
-        "hvac_mode": runtime_state.get("hvac_mode", HVACMode.HEAT),
+        "hvac_mode": runtime_state.get("hvac_mode", HVACMode.OFF),
         "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
         "cooling_model": runtime_state.get("cooling_model", {}),
         "last_cooling_observation": runtime_state.get("last_cooling_observation"),

@@ -598,7 +598,15 @@ def extract_solar_windows(
     *,
     include_past: bool = False,
 ) -> list[SolarWindow]:
-    raw_entries = attributes.get("detailedHourly", [])
+    raw_hourly = attributes.get("detailedHourly", [])
+    raw_entries = raw_hourly if isinstance(raw_hourly, list) and raw_hourly else []
+    interval_hours = 1.0
+    if not raw_entries:
+        raw_half_hourly = attributes.get("detailedForecast", [])
+        if isinstance(raw_half_hourly, list):
+            raw_entries = raw_half_hourly
+            interval_hours = 0.5
+
     windows: list[SolarWindow] = []
     for entry in raw_entries:
         start_raw = entry.get("period_start")
@@ -607,19 +615,55 @@ def extract_solar_windows(
         start = _parse_datetime(start_raw)
         if start is None:
             continue
-        end = start + timedelta(hours=1)
+        end = start + timedelta(hours=interval_hours)
         if not include_past and end <= datetime.now().astimezone():
             continue
         windows.append(
             SolarWindow(
                 start=start,
                 end=end,
-                forecast_kwh=_coerce_float(entry.get("pv_estimate"), default=0.0) or 0.0,
-                forecast_kwh_p10=_coerce_float(entry.get("pv_estimate10")),
-                forecast_kwh_p90=_coerce_float(entry.get("pv_estimate90")),
+                forecast_kwh=(_coerce_float(entry.get("pv_estimate"), default=0.0) or 0.0)
+                * interval_hours,
+                forecast_kwh_p10=_scale_optional_forecast(entry.get("pv_estimate10"), interval_hours),
+                forecast_kwh_p90=_scale_optional_forecast(entry.get("pv_estimate90"), interval_hours),
             )
         )
-    return merge_solar_windows(windows)
+    merged = merge_solar_windows(windows)
+    return _aggregate_solar_windows_hourly(merged) if interval_hours < 1.0 else merged
+
+
+def _scale_optional_forecast(value: Any, interval_hours: float) -> float | None:
+    forecast = _coerce_float(value)
+    return forecast * interval_hours if forecast is not None else None
+
+
+def _aggregate_solar_windows_hourly(windows: list[SolarWindow]) -> list[SolarWindow]:
+    """Combine Solcast half-hour power averages into hourly energy windows."""
+
+    hourly: dict[datetime, SolarWindow] = {}
+    for window in windows:
+        hour_start = window.start.replace(minute=0, second=0, microsecond=0)
+        previous = hourly.get(hour_start)
+        hourly[hour_start] = SolarWindow(
+            start=hour_start,
+            end=hour_start + timedelta(hours=1),
+            forecast_kwh=(previous.forecast_kwh if previous else 0.0) + window.forecast_kwh,
+            forecast_kwh_p10=_sum_optional_forecasts(
+                previous.forecast_kwh_p10 if previous else None,
+                window.forecast_kwh_p10,
+            ),
+            forecast_kwh_p90=_sum_optional_forecasts(
+                previous.forecast_kwh_p90 if previous else None,
+                window.forecast_kwh_p90,
+            ),
+        )
+    return sorted(hourly.values(), key=lambda item: item.start)
+
+
+def _sum_optional_forecasts(left: float | None, right: float | None) -> float | None:
+    if left is None and right is None:
+        return None
+    return (left or 0.0) + (right or 0.0)
 
 
 def merge_solar_windows(windows: list[SolarWindow]) -> list[SolarWindow]:

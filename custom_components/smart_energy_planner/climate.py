@@ -65,7 +65,7 @@ async def async_setup_entry(
 class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], ClimateEntity):
     """A planned thermostat that represents the integration target temperature."""
 
-    _attr_hvac_mode = HVACMode.HEAT
+    _attr_hvac_mode = HVACMode.OFF
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE
         | ClimateEntityFeature.TURN_ON
@@ -139,7 +139,9 @@ class PlannerThermostatEntity(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             return HVACMode.COOL
         if stored_hvac_mode in {HVAC_MODE_SMART, "smart", HVACMode.AUTO}:
             return HVACMode.AUTO
-        return HVACMode.HEAT
+        if stored_hvac_mode in {HVACMode.HEAT, "heat"}:
+            return HVACMode.HEAT
+        return HVACMode.OFF
 
     @property
     def hvac_modes(self) -> list[HVACMode]:

@@ -10,6 +10,7 @@ from custom_components.smart_energy_planner.battery_forecast import (
     build_expected_hourly_demand_table_from_observations,
     build_fallback_solar_windows_for_day,
     build_hourly_home_demand_forecast,
+    extract_solar_windows,
     observed_hourly_demand_table,
     sum_remaining_home_demand_until,
     sum_remaining_solar_until,
@@ -20,6 +21,33 @@ from custom_components.smart_energy_planner.price_models import PlannerWindow
 
 
 class BatteryForecastTest(unittest.TestCase):
+    def test_extract_solar_windows_uses_half_hourly_solcast_forecast(self):
+        windows = extract_solar_windows(
+            {
+                "detailedForecast": [
+                    {
+                        "period_start": "2026-08-07T13:00:00+02:00",
+                        "pv_estimate": 2.0,
+                        "pv_estimate10": 1.0,
+                        "pv_estimate90": 3.0,
+                    },
+                    {
+                        "period_start": "2026-08-07T13:30:00+02:00",
+                        "pv_estimate": 4.0,
+                        "pv_estimate10": 2.0,
+                        "pv_estimate90": 6.0,
+                    },
+                ]
+            },
+            include_past=True,
+        )
+
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].start, datetime.fromisoformat("2026-08-07T13:00:00+02:00"))
+        self.assertEqual(windows[0].forecast_kwh, 3.0)
+        self.assertEqual(windows[0].forecast_kwh_p10, 1.5)
+        self.assertEqual(windows[0].forecast_kwh_p90, 4.5)
+
     def test_price_responsive_demand_moves_peak_to_cheapest_hour(self):
         day = datetime(2026, 6, 29)
         demand = []
