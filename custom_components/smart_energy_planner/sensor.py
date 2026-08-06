@@ -13,7 +13,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .battery_planner import normalize_full_battery_charge_mode
-from .const import DOMAIN, PLANNER_KIND_BATTERY, PLANNER_KIND_THERMOSTAT, RUNTIME_STATE
+from .const import (
+    DOMAIN,
+    PLANNER_KIND_BATTERY,
+    PLANNER_KIND_PRICE_WINDOW,
+    PLANNER_KIND_THERMOSTAT,
+    RUNTIME_STATE,
+)
 from .coordinator import SmartEnergyPlannerCoordinator
 from .planner_result import PlannerResult
 
@@ -99,6 +105,9 @@ async def async_setup_entry(
             ]
         )
 
+    if planner_kind == PLANNER_KIND_PRICE_WINDOW:
+        entities.append(CheapestPriceWindowStartSensor(coordinator, entry))
+
     async_add_entities(entities)
 
 
@@ -137,6 +146,44 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
             "source_status": self.coordinator.data.source_status,
             "source_errors": self.coordinator.data.source_errors,
         }
+
+
+class CheapestPriceWindowStartSensor(PlannerSensor):
+    """Timestamp at which the cheapest configured price block starts."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(
+        self,
+        coordinator: SmartEnergyPlannerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(
+            coordinator,
+            entry,
+            "cheapest_price_window_start",
+            "Cheapest Price Window Start",
+            "cheapest_price_window_start",
+        )
+        self._attr_icon = "mdi:clock-start"
+
+    @property
+    def native_value(self) -> datetime | None:
+        return _parse_datetime(self._window.get("start"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        window = self._window
+        return super().extra_state_attributes | {
+            "end": window.get("end"),
+            "average_price": window.get("average_price"),
+            "duration_hours": window.get("duration_hours"),
+        }
+
+    @property
+    def _window(self) -> dict:
+        value = getattr(self.coordinator.data, "cheapest_price_window", None)
+        return value if isinstance(value, dict) else {}
 
 
 class BatteryPlannerSensor(PlannerSensor):
