@@ -306,7 +306,8 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
 async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0) -> None:
     """Add or update the Lovelace resource when Home Assistant uses storage mode."""
     lovelace = hass.data.get("lovelace")
-    if lovelace is None or not getattr(lovelace, "resources", None):
+    resources = getattr(lovelace, "resources", None) if lovelace is not None else None
+    if resources is None:
         if retry < 6:
             async_call_later(hass, 5, lambda _now: hass.async_create_task(
                 _async_register_lovelace_resource(hass, retry + 1)
@@ -316,7 +317,6 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
     if getattr(lovelace, "mode", None) != "storage":
         return
 
-    resources = lovelace.resources
     if not getattr(resources, "loaded", True):
         if retry < 6:
             async_call_later(hass, 5, lambda _now: hass.async_create_task(

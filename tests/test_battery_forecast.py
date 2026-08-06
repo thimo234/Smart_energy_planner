@@ -42,11 +42,12 @@ class BatteryForecastTest(unittest.TestCase):
             include_past=True,
         )
 
-        self.assertEqual(len(windows), 1)
+        self.assertEqual(len(windows), 2)
         self.assertEqual(windows[0].start, datetime.fromisoformat("2026-08-07T13:00:00+02:00"))
-        self.assertEqual(windows[0].forecast_kwh, 3.0)
-        self.assertEqual(windows[0].forecast_kwh_p10, 1.5)
-        self.assertEqual(windows[0].forecast_kwh_p90, 4.5)
+        self.assertEqual(windows[0].forecast_kwh, 1.0)
+        self.assertEqual(windows[0].forecast_kwh_p10, 0.5)
+        self.assertEqual(windows[0].forecast_kwh_p90, 1.5)
+        self.assertEqual(windows[1].forecast_kwh, 2.0)
 
     def test_price_responsive_demand_moves_peak_to_cheapest_hour(self):
         day = datetime(2026, 6, 29)

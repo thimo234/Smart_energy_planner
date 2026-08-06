@@ -606,7 +606,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
       .map((slot) => {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
-        const value = this.parseNumber(slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate);
+        const value = this.parseNumber(
+          slot.estimated_kw ?? slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate,
+        );
         if (!start || !end || value === undefined) {
           return undefined;
         }

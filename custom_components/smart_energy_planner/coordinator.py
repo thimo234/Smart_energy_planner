@@ -2208,15 +2208,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         horizon_start: datetime,
         horizon_end: datetime,
     ) -> list[dict[str, str | float]]:
-        return [
-            {
+        serialized: list[dict[str, str | float]] = []
+        for window in windows:
+            if window.end <= horizon_start or window.start >= horizon_end:
+                continue
+            duration_hours = max((window.end - window.start).total_seconds() / 3600.0, 0.0001)
+            serialized.append({
                 "start": window.start.isoformat(),
                 "end": min(window.end, horizon_end).isoformat(),
                 "estimated_kwh": round(float(window.forecast_kwh), 6),
-            }
-            for window in windows
-            if window.end > horizon_start and window.start < horizon_end
-        ]
+                "estimated_kw": round(float(window.forecast_kwh) / duration_hours, 6),
+            })
+        return serialized
 
     def _battery_demand_safety_margin(self) -> float:
         configured_margin = _coerce_float(
