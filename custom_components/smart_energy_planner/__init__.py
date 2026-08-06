@@ -62,6 +62,10 @@ from .const import (
     STORAGE_VERSION,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
+from .frontend_resource import (
+    async_load_and_upsert_card_resource,
+    lovelace_uses_storage_resources,
+)
 from .thermostat_planner import (
     THERMOSTAT_FALLBACK_COOLING_FACTOR as _THERMOSTAT_FALLBACK_COOLING_FACTOR,
     THERMOSTAT_MAX_COOLDOWN_HOURS as _THERMOSTAT_MAX_COOLDOWN_HOURS,
@@ -314,49 +318,21 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
             ))
         return
 
-    if getattr(lovelace, "mode", None) != "storage":
+    if not lovelace_uses_storage_resources(lovelace):
         return
 
-    if not getattr(resources, "loaded", True):
+    result = await async_load_and_upsert_card_resource(
+        resources,
+        card_filename=_CARD_FILENAME,
+        default_base_url=f"{_CARD_STATIC_URL}/{_CARD_FILENAME}",
+        version=_CARD_VERSION,
+    )
+    if result == "not_loaded":
         if retry < 6:
             async_call_later(hass, 5, lambda _now: hass.async_create_task(
                 _async_register_lovelace_resource(hass, retry + 1)
             ))
         return
-
-    if not hasattr(resources, "async_items"):
-        return
-
-    base_url = f"{_CARD_STATIC_URL}/{_CARD_FILENAME}"
-    existing = [
-        item
-        for item in resources.async_items()
-        if str(item.get("url", "")).split("?", maxsplit=1)[0].rstrip("/").endswith(
-            f"/{_CARD_FILENAME}"
-        )
-    ]
-
-    for item in existing:
-        existing_base_url = str(item.get("url", "")).split("?", maxsplit=1)[0]
-        resource_url = f"{existing_base_url}?v={_CARD_VERSION}"
-        if item.get("url") != resource_url and hasattr(resources, "async_update_item"):
-            await resources.async_update_item(
-                item["id"],
-                {
-                    "res_type": "module",
-                    "url": resource_url,
-                },
-            )
-    if existing:
-        return
-
-    if hasattr(resources, "async_create_item"):
-        await resources.async_create_item(
-            {
-                "res_type": "module",
-                "url": f"{base_url}?v={_CARD_VERSION}",
-            }
-        )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
