@@ -577,10 +577,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const raw = plannerState?.attributes?.estimated_hourly_home_demand
       || demandState?.attributes?.estimated_hourly_home_demand;
     if (!Array.isArray(raw)) {
-      return [];
+      return this.fillEnergyPointGaps([], horizonStart, horizonEnd);
     }
 
-    return raw
+    const points = raw
       .map((slot) => {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
@@ -593,27 +593,60 @@ class SmartEnergyPlannerCard extends HTMLElement {
       })
       .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
       .sort((a, b) => a.time - b.time);
+    return this.fillEnergyPointGaps(points, horizonStart, horizonEnd);
   }
 
   extractSolarPoints(plannerState, horizonStart, horizonEnd) {
     const raw = plannerState?.attributes?.estimated_hourly_solar_forecast;
     if (!Array.isArray(raw)) {
-      return [];
+      return this.fillEnergyPointGaps([], horizonStart, horizonEnd);
     }
 
-    return raw
+    const points = raw
       .map((slot) => {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
         const value = this.parseNumber(slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate);
-        if (!start || !end || value === undefined || value <= 0.01) {
+        if (!start || !end || value === undefined) {
           return undefined;
         }
         const midpoint = new Date((start.getTime() + end.getTime()) / 2);
-        return { start, end, time: midpoint, value };
+        return { start, end, time: midpoint, value: Math.max(0, value) };
       })
       .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
       .sort((a, b) => a.time - b.time);
+    return this.fillEnergyPointGaps(points, horizonStart, horizonEnd);
+  }
+
+  fillEnergyPointGaps(points, horizonStart, horizonEnd) {
+    const durations = points
+      .map((point) => point.end?.getTime() - point.start?.getTime())
+      .filter((duration) => Number.isFinite(duration) && duration > 0)
+      .sort((left, right) => left - right);
+    const intervalMs = durations.length
+      ? durations[Math.floor(durations.length / 2)]
+      : 60 * 60 * 1000;
+    const filled = [...points];
+    let cursor = new Date(horizonStart);
+
+    while (cursor < horizonEnd) {
+      const end = new Date(Math.min(cursor.getTime() + intervalMs, horizonEnd.getTime()));
+      const hasData = points.some((point) => (
+        point.end > cursor && point.start < end
+      ));
+      if (!hasData) {
+        filled.push({
+          start: new Date(cursor),
+          end,
+          time: new Date((cursor.getTime() + end.getTime()) / 2),
+          value: 0,
+          synthetic: true,
+        });
+      }
+      cursor = end;
+    }
+
+    return filled.sort((left, right) => left.time - right.time);
   }
 
   extractModeSchedule(plannerState, horizonStart, horizonEnd) {
@@ -695,12 +728,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
       const p0 = coords[Math.max(0, index - 1)];
       const p3 = coords[Math.min(coords.length - 1, index + 2)];
       const dx = p2.x - p1.x;
-      const cp1x = p1.x + (dx * 0.08);
-      const cp2x = p2.x - (dx * 0.08);
+      const cp1x = p1.x + (dx * 0.18);
+      const cp2x = p2.x - (dx * 0.18);
       const slope1 = (p2.y - p0.y) / Math.max(1, p2.x - p0.x);
       const slope2 = (p3.y - p1.y) / Math.max(1, p3.x - p1.x);
-      const cp1y = p1.y + (slope1 * (cp1x - p1.x));
-      const cp2y = p2.y - (slope2 * (p2.x - cp2x));
+      const minY = Math.min(p1.y, p2.y);
+      const maxY = Math.max(p1.y, p2.y);
+      const cp1y = Math.max(minY, Math.min(maxY, p1.y + (slope1 * (cp1x - p1.x))));
+      const cp2y = Math.max(minY, Math.min(maxY, p2.y - (slope2 * (p2.x - cp2x))));
       parts.push(
         `C ${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`,
       );

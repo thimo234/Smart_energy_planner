@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -71,9 +71,7 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE, Platform.BINARY_
 _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 _CARD_FILENAME = "smart-energy-planner-card.js"
-_CARD_VERSION = str(
-    json.loads((Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")).get("version", "dev")
-)
+_CARD_VERSION = hashlib.sha256((_CARD_STATIC_PATH / _CARD_FILENAME).read_bytes()).hexdigest()[:12]
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
