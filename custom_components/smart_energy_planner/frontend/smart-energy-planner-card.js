@@ -612,8 +612,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
         if (!start || !end || value === undefined) {
           return undefined;
         }
-        const midpoint = new Date((start.getTime() + end.getTime()) / 2);
-        return { start, end, time: midpoint, value: Math.max(0, value) };
+        // Solcast's detailed forecast is timestamped at period_start.  Plot
+        // that exact timestamp so this curve lines up with the source graph.
+        return { start, end, time: start, value: Math.max(0, value) };
       })
       .filter((point) => point && point.time >= horizonStart && point.time <= horizonEnd)
       .sort((a, b) => a.time - b.time);
@@ -630,13 +631,22 @@ class SmartEnergyPlannerCard extends HTMLElement {
       : 60 * 60 * 1000;
     const filled = [...points];
     let cursor = new Date(horizonStart);
+    const firstPoint = points[0];
+    const shortLeadingGapEnd = firstPoint?.start?.getTime();
+    const omitShortLeadingZero = Boolean(
+      firstPoint
+      && firstPoint.value > 0
+      && shortLeadingGapEnd > horizonStart.getTime()
+      && shortLeadingGapEnd - horizonStart.getTime() <= intervalMs * 1.5
+    );
 
     while (cursor < horizonEnd) {
       const end = new Date(Math.min(cursor.getTime() + intervalMs, horizonEnd.getTime()));
       const hasData = points.some((point) => (
         point.end > cursor && point.start < end
       ));
-      if (!hasData) {
+      const isOmittedLeadingGap = omitShortLeadingZero && end.getTime() <= shortLeadingGapEnd;
+      if (!hasData && !isOmittedLeadingGap) {
         filled.push({
           start: new Date(cursor),
           end,

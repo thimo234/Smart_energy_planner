@@ -598,14 +598,17 @@ def extract_solar_windows(
     *,
     include_past: bool = False,
 ) -> list[SolarWindow]:
-    raw_hourly = attributes.get("detailedHourly", [])
-    raw_entries = raw_hourly if isinstance(raw_hourly, list) and raw_hourly else []
-    interval_hours = 1.0
+    # Use the same half-hourly source as Solcast's own example graph.  The
+    # hourly series is only a fallback; preferring it changes both the shape
+    # and timing of the curve compared with the source graph.
+    raw_half_hourly = attributes.get("detailedForecast", [])
+    raw_entries = raw_half_hourly if isinstance(raw_half_hourly, list) and raw_half_hourly else []
+    interval_hours = 0.5
     if not raw_entries:
-        raw_half_hourly = attributes.get("detailedForecast", [])
-        if isinstance(raw_half_hourly, list):
-            raw_entries = raw_half_hourly
-            interval_hours = 0.5
+        raw_hourly = attributes.get("detailedHourly", [])
+        if isinstance(raw_hourly, list):
+            raw_entries = raw_hourly
+            interval_hours = 1.0
 
     windows: list[SolarWindow] = []
     for entry in raw_entries:

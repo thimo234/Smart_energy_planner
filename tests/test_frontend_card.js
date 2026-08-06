@@ -49,6 +49,7 @@ const points = card.extractSolarPoints(
 const sourcePoints = points.filter((point) => !point.synthetic);
 const gapPoints = points.filter((point) => point.synthetic);
 assert.deepEqual(sourcePoints.map((point) => point.value), [2.0, 4.0]);
+assert.equal(sourcePoints[0].time.toISOString(), new Date("2026-08-07T12:00:00+02:00").toISOString());
 assert.deepEqual(gapPoints.map((point) => point.value), [0, 0]);
 assert.equal(gapPoints[0].start.toISOString(), new Date("2026-08-07T13:00:00+02:00").toISOString());
 
@@ -61,5 +62,24 @@ sourcePoints.forEach((point) => {
   const coordinate = `${(point.time.getTime() / 60000).toFixed(2)} ${(100 - point.value).toFixed(2)}`;
   assert.ok(line.includes(coordinate), `curve should pass through ${coordinate}`);
 });
+
+const runningDayPoints = card.extractSolarPoints(
+  {
+    attributes: {
+      estimated_hourly_solar_forecast: [{
+        start: "2026-08-07T12:00:00+02:00",
+        end: "2026-08-07T12:30:00+02:00",
+        estimated_kw: 3.2,
+      }],
+    },
+  },
+  new Date("2026-08-07T11:30:00+02:00"),
+  new Date("2026-08-07T13:00:00+02:00"),
+);
+assert.equal(
+  runningDayPoints.some((point) => point.synthetic && point.time < sourcePoints[0].time),
+  false,
+  "a short leading gap must not pull the running forecast curve down to zero",
+);
 
 console.log("frontend card solar forecast checks passed");

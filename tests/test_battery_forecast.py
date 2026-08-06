@@ -49,6 +49,24 @@ class BatteryForecastTest(unittest.TestCase):
         self.assertEqual(windows[0].forecast_kwh_p90, 1.5)
         self.assertEqual(windows[1].forecast_kwh, 2.0)
 
+    def test_extract_solar_windows_prefers_detailed_forecast_over_hourly(self):
+        windows = extract_solar_windows(
+            {
+                "detailedForecast": [{
+                    "period_start": "2099-08-07T12:00:00+02:00",
+                    "pv_estimate": 3.2,
+                }],
+                "detailedHourly": [{
+                    "period_start": "2099-08-07T12:00:00+02:00",
+                    "pv_estimate": 5.4,
+                }],
+            }
+        )
+
+        self.assertEqual(len(windows), 1)
+        self.assertEqual(windows[0].forecast_kwh, 1.6)
+        self.assertEqual((windows[0].end - windows[0].start).total_seconds(), 1800)
+
     def test_price_responsive_demand_moves_peak_to_cheapest_hour(self):
         day = datetime(2026, 6, 29)
         demand = []
