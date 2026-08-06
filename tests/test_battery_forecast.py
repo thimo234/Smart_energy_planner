@@ -67,6 +67,24 @@ class BatteryForecastTest(unittest.TestCase):
         self.assertEqual(windows[0].forecast_kwh, 1.6)
         self.assertEqual((windows[0].end - windows[0].start).total_seconds(), 1800)
 
+    def test_extract_solar_windows_accepts_home_assistant_datetime_attributes(self):
+        start = datetime.fromisoformat("2026-08-06T15:00:00+02:00")
+        windows = extract_solar_windows(
+            {
+                "detailedHourly": [
+                    {"period_start": start, "pv_estimate": 2.9508},
+                    {
+                        "period_start": start + timedelta(hours=1),
+                        "pv_estimate": 2.1674,
+                    },
+                ]
+            },
+            include_past=True,
+        )
+
+        self.assertEqual([window.start for window in windows], [start, start + timedelta(hours=1)])
+        self.assertEqual([window.forecast_kwh for window in windows], [2.9508, 2.1674])
+
     def test_price_responsive_demand_moves_peak_to_cheapest_hour(self):
         day = datetime(2026, 6, 29)
         demand = []

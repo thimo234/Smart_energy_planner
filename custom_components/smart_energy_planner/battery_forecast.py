@@ -613,8 +613,6 @@ def extract_solar_windows(
     windows: list[SolarWindow] = []
     for entry in raw_entries:
         start_raw = entry.get("period_start")
-        if not isinstance(start_raw, str):
-            continue
         start = _parse_datetime(start_raw)
         if start is None:
             continue
