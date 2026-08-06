@@ -183,6 +183,7 @@ def extend_price_window_tail(
                 start=tail_start,
                 end=tail_end,
                 price=fill_price,
+                price_known=False,
             )
         )
         tail_start = tail_end

@@ -160,7 +160,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
     let cursor = new Date(horizonStart);
     while (cursor < horizonEnd) {
       const end = new Date(Math.min(cursor.getTime() + 60 * 60 * 1000, horizonEnd.getTime()));
-      windows.push({ start: cursor, end, price: fallbackPrice });
+      windows.push({ start: cursor, end, price: fallbackPrice, priceKnown: false });
       cursor = end;
     }
     return windows;
@@ -221,7 +221,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
     const displayPriceWindows = this.displayPriceWindows(priceWindows, plannerState, horizonStart, horizonEnd);
-    const priceValues = displayPriceWindows.flatMap((window) => [window.price]);
+    const knownPriceValues = displayPriceWindows
+      .filter((window) => window.priceKnown !== false)
+      .map((window) => window.price);
+    const priceValues = knownPriceValues.length
+      ? knownPriceValues
+      : displayPriceWindows.map((window) => window.price);
     const energyValues = [...demandPoints, ...solarPoints].map((point) => point.value);
     const minPrice = Math.min(...priceValues, 0);
     const maxPrice = Math.max(...priceValues, 0.01);
@@ -249,8 +254,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const ticks = this.timeTicks(horizonStart, horizonEnd, hoursToShow);
     const priceTicks = this.valueTicks(minPrice, maxPrice, 4);
     const energyTicks = this.valueTicks(0, maxEnergy, 4);
-    const lowThreshold = minPrice + ((maxPrice - minPrice) * 0.33);
-    const highThreshold = minPrice + ((maxPrice - minPrice) * 0.66);
+    const sortedKnownPrices = [...knownPriceValues].sort((left, right) => left - right);
+    const lowThreshold = this.quantileThreshold(sortedKnownPrices, 1 / 3, minPrice);
+    const highThreshold = this.quantileThreshold(sortedKnownPrices, 2 / 3, maxPrice);
     const nowInRange = now >= horizonStart && now <= horizonEnd;
     const nowValues = this.selectionValues(now, priceWindows, demandPoints, solarPoints);
     const nowX = nowInRange ? x(now) : x(priceWindows[0]?.start || horizonStart);
@@ -305,7 +311,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   width="${barWidth.toFixed(2)}"
                   height="${barHeight.toFixed(2)}"
                   rx="7"
-                  class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold)}${isCurrentWindow ? " selected" : ""}"
+                  class="price-bar ${this.priceClass(window.price, lowThreshold, highThreshold, window.priceKnown)}${isCurrentWindow ? " selected" : ""}"
                   data-selection-time="${this.escape(this.formatTime(selectTime))}"
                   data-selection-ms="${selectTime.getTime()}"
                   data-selection-x="${((xStart + xEnd) / 2).toFixed(2)}"
@@ -415,7 +421,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           if (!start || !end || price === undefined) {
             return undefined;
           }
-          return { start, end, price };
+          return { start, end, price, priceKnown: entry.price_known !== false };
         })
         .filter(Boolean)
         .sort((a, b) => a.start - b.start);
@@ -450,6 +456,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           start: new Date(Math.max(window.start.getTime(), horizonStart.getTime())),
           end: new Date(Math.min(window.end.getTime(), horizonEnd.getTime())),
           price: window.price,
+          priceKnown: window.priceKnown,
         };
       })
       .filter(Boolean)
@@ -484,9 +491,18 @@ class SmartEnergyPlannerCard extends HTMLElement {
       const bucketStart = new Date(Math.max(cursor.getTime(), horizonStart.getTime()));
       const nextHour = new Date(cursor.getTime() + 60 * 60 * 1000);
       const bucketEnd = new Date(Math.min(nextHour.getTime(), horizonEnd.getTime()));
-      const price = this.weightedAveragePrice(bucketStart, bucketEnd, priceWindows);
+      const overlappingWindows = priceWindows.filter((window) => (
+        this.overlapMs(bucketStart, bucketEnd, window.start, window.end) > 0
+      ));
+      const price = this.weightedAveragePrice(bucketStart, bucketEnd, overlappingWindows);
       if (price !== undefined) {
-        windows.push({ start: bucketStart, end: bucketEnd, price });
+        windows.push({
+          start: bucketStart,
+          end: bucketEnd,
+          price,
+          priceKnown: overlappingWindows.length > 0
+            && overlappingWindows.every((window) => window.priceKnown !== false),
+        });
       }
       cursor.setHours(cursor.getHours() + 1);
     }
@@ -679,8 +695,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
       const p0 = coords[Math.max(0, index - 1)];
       const p3 = coords[Math.min(coords.length - 1, index + 2)];
       const dx = p2.x - p1.x;
-      const cp1x = p1.x + (dx * 0.16);
-      const cp2x = p2.x - (dx * 0.16);
+      const cp1x = p1.x + (dx * 0.08);
+      const cp2x = p2.x - (dx * 0.08);
       const slope1 = (p2.y - p0.y) / Math.max(1, p2.x - p0.x);
       const slope2 = (p3.y - p1.y) / Math.max(1, p3.x - p1.x);
       const cp1y = p1.y + (slope1 * (cp1x - p1.x));
@@ -838,7 +854,21 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return nearestDistance <= maxDistance ? nearest : undefined;
   }
 
-  priceClass(price, lowThreshold, highThreshold) {
+  quantileThreshold(sortedValues, fraction, fallback) {
+    if (!sortedValues.length) {
+      return fallback;
+    }
+    const index = Math.max(0, Math.min(
+      sortedValues.length - 1,
+      Math.ceil(sortedValues.length * fraction) - 1,
+    ));
+    return sortedValues[index];
+  }
+
+  priceClass(price, lowThreshold, highThreshold, priceKnown = true) {
+    if (!priceKnown) {
+      return "price-unknown";
+    }
     if (price <= lowThreshold) {
       return "price-low";
     }
@@ -1292,6 +1322,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
         .price-high {
           fill: #d93025;
           background: #d93025;
+        }
+        .price-unknown {
+          fill: #9aa0a6;
+          background: #9aa0a6;
+          opacity: 0.42;
         }
         .mode-accu-uit {
           fill: #9aa0a6;

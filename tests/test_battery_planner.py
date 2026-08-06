@@ -1680,6 +1680,66 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(coordinator._charge_session_started)
         self.assertFalse(coordinator._discharge_session_started)
 
+    def test_low_soc_charge_latch_blocks_current_discharge_after_replan(self):
+        now = datetime(2026, 8, 6, 10, 39)
+        slots = [
+            {
+                "start": now.replace(minute=0),
+                "end": now.replace(hour=11, minute=0),
+                "import_price": 0.45,
+                "export_price": 0.35,
+                "hours": 1.0,
+                "net_solar_kwh": -0.5,
+                "demand_kwh": 0.5,
+                "solar_kwh": 0.0,
+            },
+            {
+                "start": now.replace(hour=11, minute=0),
+                "end": now.replace(hour=12, minute=0),
+                "import_price": 0.18,
+                "export_price": 0.08,
+                "hours": 1.0,
+                "net_solar_kwh": 2.0,
+                "demand_kwh": 0.5,
+                "solar_kwh": 2.5,
+            }
+        ]
+
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        # The preceding refresh started charging at ~21% SOC.  At ~22%, the
+        # recalculated solar window has shifted to the next slot.
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+        coordinator._charge_session_started = True
+        coordinator._discharge_session_started = False
+        coordinator._battery_cycle_state_initialized = True
+
+        _, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
+            coordinator,
+            slots=slots,
+            now=now,
+            planned_solar_charge_windows=[
+                {
+                    "start": now.replace(hour=11, minute=0).isoformat(),
+                    "end": now.replace(hour=12, minute=0).isoformat(),
+                    "price": 0.08,
+                    "usable_hours": 1.0,
+                }
+            ],
+            planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=0.16,
+            usable_capacity_kwh=8.0,
+            battery_soc_percent=22.0,
+            average_price=0.30,
+            average_export_price=0.20,
+            max_charge_kw=2.0,
+            max_discharge_kw=3.0,
+        )
+
+        self.assertEqual(current_mode, BATTERY_MODE_OFF)
+        self.assertTrue(coordinator._charge_session_started)
+        self.assertFalse(coordinator._discharge_session_started)
+
     def test_charge_planning_keeps_current_in_progress_solar_slot(self):
         now = datetime(2026, 6, 26, 13, 30)
         slots = [

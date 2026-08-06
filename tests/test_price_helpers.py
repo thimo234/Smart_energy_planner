@@ -53,6 +53,9 @@ class PriceHelpersTest(unittest.TestCase):
         self.assertEqual(len(extended), 3)
         self.assertEqual(extended[-1].end, start + timedelta(hours=3))
         self.assertTrue(all(window.price == 0.25 for window in extended))
+        self.assertTrue(extended[0].price_known)
+        self.assertFalse(extended[1].price_known)
+        self.assertFalse(extended[2].price_known)
 
     def test_infer_series_interval_minutes(self):
         self.assertEqual(infer_series_interval_minutes(24), 60)

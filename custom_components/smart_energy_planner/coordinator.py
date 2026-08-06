@@ -2189,12 +2189,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         *,
         horizon_start: datetime,
         horizon_end: datetime,
-    ) -> list[dict[str, str | float]]:
+    ) -> list[dict[str, str | float | bool]]:
         return [
             {
                 "start": window.start.isoformat(),
                 "end": min(window.end, horizon_end).isoformat(),
                 "price": round(float(window.price), 6),
+                "price_known": window.price_known,
             }
             for window in windows
             if window.end > horizon_start and window.start < horizon_end
@@ -3296,8 +3297,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 suppress_discharge = (
                     (
                         charge_session_started
-                        and active_charge_phase_end is not None
-                        and segment_slot_start < active_charge_phase_end
+                        and (
+                            # The persisted charge-cycle latch is authoritative
+                            # for the current slot.  Around the minimum SOC, a
+                            # small charge can make the freshly planned charge
+                            # window disappear or move.  That must not let this
+                            # refresh reverse the battery straight back into
+                            # discharge mode.
+                            segment_slot_start <= now < segment_slot_end
+                            or (
+                                active_charge_phase_end is not None
+                                and segment_slot_start < active_charge_phase_end
+                            )
+                        )
                     )
                     or (
                         not before_first_charge_phase

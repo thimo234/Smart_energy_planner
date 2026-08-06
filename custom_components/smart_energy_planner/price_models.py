@@ -11,3 +11,4 @@ class PlannerWindow:
     start: datetime
     end: datetime
     price: float
+    price_known: bool = True
