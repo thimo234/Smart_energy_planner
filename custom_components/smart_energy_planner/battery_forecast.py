@@ -11,6 +11,7 @@ from .battery_models import SolarWindow
 
 DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN = 0.20
 HOURS_PER_WEEK = 7 * 24
+_DAY_TYPE_STAT_PREFIX = "daytype"
 DEMAND_ADJUSTMENT_MIN_FACTOR = 0.25
 DEMAND_ADJUSTMENT_MAX_FACTOR = 1.35
 
@@ -303,6 +304,32 @@ def update_expected_hourly_demand_stats(
     if measured_value is None or measured_value < 0:
         return stats
 
+    updated = _update_demand_stat(stats, slot_key=slot_key, measured_value=measured_value)
+
+    try:
+        slot_index = int(slot_key)
+    except (TypeError, ValueError):
+        return updated
+    if not 0 <= slot_index < HOURS_PER_WEEK:
+        return updated
+
+    weekday, hour = divmod(slot_index, 24)
+    day_type = "weekend" if weekday >= 5 else "weekday"
+    return _update_demand_stat(
+        updated,
+        slot_key=f"{_DAY_TYPE_STAT_PREFIX}:{day_type}:{hour}",
+        measured_value=measured_value,
+    )
+
+
+def _update_demand_stat(
+    stats: dict[str, dict[str, Any]],
+    *,
+    slot_key: str,
+    measured_value: float,
+) -> dict[str, dict[str, Any]]:
+    """Update one exponentially weighted demand statistic."""
+
     updated = dict(stats)
     raw_slot = stats.get(slot_key, {})
     count = int(_coerce_float(raw_slot.get("count"), default=0.0) or 0)
@@ -356,11 +383,25 @@ def _expected_hourly_demand_value(
 ) -> float:
     slot_key = str(weekday * 24 + hour)
     exact = _stat_mean(stats.get(slot_key))
+    day_type = "weekend" if weekday >= 5 else "weekday"
+    day_type_mean = _stat_mean(
+        stats.get(f"{_DAY_TYPE_STAT_PREFIX}:{day_type}:{hour}")
+    )
     similar_weekdays = [5, 6] if weekday >= 5 else [0, 1, 2, 3, 4]
     similar_values = _stat_means_for_hour(stats, hour=hour, weekdays=similar_weekdays)
     all_hour_values = _stat_means_for_hour(stats, hour=hour, weekdays=range(7))
 
     if exact is not None:
+        # The exact weekday/hour slot only gets one observation per week.  Blend
+        # it with the much faster adapting weekday/weekend hour statistic when
+        # available, so changed routines are reflected within days, not weeks.
+        if day_type_mean is not None and baseline > 0:
+            return max(
+                0.0,
+                (exact * 0.35) + (day_type_mean * 0.50) + (baseline * 0.15),
+            )
+        if day_type_mean is not None:
+            return max(0.0, (exact * 0.40) + (day_type_mean * 0.60))
         peer_values = _stat_means_for_hour(
             stats,
             hour=hour,
@@ -372,6 +413,13 @@ def _expected_hourly_demand_value(
         if baseline > 0:
             return max(0.0, (exact * 0.80) + (baseline * 0.20))
         return max(0.0, exact)
+
+    if day_type_mean is not None:
+        return (
+            max(0.0, (day_type_mean * 0.80) + (baseline * 0.20))
+            if baseline > 0
+            else max(0.0, day_type_mean)
+        )
 
     if len(similar_values) >= 2:
         peer = _median(similar_values)

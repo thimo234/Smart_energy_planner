@@ -458,8 +458,20 @@ class BatteryForecastTest(unittest.TestCase):
         expected = build_expected_hourly_demand_table(stats, daily_average_kwh=24.0)
 
         self.assertEqual(stats["10"]["count"], 2)
-        self.assertLess(len(str(stats)), 100)
+        self.assertEqual(stats["daytype:weekday:10"]["count"], 2)
+        self.assertLess(len(str(stats)), 200)
         self.assertGreater(expected["10"], expected["11"])
+
+    def test_expected_hourly_demand_uses_fast_day_type_profile(self):
+        stats = {
+            "10": {"count": 8, "mean_kwh": 0.4},
+            "daytype:weekday:10": {"count": 20, "mean_kwh": 1.2},
+        }
+
+        expected = build_expected_hourly_demand_table(stats, daily_average_kwh=12.0)
+
+        self.assertGreater(expected["10"], 0.7)
+        self.assertGreater(expected[str(1 * 24 + 10)], 0.7)
 
     def test_build_fallback_solar_windows_for_tomorrow_has_daylight_windows(self):
         windows = build_fallback_solar_windows_for_day(10.0, day_offset=1)
