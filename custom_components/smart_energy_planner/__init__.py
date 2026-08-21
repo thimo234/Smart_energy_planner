@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from datetime import timedelta
@@ -76,6 +77,8 @@ _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 _CARD_FILENAME = "smart-energy-planner-card.js"
 _CARD_VERSION = hashlib.sha256((_CARD_STATIC_PATH / _CARD_FILENAME).read_bytes()).hexdigest()[:12]
+_RUNTIME_STORE = f"{DOMAIN}_runtime_store"
+_RUNTIME_STORE_LOCK = f"{DOMAIN}_runtime_store_lock"
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -113,6 +116,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "hvac_mode": persisted_state.get("hvac_mode", HVACMode.OFF),
         "manual_preset_mode": persisted_state.get("manual_preset_mode", PRESET_NORMAL),
         "last_switch_change": None,
+        "heating_switch_is_on": persisted_state.get("heating_switch_is_on"),
+        "heating_switch_restored": False,
         "cooling_model": persisted_state.get("cooling_model", {}),
         "last_cooling_observation": persisted_state.get("last_cooling_observation"),
         "eco_cooling_session": persisted_state.get("eco_cooling_session"),
@@ -379,6 +384,25 @@ async def _async_apply_heating_switch_control(
     if switch_state is None:
         return
 
+    # A switch/device can come back with its own default state during startup.
+    # Restore the last state commanded by this integration once before applying
+    # temperature control, so a reboot itself cannot change the heating state.
+    # Set the guard before awaiting the service call because several coordinator
+    # updates can be queued concurrently while Home Assistant is starting.
+    if not runtime_state.get("heating_switch_restored", False):
+        runtime_state["heating_switch_restored"] = True
+        restored_is_on = runtime_state.get("heating_switch_is_on")
+        if isinstance(restored_is_on, bool):
+            current_is_on = str(switch_state.state).lower() in {"on", "heat", "heating"}
+            if current_is_on != restored_is_on:
+                await _async_call_turn_service(
+                    hass,
+                    heating_switch_entity,
+                    "turn_on" if restored_is_on else "turn_off",
+                )
+            runtime_state["last_switch_change"] = dt_util.now()
+            return
+
     current_temperature = coordinator.data.room_temperature_c
     base_target = coordinator.data.thermostat_setpoint_c
     cool_target = getattr(coordinator.data, "thermostat_cool_setpoint_c", None)
@@ -396,6 +420,8 @@ async def _async_apply_heating_switch_control(
         if str(switch_state.state).lower() in {"on", "heat", "heating"}:
             await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
             runtime_state["last_switch_change"] = dt_util.now()
+            runtime_state["heating_switch_is_on"] = False
+            await _async_save_runtime_state(hass, coordinator.config_entry.entry_id, runtime_state)
         return
     if cooling_mode_active:
         active_preset_mode = PRESET_NORMAL
@@ -462,9 +488,13 @@ async def _async_apply_heating_switch_control(
     if should_turn_on and not current_is_on and not cycle_blocked:
         await _async_call_turn_service(hass, heating_switch_entity, "turn_on")
         runtime_state["last_switch_change"] = dt_util.now()
+        runtime_state["heating_switch_is_on"] = True
+        await _async_save_runtime_state(hass, coordinator.config_entry.entry_id, runtime_state)
     elif should_turn_off and current_is_on and not cycle_blocked:
         await _async_call_turn_service(hass, heating_switch_entity, "turn_off")
         runtime_state["last_switch_change"] = dt_util.now()
+        runtime_state["heating_switch_is_on"] = False
+        await _async_save_runtime_state(hass, coordinator.config_entry.entry_id, runtime_state)
 
 
 async def _async_call_turn_service(hass: HomeAssistant, entity_id: str, service: str) -> None:
@@ -506,33 +536,52 @@ def _default_manual_preheat_temperature(merged: dict[str, Any]) -> float:
 
 async def _async_load_runtime_state(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
     """Load persisted runtime state for a planner entry."""
-    store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
-    data = await store.async_load() or {}
-    return data.get(entry_id, {})
+    store, lock = _runtime_store(hass)
+    async with lock:
+        data = await store.async_load() or {}
+        return data.get(entry_id, {})
 
 
 async def _async_save_runtime_state(hass: HomeAssistant, entry_id: str, runtime_state: dict[str, Any]) -> None:
     """Persist selected runtime fields for a planner entry."""
-    store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
-    data = await store.async_load() or {}
-    data[entry_id] = {
-        **(data.get(entry_id, {}) or {}),
-        "manual_temperature": runtime_state.get("manual_temperature"),
-        "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
-        "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
-        "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
-        "hvac_mode": runtime_state.get("hvac_mode", HVACMode.OFF),
-        "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
-        "cooling_model": runtime_state.get("cooling_model", {}),
-        "last_cooling_observation": runtime_state.get("last_cooling_observation"),
-        "eco_cooling_session": runtime_state.get("eco_cooling_session"),
-        "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
-        "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
-        "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
-        "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
-        "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
-    }
-    await store.async_save(data)
+    store, lock = _runtime_store(hass)
+    async with lock:
+        # Every planner entry shares one Store. Keep the read-modify-write cycle
+        # atomic so a background save from another thermostat cannot overwrite
+        # this entry's freshly saved HVAC mode with an older snapshot.
+        data = await store.async_load() or {}
+        data[entry_id] = {
+            **(data.get(entry_id, {}) or {}),
+            "manual_temperature": runtime_state.get("manual_temperature"),
+            "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
+            "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
+            "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
+            "hvac_mode": runtime_state.get("hvac_mode", HVACMode.OFF),
+            "manual_preset_mode": runtime_state.get("manual_preset_mode", PRESET_NORMAL),
+            "heating_switch_is_on": runtime_state.get("heating_switch_is_on"),
+            "cooling_model": runtime_state.get("cooling_model", {}),
+            "last_cooling_observation": runtime_state.get("last_cooling_observation"),
+            "eco_cooling_session": runtime_state.get("eco_cooling_session"),
+            "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
+            "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
+            "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
+            "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
+            "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
+        }
+        await store.async_save(data)
+
+
+def _runtime_store(hass: HomeAssistant) -> tuple[Store[dict[str, Any]], asyncio.Lock]:
+    """Return the shared runtime store and its read-modify-write lock."""
+    store = hass.data.get(_RUNTIME_STORE)
+    if store is None:
+        store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
+        hass.data[_RUNTIME_STORE] = store
+    lock = hass.data.get(_RUNTIME_STORE_LOCK)
+    if lock is None:
+        lock = asyncio.Lock()
+        hass.data[_RUNTIME_STORE_LOCK] = lock
+    return store, lock
 
 
 async def _async_update_cooling_model(
