@@ -38,12 +38,11 @@ from .battery_models import SolarWindow
 from .battery_planner import (
     build_battery_mode_schedule,
     build_charge_window_lookup,
-    collapse_short_off_mode_windows,
     merge_planned_windows,
     merge_windows,
     normalize_full_battery_charge_mode,
-    normalize_full_battery_mode_windows,
     plan_segment_discharge_kwh,
+    reserve_without_charge_opportunity,
     summarize_battery_cycles,
 )
 from .thermostat_planner import (
@@ -54,6 +53,7 @@ from .thermostat_planner import (
     select_thermostat_peak_eco_windows,
 )
 from .const import (
+    CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
     CONF_BATTERY_ENABLED,
@@ -778,6 +778,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_soc_percent=float(
                 self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
             ),
+            battery_no_charge_min_soc_percent=float(self._config.get(
+                CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT,
+                self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT),
+            )),
             battery_total_energy_kwh=0.0,
             battery_energy_available_kwh=0.0,
             battery_remaining_capacity_kwh=0.0,
@@ -1795,6 +1799,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         battery_min_soc_percent = float(
             self._config.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT)
         )
+        battery_no_charge_min_soc_percent = max(battery_min_soc_percent, min(100.0, float(
+            self._config.get(CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT, battery_min_soc_percent)
+        )))
+        no_charge_reserve_kwh = max(
+            0.0, battery_capacity * (battery_no_charge_min_soc_percent - battery_min_soc_percent) / 100,
+        )
         max_charge = float(self._config.get(CONF_BATTERY_MAX_CHARGE_KW, DEFAULT_BATTERY_MAX_CHARGE_KW))
         max_discharge = float(
             self._config.get(CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW)
@@ -1862,11 +1872,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             sum_remaining_home_demand_until(estimated_hourly_home_demand, now, next_charge_opportunity),
             3,
         )
-        # No energy reservation: the battery drains to empty at the end of every
-        # discharge window and fills to full at the end of every charge window.
-        battery_reserved_energy_kwh = 0.0
-        battery_energy_available_for_discharge_kwh = battery_energy_available_kwh
-        battery_exportable_energy_kwh = battery_energy_available_kwh
+        active_no_charge_reserve_kwh = reserve_without_charge_opportunity(
+            slots=energy_balance_slots,
+            charge_windows=[*planned_solar_charge_windows, *planned_grid_charge_windows],
+            after=now,
+            reserve_kwh=no_charge_reserve_kwh,
+        )
+        battery_reserved_energy_kwh = min(battery_energy_available_kwh, active_no_charge_reserve_kwh)
+        battery_energy_available_for_discharge_kwh = max(0.0, battery_energy_available_kwh - battery_reserved_energy_kwh)
+        battery_exportable_energy_kwh = battery_energy_available_for_discharge_kwh
         battery_room_needed_for_solar_kwh = 0.0
         next_high_price_window = (
             self._find_next_high_price_window(
@@ -1882,6 +1896,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_grid_charge_windows=planned_grid_charge_windows,
             initial_usable_energy_kwh=battery_energy_available_kwh,
+            no_charge_reserve_kwh=no_charge_reserve_kwh,
             usable_capacity_kwh=usable_battery_capacity_kwh,
             battery_soc_percent=battery_soc_percent,
             average_price=average_price,
@@ -1893,14 +1908,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             full_planned_mode_windows = []
             planned_current_mode = "accu_uit"
         elif planner_kind == PLANNER_KIND_BATTERY:
-            full_planned_mode_windows = normalize_full_battery_mode_windows(
-                windows=full_planned_mode_windows,
-                usable_energy_kwh=battery_energy_available_kwh,
-                usable_capacity_kwh=usable_battery_capacity_kwh,
-            )
-            full_planned_mode_windows = collapse_short_off_mode_windows(
-                full_planned_mode_windows,
-            )
+            # Keep the energy-limited durations from the simulation. Extending
+            # short gaps or converting future charges based on today's SOC
+            # changes the energy balance without recalculating it.
             planned_current_mode = normalize_full_battery_charge_mode(
                 mode=planned_current_mode,
                 usable_energy_kwh=battery_energy_available_kwh,
@@ -1921,7 +1931,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             3,
         )
         battery_full_discharge_hours = round(
-            battery_energy_available_kwh / max_discharge,
+            battery_energy_available_for_discharge_kwh / max_discharge,
             3,
         ) if max_discharge > 0 else 0.0
         battery_cycle_summary = summarize_battery_cycles(
@@ -2032,7 +2042,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 elif battery_strategy == "laden_van_net":
                     score += 8
                     rationale_parts.append(
-                        "grid charging is only used because the planned solar charge block is not enough to fill the usable battery capacity"
+                        "grid charging uses a profitable price window before later demand, accounting for planned solar charging"
                     )
                 elif battery_strategy == "ontladen":
                     score += 8
@@ -2047,6 +2057,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 elif battery_total_energy_kwh <= minimum_battery_reserve_kwh and battery_soc_percent is not None:
                     rationale_parts.append(
                         f"battery stays above the configured minimum reserve of {battery_min_soc_percent:.0f}%"
+                    )
+                elif active_no_charge_reserve_kwh > 0 and battery_energy_available_for_discharge_kwh <= 0:
+                    rationale_parts.append(
+                        f"battery keeps a {battery_no_charge_min_soc_percent:.0f}% reserve because no profitable charge window or solar surplus is forecast"
                     )
                 else:
                     rationale_parts.append(
@@ -2103,6 +2117,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_battery_mode_windows=planned_battery_mode_windows,
             battery_soc_percent=battery_soc_percent,
             battery_min_soc_percent=battery_min_soc_percent,
+            battery_no_charge_min_soc_percent=battery_no_charge_min_soc_percent,
+            battery_no_charge_reserve_active=active_no_charge_reserve_kwh > 0,
             battery_total_energy_kwh=battery_total_energy_kwh,
             battery_energy_available_kwh=battery_energy_available_kwh,
             battery_remaining_capacity_kwh=battery_remaining_capacity_kwh,
@@ -2421,6 +2437,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         }
                     )
                 grid_kwh = slot_capacity_kwh - solar_kwh
+                if not slot.get("price_known", True):
+                    grid_kwh = 0.0
                 if grid_kwh > 0 and float(slot["import_price"]) < 0:
                     candidates.append(
                         {
@@ -2443,18 +2461,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
             return candidates
 
-        def _future_peak_price(after: datetime) -> float | None:
+        def _future_peak_price(after: datetime, *, known_only: bool = False) -> float | None:
             prices = [
                 float(slot["import_price"])
                 for slot in future_slots
                 if cast(datetime, slot["start"]) >= after
+                and (not known_only or slot.get("price_known", True))
             ]
             return max(prices, default=None)
 
         def _is_profitable_charge(candidate: dict[str, Any]) -> bool:
             if float(candidate["cost"]) < 0:
                 return True
-            peak_price = _future_peak_price(cast(datetime, candidate["end"]))
+            peak_price = _future_peak_price(
+                cast(datetime, candidate["end"]), known_only=candidate["kind"] == "grid",
+            )
             return (
                 peak_price is not None
                 and peak_price - float(candidate["cost"]) >= battery_min_profit
@@ -2467,6 +2488,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if (
                     candidate["kind"] == "solar"
                     or float(candidate["cost"]) < 0
+                    or candidate["start"] in standalone_grid_starts
                 )
                 and _is_profitable_charge(candidate)
             ]
@@ -2525,6 +2547,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_for_cycle: list[dict[str, Any]] = []
             charged_kwh = 0.0
             cycle_candidates = _slot_candidates(cursor)
+            standalone_grid_starts: set[datetime] = set()
             profitable_primary_candidates = [
                 candidate for candidate in cycle_candidates
                 if (
@@ -2533,6 +2556,36 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 and _is_profitable_charge(candidate)
             ]
+            # Solar tomorrow cannot cover a profitable discharge period today.
+            # Allow a grid-only cycle before the first solar/negative-price
+            # opportunity, while preserving solar priority within that cycle.
+            primary_start = min(
+                (cast(datetime, candidate["start"]) for candidate in profitable_primary_candidates),
+                default=horizon_end,
+            )
+            if (
+                cycle_index == 0
+                and not self._discharge_session_started
+                and current_usable_kwh < usable_capacity_kwh * 0.95
+            ):
+                standalone_candidates = [
+                    candidate for candidate in cycle_candidates
+                    if candidate["kind"] == "grid"
+                    and float(candidate["cost"]) >= 0
+                    and cast(datetime, candidate["start"]) < primary_start
+                    and any(
+                        cast(datetime, candidate["end"]) <= cast(datetime, slot["start"]) < primary_start
+                        and float(slot["net_solar_kwh"]) < 0
+                        and slot.get("price_known", True)
+                        and float(slot["import_price"]) - float(candidate["cost"]) >= battery_min_profit
+                        for slot in future_slots
+                    )
+                ]
+                if standalone_candidates:
+                    profitable_primary_candidates = standalone_candidates
+                    standalone_grid_starts = {
+                        cast(datetime, candidate["start"]) for candidate in standalone_candidates
+                    }
             if not profitable_primary_candidates:
                 break
 
@@ -2563,6 +2616,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             projected_usable_at_charge_kwh = _project_usable_energy_until(cast(datetime, best_candidate["start"]))
             if cycle_index == 0 and cursor <= now:
                 target_kwh = max(0.0, usable_capacity_kwh - projected_usable_at_charge_kwh)
+                if standalone_grid_starts:
+                    # Do not assume discharge while waiting in the cheap band.
+                    target_kwh = min(target_kwh, current_remaining_capacity_kwh)
             elif previous_charge_end is not None:
                 target_kwh = min(
                     usable_capacity_kwh,
@@ -2658,11 +2714,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and _is_profitable_charge(candidate)
                     and valley_block_start <= cast(datetime, candidate["start"]) < valley_block_end
                 ]
+                used_grid_starts = {
+                    cast(datetime, selected["start"])
+                    for selected in selected_for_cycle if selected["kind"] == "grid"
+                }
                 charged_kwh = _append_charge_candidates(
                     selected_for_cycle,
                     sorted(grid_candidates, key=lambda item: (float(item["cost"]), item["start"])),
                     target_kwh=target_kwh,
                     charged_kwh=charged_kwh,
+                    used_starts=used_grid_starts,
                 )
 
             if charged_kwh < target_kwh and active_charge_cycle_needs_topup:
@@ -2749,11 +2810,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             slot_charge_kwh = float(selected_grid_charge_by_start.get(slot_start, 0.0))
             if slot_charge_kwh > 0:
-                usable_hours = min(float(slot["hours"]), slot_charge_kwh / max_charge_kw)
+                active_start = max(slot_start, now)
+                usable_hours = min((slot_end - active_start).total_seconds() / 3600, slot_charge_kwh / max_charge_kw)
                 planned_grid_charge_windows.append(
                     {
-                        "start": slot_start.isoformat(),
-                        "end": (slot_start + timedelta(hours=usable_hours)).isoformat(),
+                        "start": active_start.isoformat(),
+                        "end": (active_start + timedelta(hours=usable_hours)).isoformat(),
                         "price": round(float(slot["import_price"]), 6),
                         "usable_hours": round(usable_hours, 3),
                         "charge_kwh": round(slot_charge_kwh, 6),
@@ -2847,7 +2909,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         usable_capacity_kwh: float,
         max_charge_kw: float,
         mode_start: datetime | None = None,
-        assume_full_at_end: bool = False,
     ) -> tuple[str, float, datetime]:
         charge_start = cast(datetime, charge_window.get("start", slot["start"]))
         charge_end = cast(datetime, charge_window["end"])
@@ -2861,8 +2922,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             usable_hours = round(charge_kwh / max_charge_kw, 6)
             charge_end = mode_start + timedelta(hours=usable_hours)
         sim_usable_energy_kwh = min(usable_capacity_kwh, sim_usable_energy_kwh + charge_kwh)
-        if assume_full_at_end:
-            sim_usable_energy_kwh = usable_capacity_kwh
         if mode_start <= now < charge_end:
             current_mode = mode
         hourly_modes.append(
@@ -2969,6 +3028,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         max_charge_kw: float,
         max_discharge_kw: float,
         battery_soc_percent: float | None = None,
+        no_charge_reserve_kwh: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], str]:
         solar_charge_starts = build_charge_window_lookup(
             planned_solar_charge_windows,
@@ -3128,7 +3188,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     usable_capacity_kwh=usable_capacity_kwh,
                     max_charge_kw=max_charge_kw,
                     mode_start=max(slot_start, cast(datetime, overlapping_charge_window["start"])),
-                    assume_full_at_end=True,
                 )
                 last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
@@ -3154,7 +3213,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     sim_usable_energy_kwh=sim_usable_energy_kwh,
                     usable_capacity_kwh=usable_capacity_kwh,
                     max_charge_kw=max_charge_kw,
-                    assume_full_at_end=True,
                 )
                 last_charge_mode = charge_mode
                 while slot_index < len(slots) and slots[slot_index]["start"] < charge_end:
@@ -3193,7 +3251,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             # Distribute battery capacity across the most expensive deficit hours
             # first (highest price â†’ next highest â†’ ... until battery empty).
-            discharge_budget_kwh = sim_usable_energy_kwh
+            segment_reserve_kwh = reserve_without_charge_opportunity(
+                slots=slots, charge_windows=charge_windows,
+                after=max(now, segment_slots[0]["start"]), reserve_kwh=no_charge_reserve_kwh,
+            )
+            discharge_budget_kwh = max(0.0, sim_usable_energy_kwh - segment_reserve_kwh)
             planned_discharge_kwh = plan_segment_discharge_kwh(
                 slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
@@ -3212,11 +3274,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # the next charge) prevents depleting the battery too early.
             forced_export_kwh = self._plan_segment_export_kwh(
                 slots=segment_slots,
-                available_energy_kwh=sim_usable_energy_kwh,
+                available_energy_kwh=discharge_budget_kwh,
                 total_segment_demand_kwh=total_segment_battery_demand_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
-            has_export_surplus = sim_usable_energy_kwh > total_segment_battery_demand_kwh
+            has_export_surplus = discharge_budget_kwh > total_segment_battery_demand_kwh
 
             # Export to grid is only allowed within 8 hours before the next
             # planned charge phase.  Exporting earlier risks draining the
@@ -3246,6 +3308,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 running_demand_suffix += max(0.0, -float(_slot.get("net_solar_kwh", 0.0)))
 
             for segment_slot in segment_slots:
+                energy_before_slot = sim_usable_energy_kwh
                 segment_slot_start = segment_slot["start"]
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
@@ -3327,6 +3390,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 discharge_allowed_by_soc = (
                     drain_before_charge_phase
                     or simulated_discharge_session_started
+                    or last_charge_mode in ("laden_van_net", "laden_met_zonne_energie")
                     or simulated_soc_percent >= _BATTERY_DISCHARGE_SOC_THRESHOLD_PERCENT
                 )
 
@@ -3380,6 +3444,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         last_charge_mode = "accu_uit"
                         sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh))
 
+                mode_end = segment_slot_end
+                reserve_kwh = reserve_without_charge_opportunity(
+                    slots=slots, charge_windows=charge_windows,
+                    after=max(now, segment_slot_start), reserve_kwh=no_charge_reserve_kwh,
+                )
+                if mode in ("ontladen", "ontladen_naar_net"):
+                    available_kwh = max(0.0, energy_before_slot - reserve_kwh)
+                    allocated_kwh = min(available_kwh, max(0.0, energy_before_slot - sim_usable_energy_kwh))
+                    active_start = max(now, segment_slot_start)
+                    active_hours = max(0.0, (segment_slot_end - active_start).total_seconds() / 3600)
+                    discharge_kw = max_discharge_kw if mode == "ontladen_naar_net" else min(
+                        max_discharge_kw,
+                        max(0.0, -float(segment_slot["net_solar_kwh"])) / max(float(segment_slot["hours"]), 1e-9),
+                    )
+                    if allocated_kwh <= 1e-9:
+                        mode = "accu_uit"
+                        sim_usable_energy_kwh = energy_before_slot
+                    elif discharge_kw > 0:
+                        discharge_hours = min(active_hours, allocated_kwh / discharge_kw)
+                        mode_end = active_start + timedelta(hours=discharge_hours)
+                        sim_usable_energy_kwh = max(reserve_kwh, energy_before_slot - discharge_hours * discharge_kw)
+
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
                     if not cycle_state_initialized and mode in ("laden_met_zonne_energie", "laden_van_net"):
@@ -3392,12 +3478,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 hourly_modes.append(
                     {
                         "start": segment_slot["start"].isoformat(),
-                        "end": segment_slot["end"].isoformat(),
+                        "end": mode_end.isoformat(),
                         "price": round(float(segment_slot["import_price"]), 6),
-                        "usable_hours": round(float(segment_slot["hours"]), 3),
+                        "usable_hours": round((mode_end - segment_slot_start).total_seconds() / 3600, 3),
                         "mode": mode,
                     }
                 )
+                if mode_end < segment_slot_end:
+                    hourly_modes.append({
+                        "start": mode_end.isoformat(), "end": segment_slot_end.isoformat(),
+                        "price": round(float(segment_slot["import_price"]), 6),
+                        "usable_hours": round((segment_slot_end - mode_end).total_seconds() / 3600, 3),
+                        "mode": "accu_uit",
+                    })
 
             slot_index = segment_end_index
 
@@ -3415,7 +3508,33 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode=active_charge_phase_mode,
         )
 
-        return self._merge_mode_windows(hourly_modes), current_mode
+        # Explicit idle remainders prevent the start-based mode schedule from
+        # extending a partial charge until the next price-slot boundary.
+        complete_modes: list[dict[str, str | float]] = []
+        cursor = now
+        for window in sorted(hourly_modes, key=lambda item: str(item["start"])):
+            start = dt_util.parse_datetime(str(window["start"]))
+            end = dt_util.parse_datetime(str(window["end"]))
+            if start is None or end is None or end <= now:
+                continue
+            if start > cursor:
+                if complete_modes and start - cursor <= timedelta(milliseconds=1):
+                    complete_modes[-1]["end"] = start.isoformat()
+                else:
+                    complete_modes.append({
+                        "start": cursor.isoformat(), "end": start.isoformat(),
+                        "price": window["price"], "mode": "accu_uit",
+                        "usable_hours": (start - cursor).total_seconds() / 3600,
+                    })
+            complete_modes.append({**window, "start": max(now, start).isoformat()})
+            cursor = end
+        if slots and cursor < slots[-1]["end"]:
+            complete_modes.append({
+                "start": cursor.isoformat(), "end": slots[-1]["end"].isoformat(),
+                "price": float(slots[-1]["import_price"]), "mode": "accu_uit",
+                "usable_hours": (slots[-1]["end"] - cursor).total_seconds() / 3600,
+            })
+        return self._merge_mode_windows(complete_modes), current_mode
 
     def _plan_segment_export_kwh(
         self,

@@ -80,6 +80,23 @@ Battery strategy values:
 - `laden_met_zonne_energie`
 - `laden_van_net`
 
+## Battery reserve
+
+Battery options include **Minimum battery state of charge without a charging
+opportunity (%)**. This additional reserve applies when the remaining planning
+horizon contains neither a planned profitable charge window nor forecast solar
+surplus after home consumption. It limits both home discharge and grid export;
+the normal minimum state of charge always remains the absolute lower limit.
+For example, with a normal minimum of 20% and this setting at 40%, the battery
+stops discharging at 40% when no replenishment is forecast. A future charge
+opportunity releases the extra reserve. Existing installations default to their
+normal minimum until this option is changed.
+
+The strategy sensor exposes `battery_no_charge_min_soc_percent`,
+`battery_no_charge_reserve_active`, and `battery_reserved_energy_kwh` for checking
+the reserve. The planner supplies a strategy; the inverter or your automation
+must follow it to stop actual discharge.
+
 ## Lovelace card
 
 The integration includes a custom Lovelace card that shows the upcoming energy

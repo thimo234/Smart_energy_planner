@@ -230,6 +230,8 @@ class BatteryPlannerSensor(PlannerSensor):
             "battery_discharge_cycle_active": getattr(data, "battery_discharge_cycle_active", False),
             "home_demand_until_next_charge_kwh": getattr(data, "home_demand_until_next_charge_kwh", 0.0),
             "battery_reserved_energy_kwh": getattr(data, "battery_reserved_energy_kwh", 0.0),
+            "battery_no_charge_min_soc_percent": getattr(data, "battery_no_charge_min_soc_percent", 20.0),
+            "battery_no_charge_reserve_active": getattr(data, "battery_no_charge_reserve_active", False),
             "battery_energy_available_for_discharge_kwh": getattr(
                 data, "battery_energy_available_for_discharge_kwh", 0.0
             ),

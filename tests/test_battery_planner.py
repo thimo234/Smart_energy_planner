@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 import sys
 import types
@@ -13,6 +15,7 @@ from custom_components.smart_energy_planner.battery_planner import (
     collapse_short_off_mode_windows,
     normalize_full_battery_charge_mode,
     normalize_full_battery_mode_windows,
+    reserve_without_charge_opportunity,
     summarize_battery_cycles,
 )
 
@@ -81,6 +84,144 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
+    def test_no_charge_reserve_requires_future_surplus_or_charge(self):
+        now = datetime(2026, 9, 17, 12)
+        for net_solar, charge_end, expected in (
+            (-0.5, None, 2.0), (0.0, None, 2.0),
+            (0.5, None, 0.0), (-0.5, now, 2.0),
+            (-0.5, now + timedelta(hours=1), 0.0),
+        ):
+            with self.subTest(net_solar=net_solar, charge_end=charge_end):
+                self.assertEqual(reserve_without_charge_opportunity(
+                    slots=[dict(end=now + timedelta(hours=1), net_solar_kwh=net_solar)],
+                    charge_windows=[] if charge_end is None else [dict(end=charge_end.isoformat())],
+                    after=now, reserve_kwh=2.0,
+                ), expected)
+
+    def test_no_charge_reserve_stops_discharge_at_floor_including_partial_slot(self):
+        start = datetime(2026, 9, 17, 12)
+        for initial, minute in ((2.5, 0), (2.0, 0), (1.5, 0), (2.5, 15)):
+            with self.subTest(initial=initial, minute=minute):
+                now = start.replace(minute=minute)
+                coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+                coordinator._active_charge_phase_end = None
+                coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+                coordinator._charge_session_started = False
+                coordinator._discharge_session_started = True
+                coordinator._battery_cycle_state_initialized = True
+                slots = [dict(start=start+timedelta(hours=i), end=start+timedelta(hours=i+1),
+                              hours=1.0, import_price=0.30, export_price=0.20,
+                              net_solar_kwh=-1.0, demand_kwh=1.5, solar_kwh=0.5)
+                         for i in range(3)]
+                windows, mode = coordinator._build_mode_windows_from_hourly_plan(
+                    slots=slots, now=now, planned_solar_charge_windows=[], planned_grid_charge_windows=[],
+                    initial_usable_energy_kwh=initial, usable_capacity_kwh=8.0,
+                    battery_soc_percent=20 + initial * 10, average_price=0.30,
+                    average_export_price=0.20, max_charge_kw=3.0, max_discharge_kw=3.0,
+                    no_charge_reserve_kwh=2.0,
+                )
+                active = [w for w in windows if w["mode"] in ("ontladen", "ontladen_naar_net")]
+                if initial <= 2.0:
+                    self.assertEqual(mode, BATTERY_MODE_OFF)
+                    self.assertEqual(active, [])
+                else:
+                    self.assertEqual(mode, "ontladen")
+                    self.assertEqual(len(active), 1)
+                    self.assertEqual(datetime.fromisoformat(active[0]["end"]), now + timedelta(minutes=30))
+                    self.assertEqual(windows[-1]["mode"], BATTERY_MODE_OFF)
+
+    def test_future_solar_surplus_releases_extra_reserve(self):
+        now = datetime(2026, 9, 17, 12)
+        coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+        coordinator._active_charge_phase_end = None
+        coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+        coordinator._charge_session_started = False
+        coordinator._discharge_session_started = True
+        coordinator._battery_cycle_state_initialized = True
+        slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1),
+                      hours=1.0, import_price=0.30, export_price=0.20,
+                      net_solar_kwh=-1.0 if i == 0 else 1.0,
+                      demand_kwh=1.0, solar_kwh=0.0 if i == 0 else 2.0)
+                 for i in range(2)]
+        _, mode = coordinator._build_mode_windows_from_hourly_plan(
+            slots=slots, now=now, planned_solar_charge_windows=[], planned_grid_charge_windows=[],
+            initial_usable_energy_kwh=2.0, usable_capacity_kwh=8.0,
+            battery_soc_percent=40.0, average_price=0.30, average_export_price=0.20,
+            max_charge_kw=3.0, max_discharge_kw=3.0, no_charge_reserve_kwh=2.0,
+        )
+        self.assertEqual(mode, "ontladen")
+
+    def test_standalone_grid_charge_respects_profit_room_and_discharge_latch(self):
+        now = datetime(2026, 9, 17, 12)
+        for peak, room, discharging, demand in (
+            (0.22, 3.2, False, -1.0),
+            (0.425, 0.0, False, -1.0),
+            (0.425, 0.4, False, -1.0),
+            (0.425, 3.2, True, -1.0),
+            (0.425, 3.2, False, 0.0),
+        ):
+            with self.subTest(peak=peak, room=room, discharging=discharging, demand=demand):
+                coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+                coordinator._discharge_session_started = discharging
+                slots = [dict(start=now + timedelta(hours=i), end=now + timedelta(hours=i+1),
+                              hours=1.0, import_price=0.159 if i == 0 else peak,
+                              net_solar_kwh=demand) for i in range(2)]
+                _, grid = coordinator._plan_charge_windows_for_horizon(
+                    slots=slots, now=now, usable_capacity_kwh=8.0,
+                    current_remaining_capacity_kwh=room, max_charge_kw=3.0,
+                    max_discharge_kw=3.0, battery_min_profit=0.08,
+                )
+                self.assertEqual(grid, [])
+
+    def test_september_feedback_grid_charge_before_evening_and_tomorrow_solar(self):
+        data = json.loads((Path(__file__).parent / "fixtures" / "battery_2026_09_17.json").read_text())
+        now = datetime.fromisoformat("2026-09-17T12:33:32+02:00")
+        slots = []
+        for price in data["upcoming_energy_price_windows"]:
+            start = datetime.fromisoformat(price["start"])
+            end = datetime.fromisoformat(price["end"])
+            metrics = []
+            for key in ("estimated_hourly_home_demand", "estimated_hourly_solar_forecast"):
+                metrics.append(sum(
+                    row["estimated_kwh"] * max(0.0, (
+                        min(end, datetime.fromisoformat(row["end"]))
+                        - max(start, datetime.fromisoformat(row["start"]))
+                    ).total_seconds()) / 3600
+                    for row in data[key]
+                ))
+            demand, solar = metrics
+            slots.append(dict(start=start, end=end, hours=0.25,
+                              import_price=price["price"], export_price=price["price"] - 0.10,
+                              net_solar_kwh=solar-demand, demand_kwh=demand, solar_kwh=solar))
+
+        for tomorrow_solar in (True, False):
+            with self.subTest(tomorrow_solar=tomorrow_solar):
+                selected_slots = slots if tomorrow_solar else [s for s in slots if s["start"].date() == now.date()]
+                coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
+                coordinator._active_charge_phase_end = None
+                coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
+                coordinator._charge_session_started = True
+                coordinator._discharge_session_started = False
+                coordinator._battery_cycle_state_initialized = True
+                solar_windows, grid_windows = coordinator._plan_charge_windows_for_horizon(
+                    slots=selected_slots, now=now, usable_capacity_kwh=8.0,
+                    current_remaining_capacity_kwh=3.2, max_charge_kw=3.0,
+                    max_discharge_kw=3.0, battery_min_profit=0.08,
+                )
+                today_grid = [w for w in grid_windows if datetime.fromisoformat(w["start"]).date() == now.date()]
+                self.assertTrue(today_grid)
+                self.assertAlmostEqual(sum(w["charge_kwh"] for w in today_grid), 3.2, places=5)
+                self.assertEqual(datetime.fromisoformat(today_grid[0]["start"]), now)
+                self.assertTrue(all(datetime.fromisoformat(w["end"]) <= now.replace(hour=17, minute=30) for w in today_grid))
+                _, mode = coordinator._build_mode_windows_from_hourly_plan(
+                    slots=selected_slots, now=now, planned_solar_charge_windows=solar_windows,
+                    planned_grid_charge_windows=grid_windows, initial_usable_energy_kwh=4.8,
+                    usable_capacity_kwh=8.0, battery_soc_percent=68.0,
+                    average_price=0.30, average_export_price=0.20,
+                    max_charge_kw=3.0, max_discharge_kw=3.0,
+                )
+                self.assertEqual(mode, BATTERY_MODE_GRID_CHARGE)
+
     def test_today_demand_adjustment_uses_partial_current_hour(self):
         now = datetime(2026, 6, 30, 11, 30)
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)

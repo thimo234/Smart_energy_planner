@@ -834,6 +834,7 @@ def build_energy_balance_slots(
                 "end": window.end,
                 "price": window.price,
                 "import_price": window.price,
+                "price_known": window.price_known,
                 "export_price": export_price,
                 "hours": slot_hours,
                 "solar_kwh": round(solar_kwh, 3),

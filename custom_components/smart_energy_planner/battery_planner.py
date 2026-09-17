@@ -20,6 +20,25 @@ CHARGE_MODES = {BATTERY_MODE_GRID_CHARGE, BATTERY_MODE_SOLAR_CHARGE}
 DISCHARGE_MODES = {BATTERY_MODE_DISCHARGE, BATTERY_MODE_EXPORT}
 
 
+def reserve_without_charge_opportunity(
+    *,
+    slots: list[dict[str, Any]],
+    charge_windows: list[dict[str, Any]],
+    after: datetime,
+    reserve_kwh: float,
+) -> float:
+    """Keep extra reserve unless the remaining horizon offers replenishment."""
+
+    if any(slot["end"] > after and float(slot.get("net_solar_kwh", 0.0)) > 0 for slot in slots):
+        return 0.0
+    if any(
+        (end := _parse_datetime(window.get("end"))) is not None and end > after
+        for window in charge_windows
+    ):
+        return 0.0
+    return max(0.0, reserve_kwh)
+
+
 def battery_mode_family(mode: str) -> str:
     """Return the broad mode family used for battery cycle summaries."""
 

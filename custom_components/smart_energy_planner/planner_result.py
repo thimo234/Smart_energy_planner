@@ -98,3 +98,5 @@ class PlannerResult:
     source_status: dict[str, str]
     source_errors: list[str]
     rationale: str
+    battery_no_charge_min_soc_percent: float = 20.0
+    battery_no_charge_reserve_active: bool = False
