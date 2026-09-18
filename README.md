@@ -95,9 +95,11 @@ rule also protects mixed battery energy. Historical energy with no recorded
 purchase price cannot be checked retroactively. The margin is a tariff
 difference per modeled kWh; conversion losses and battery wear are not modeled.
 
-When only grid replenishment is forecast, already stored energy needed for the
-no-charge reserve is retained across that cycle. This avoids buying extra energy
-solely to rebuild a reserve that cannot subsequently be discharged profitably.
+Solar surplus and a profitable planned grid charge both release the extra
+no-charge reserve. There is no separate reserve for grid-only cycles. After the
+last charging opportunity, the extra floor applies again if no further solar
+surplus or profitable grid charge is forecast. It prevents further discharge;
+it does not force charging if the battery is already below that floor.
 
 Battery options include **Minimum battery state of charge without a charging
 opportunity (%)**. This additional reserve applies when the remaining planning

@@ -1846,7 +1846,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             max_discharge_kw=max_discharge,
             battery_min_profit=battery_min_profit,
             charge_safety_margin=charge_safety_margin,
-            no_charge_reserve_kwh=no_charge_reserve_kwh,
         )
         next_planned_solar_charge_start = min(
             (
@@ -1882,10 +1881,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             after=now,
             reserve_kwh=no_charge_reserve_kwh,
         )
-        cycle_reserve_kwh = no_charge_reserve_kwh if planned_grid_charge_windows and not any(
-            float(slot["net_solar_kwh"]) > 0 for slot in energy_balance_slots
-        ) else 0.0
-        battery_reserved_energy_kwh = min(battery_energy_available_kwh, max(active_no_charge_reserve_kwh, cycle_reserve_kwh))
+        battery_reserved_energy_kwh = min(battery_energy_available_kwh, active_no_charge_reserve_kwh)
         battery_energy_available_for_discharge_kwh = max(0.0, battery_energy_available_kwh - battery_reserved_energy_kwh)
         battery_exportable_energy_kwh = battery_energy_available_for_discharge_kwh
         battery_room_needed_for_solar_kwh = 0.0
@@ -2392,7 +2388,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         max_discharge_kw: float,
         battery_min_profit: float,
         charge_safety_margin: float = 0.0,
-        no_charge_reserve_kwh: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2401,9 +2396,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
-        protected_reserve = min(current_usable_kwh, max(0.0, no_charge_reserve_kwh)) if not any(
-            float(slot["net_solar_kwh"]) > 0 for slot in future_slots
-        ) else 0.0
         # The live discharge latch protects the current cycle, not the entire
         # forecast horizon. A later grid cycle can start after its depletion.
         first_grid_charge_start = now
@@ -2411,7 +2403,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             first_grid_charge_start = self._estimate_battery_depletion_time(
                 slots=future_slots, now=now, initial_usable_energy_kwh=current_usable_kwh,
                 max_discharge_kw=max_discharge_kw,
-                floor_kwh=max(protected_reserve, _BATTERY_DEPLETION_EPSILON_KWH),
             )
         if max_discharge_kw <= 0:
             first_charge_not_before = now
@@ -2533,7 +2524,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 active_fraction = min(1.0, active_hours / slot_hours)
                 net_battery_demand_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * active_fraction
                 discharge_kwh = min(max_discharge_kw * active_hours, net_battery_demand_kwh)
-                projected_usable_kwh = max(protected_reserve, projected_usable_kwh - discharge_kwh)
+                projected_usable_kwh = max(0.0, projected_usable_kwh - discharge_kwh)
             return projected_usable_kwh
 
         def _append_charge_candidates(
@@ -2795,7 +2786,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and float(slot["import_price"]) + 1e-9 >= minimum_sale_price
                 )
                 solar_selected = [item for item in selected_for_cycle if item["kind"] == "solar"]
-                grid_budget = max(0.0, profitable_demand - max(0.0, existing_energy - protected_reserve)
+                grid_budget = max(0.0, profitable_demand - existing_energy
                                   - sum(float(item["charge_kwh"]) for item in solar_selected))
                 # Equal-price slots nearest the cheapest slot avoid unnecessary
                 # gaps without buying more energy or accepting a higher price.
@@ -3099,11 +3090,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         no_charge_reserve_kwh: float = 0.0,
         battery_min_profit: float = 0.08,
     ) -> tuple[list[dict[str, str | float]], str]:
-        protected_reserve = min(initial_usable_energy_kwh, max(0.0, no_charge_reserve_kwh)) if (
-            planned_grid_charge_windows and not any(
-                slot["end"] > now and float(slot["net_solar_kwh"]) > 0 for slot in slots
-            )
-        ) else 0.0
         solar_charge_starts = build_charge_window_lookup(
             planned_solar_charge_windows,
             max_charge_kw=max_charge_kw,
@@ -3183,7 +3169,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     now=now,
                     initial_usable_energy_kwh=initial_usable_energy_kwh,
                     max_discharge_kw=max_discharge_kw,
-                    floor_kwh=max(protected_reserve, _BATTERY_DEPLETION_EPSILON_KWH),
                 )
                 grid_charge_starts = {
                     start: window
@@ -3344,7 +3329,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=slots, charge_windows=charge_windows,
                 after=max(now, segment_slots[0]["start"]), reserve_kwh=no_charge_reserve_kwh,
             )
-            segment_reserve_kwh = max(segment_reserve_kwh, protected_reserve)
             discharge_budget_kwh = max(0.0, sim_usable_energy_kwh - segment_reserve_kwh)
             planned_discharge_kwh = plan_segment_discharge_kwh(
                 slots=[slot for slot in segment_slots if grid_cost_floor is None or (
@@ -3549,7 +3533,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     slots=slots, charge_windows=charge_windows,
                     after=max(now, segment_slot_start), reserve_kwh=no_charge_reserve_kwh,
                 )
-                reserve_kwh = max(reserve_kwh, protected_reserve)
                 if mode in ("ontladen", "ontladen_naar_net"):
                     available_kwh = max(0.0, energy_before_slot - reserve_kwh)
                     allocated_kwh = min(available_kwh, max(0.0, energy_before_slot - sim_usable_energy_kwh))
