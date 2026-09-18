@@ -1,5 +1,11 @@
 # Controle accuplanning op de aangeleverde sensordata
 
+> Historisch rapport van 17 september. De winstcontrole is op 18 september
+> aangescherpt: netlaadvolume is nu begrensd op rendabele latere vraag na aftrek
+> van bestaande energie, en ontladen krijgt een bewaarde inkoopprijsgrens.
+> De hieronder beschreven oude bijvuluitkomst en bijbehorende JSON zijn daarom
+> geen weergave van de huidige planner. Zie README voor het huidige gedrag.
+
 ## Conclusie
 
 De eerdere code bevatte aantoonbare fouten in de energiebalans en schakeltijden.

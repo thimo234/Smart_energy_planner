@@ -82,6 +82,23 @@ Battery strategy values:
 
 ## Battery reserve
 
+Grid charging is limited to forecast home consumption at a known later tariff
+at least `battery_min_profit_per_kwh` above the purchase tariff. Existing usable
+energy and planned solar charging are deducted first. Thus a high evening peak
+does not automatically justify filling the battery completely. Equal-price
+grid slots nearest the cheapest block are preferred to avoid idle gaps.
+
+After grid charging, discharge and export also respect the minimum price
+difference. The highest grid purchase price is retained across refreshes and
+restarts until the usable battery is depleted. This deliberately conservative
+rule also protects mixed battery energy. Historical energy with no recorded
+purchase price cannot be checked retroactively. The margin is a tariff
+difference per modeled kWh; conversion losses and battery wear are not modeled.
+
+When only grid replenishment is forecast, already stored energy needed for the
+no-charge reserve is retained across that cycle. This avoids buying extra energy
+solely to rebuild a reserve that cannot subsequently be discharged profitably.
+
 Battery options include **Minimum battery state of charge without a charging
 opportunity (%)**. This additional reserve applies when the remaining planning
 horizon contains neither a planned profitable charge window nor forecast solar
