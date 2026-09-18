@@ -2607,7 +2607,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
         self.assertIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
 
-    def test_charge_windows_less_than_three_hours_apart_form_one_phase(self):
+    def test_charge_phase_preserves_idle_gaps_between_selected_windows(self):
         now = datetime(2026, 6, 24, 9, 0)
         slots = []
         for hour in range(9, 15):
@@ -2658,11 +2658,12 @@ class BatteryPlannerTest(unittest.TestCase):
             max_discharge_kw=3.0,
         )
 
-        self.assertTrue(
-            any(
-                window["mode"] == "laden_met_zonne_energie"
-                and window["start"] <= now.replace(hour=10).isoformat()
-                and window["end"] >= now.replace(hour=14).isoformat()
-                for window in mode_windows
-            )
-        )
+        charge_windows = [w for w in mode_windows if w["mode"] == "laden_met_zonne_energie"]
+        self.assertEqual([(w["start"], w["end"]) for w in charge_windows], [
+            (now.replace(hour=10).isoformat(), now.replace(hour=11).isoformat()),
+            (now.replace(hour=13).isoformat(), now.replace(hour=14).isoformat()),
+        ])
+        self.assertTrue(any(w["mode"] == "accu_uit"
+                            and w["start"] == now.replace(hour=11).isoformat()
+                            and w["end"] == now.replace(hour=13).isoformat()
+                            for w in mode_windows))

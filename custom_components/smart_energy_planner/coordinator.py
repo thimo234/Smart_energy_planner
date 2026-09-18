@@ -2392,6 +2392,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        # The live discharge latch protects the current cycle, not the entire
+        # forecast horizon. A later grid cycle can start after its depletion.
+        first_grid_charge_start = now
+        if self._discharge_session_started or current_usable_kwh >= usable_capacity_kwh * 0.95:
+            first_grid_charge_start = self._estimate_battery_depletion_time(
+                slots=future_slots, now=now, initial_usable_energy_kwh=current_usable_kwh,
+                max_discharge_kw=max_discharge_kw,
+            )
         if max_discharge_kw <= 0:
             first_charge_not_before = now
         else:
@@ -2565,13 +2573,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             if (
                 cycle_index == 0
-                and not self._discharge_session_started
-                and current_usable_kwh < usable_capacity_kwh * 0.95
+                and first_grid_charge_start is not None
             ):
                 standalone_candidates = [
                     candidate for candidate in cycle_candidates
                     if candidate["kind"] == "grid"
                     and float(candidate["cost"]) >= 0
+                    and max(now, cast(datetime, candidate["start"])) >= first_grid_charge_start
                     and cast(datetime, candidate["start"]) < primary_start
                     and any(
                         cast(datetime, candidate["end"]) <= cast(datetime, slot["start"]) < primary_start
@@ -2616,7 +2624,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             projected_usable_at_charge_kwh = _project_usable_energy_until(cast(datetime, best_candidate["start"]))
             if cycle_index == 0 and cursor <= now:
                 target_kwh = max(0.0, usable_capacity_kwh - projected_usable_at_charge_kwh)
-                if standalone_grid_starts:
+                if standalone_grid_starts and first_grid_charge_start == now:
                     # Do not assume discharge while waiting in the cheap band.
                     target_kwh = min(target_kwh, current_remaining_capacity_kwh)
             elif previous_charge_end is not None:
@@ -3421,7 +3429,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     # that is a forced part of a segment is handled separately
                     # through segment_discharge_kwh; segment_export_kwh must
                     # never override a planned charge phase.
-                    mode = charge_phase_mode
+                    # A cycle may contain pauses between selected charge
+                    # windows. Keep those pauses idle; commanding grid charge
+                    # here adds unbudgeted energy without updating the simulation.
+                    mode = "accu_uit"
                 elif segment_export_kwh > 0 and sim_usable_energy_kwh > 0 and within_export_window:
                     mode = "ontladen_naar_net"
                     last_charge_mode = "accu_uit"

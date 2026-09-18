@@ -13,10 +13,10 @@ from custom_components.smart_energy_planner.battery_models import SolarWindow
 from custom_components.smart_energy_planner.price_models import PlannerWindow
 
 
-def feedback_slots():
-    data = json.loads((Path(__file__).parent / "fixtures/battery_2026_09_17.json").read_text())
+def feedback_slots(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00"):
+    data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
     parse = datetime.fromisoformat
-    now = parse("2026-09-17T12:33:32+02:00")
+    now = parse(timestamp)
     prices = [PlannerWindow(parse(w["start"]), parse(w["end"]), w["price"], w["price_known"])
               for w in data["upcoming_energy_price_windows"]]
     solar = [SolarWindow(parse(w["start"]), parse(w["end"]), w["estimated_kwh"], None, None)
@@ -56,18 +56,22 @@ def replay():
     return now, slots, solar, grid, windows, mode
 
 
-def replay_full_plan():
+def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
+                     discharging=False, reserve=20):
     """Exercise final sensor scheduling with the already computed demand input."""
-    now, slots = feedback_slots()
-    data = json.loads((Path(__file__).parent / "fixtures/battery_2026_09_17.json").read_text())
+    now, slots = feedback_slots(snapshot, timestamp)
+    data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
     prices = [PlannerWindow(s["start"], s["end"], s["import_price"], s["price_known"]) for s in slots]
     exports = [PlannerWindow(s["start"], s["end"], s["export_price"], s["price_known"]) for s in slots]
     solar = [SolarWindow(datetime.fromisoformat(w["start"]), datetime.fromisoformat(w["end"]),
                          w["estimated_kwh"], None, None) for w in data["estimated_hourly_solar_forecast"]]
     c = coordinator()
+    c._charge_session_started = not discharging
+    c._discharge_session_started = discharging
     c.config_entry = SimpleNamespace(data={"battery_enabled": True, "battery_capacity_kwh": 10, "battery_min_soc_percent": 20,
                                           "battery_max_charge_kw": 3, "battery_max_discharge_kw": 3,
-                                          "battery_demand_safety_margin": 0}, options={})
+                                          "battery_demand_safety_margin": 0,
+                                          "battery_no_charge_min_soc_percent": reserve}, options={})
     c._locked_eco_window = c._locked_preheat_end = c._preheat_expired_at = None
     namespace = c._build_plan.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {
@@ -77,7 +81,7 @@ def replay_full_plan():
         result = c._build_plan(
             planner_kind="battery", windows=[p for p in prices if p.price_known], all_windows=prices,
             export_windows=exports, all_export_windows=exports, battery_switch_windows=prices,
-            price_average=None, export_price_average=None, current_price=.159,
+            price_average=None, export_price_average=None, current_price=prices[0].price,
             solar_forecast_kwh=sum(w.forecast_kwh for w in solar if w.start.date() == now.date()),
             solar_windows=solar, all_solar_windows=solar, solcast_confidence=None,
             heating_estimate_kwh=0, lookback_average_kwh=20, total_energy_daily_average_kwh=20,
@@ -85,7 +89,7 @@ def replay_full_plan():
             room_temperature_c=None, thermostat_setpoint_c=None, thermostat_cool_setpoint_c=None,
             thermostat_preheat_setpoint_c=None, thermostat_eco_setpoint_c=None,
             room_cooling_hours_to_eco=None, room_cooling_rate_c_per_hour=None,
-            cooling_reference_outdoor_temp_c=None, battery_soc_percent=68,
+            cooling_reference_outdoor_temp_c=None, battery_soc_percent=soc,
             price_resolution="quarter_hourly", source_status={"price_sensor": "ok"}, source_errors=[],
         )
     return now, slots, result
@@ -111,6 +115,21 @@ def energy_trace(now, slots, windows, initial=6.8):
 
 
 class EnergyAccountingTest(unittest.TestCase):
+    def test_september_18_discharge_does_not_hide_tomorrow_grid_charge(self):
+        now, slots, result = replay_full_plan(
+            "2026_09_18", "2026-09-18T19:15:10.454352+02:00", soc=96, discharging=True, reserve=60,
+        )
+        self.assertEqual(result.battery_strategy, "ontladen")
+        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertTrue(any(w["mode"] == "laden_van_net" for w in result.planned_battery_mode_windows))
+        self.assertFalse(result.battery_no_charge_reserve_active)
+        self.assertTrue(all(datetime.fromisoformat(w["start"]).date() > now.date()
+                            for w in result.planned_grid_charge_windows))
+        self.assertGreater(sum(w["charge_kwh"] for w in result.planned_grid_charge_windows), .4)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9.6)
+        self.assertGreaterEqual(min(row[1] for row in trace), 2.0 - .005)
+        self.assertLessEqual(max(row[1] for row in trace), 10.0 + .005)
+
     def test_full_sensor_plan_preserves_energy_limited_stop_times(self):
         now, slots, result = replay_full_plan()
         self.assertEqual(result.battery_strategy, "laden_van_net")
