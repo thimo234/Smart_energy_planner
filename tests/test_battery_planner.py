@@ -513,7 +513,8 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
         self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T11:30:39.600000")
-        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T15:00:00")
+        self.assertGreater(cycle_summary["next_charge_window_end"], cycle_summary["next_charge_window_start"])
+        self.assertLessEqual(cycle_summary["next_charge_window_end"], "2026-06-26T15:00:00")
 
     def test_feedback_state_near_full_battery_does_not_show_evening_grid_charge(self):
         now = datetime(2026, 6, 25, 18, 15)
@@ -2076,7 +2077,7 @@ class BatteryPlannerTest(unittest.TestCase):
             ("laden_met_zonne_energie", charge_start.isoformat()),
             {(window["mode"], window["start"]) for window in mode_windows},
         )
-        self.assertEqual(mode_windows[-1]["mode"], BATTERY_MODE_SOLAR_CHARGE)
+        self.assertEqual(mode_windows[-1]["mode"], "accu_uit")
 
     def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)

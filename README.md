@@ -82,11 +82,14 @@ Battery strategy values:
 
 ## Battery reserve
 
-Grid charging is limited to forecast home consumption at a known later tariff
-at least `battery_min_profit_per_kwh` above the purchase tariff. Existing usable
-energy and planned solar charging are deducted first. Thus a high evening peak
-does not automatically justify filling the battery completely. Equal-price
-grid slots nearest the cheapest block are preferred to avoid idle gaps.
+Grid charging requires forecast home consumption at a known later tariff
+at least `battery_min_profit_per_kwh` above the purchase tariff, beyond what
+existing usable energy and planned solar charging can supply. Once justified,
+the cycle aims to refill the battery to 100%, using solar and eligible cheap
+grid slots, including slots before a small solar window. This prioritizes a
+full recharge: energy retained as reserve does not yet have a proven profitable
+discharge. Equal-price grid slots nearest the cheapest block avoid idle gaps.
+Charging durations account for power limits and remaining battery capacity.
 
 After grid charging, discharge and export also respect the minimum price
 difference. The highest grid purchase price is retained across refreshes and

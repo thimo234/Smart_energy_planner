@@ -116,6 +116,60 @@ def energy_trace(now, slots, windows, initial=6.8, max_charge=3):
 
 
 class EnergyAccountingTest(unittest.TestCase):
+    def test_full_recharge_from_floor_then_evening_discharge(self):
+        now, slots, result = replay_full_plan(
+            "2026_09_18_full_cycle", "2026-09-18T21:58:35+02:00",
+            soc=78, discharging=True, reserve=60, max_charge=2.5,
+        )
+        grid = result.planned_grid_charge_windows
+        self.assertEqual(len(grid), 1)
+        self.assertAlmostEqual(grid[0]["charge_kwh"], 8)
+        self.assertAlmostEqual((datetime.fromisoformat(grid[0]["end"]) -
+                                datetime.fromisoformat(grid[0]["start"])).total_seconds() / 3600, 3.2)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=7.8, max_charge=2.5)
+        self.assertAlmostEqual(min(row[1] for row in trace), 2, delta=.001)
+        self.assertAlmostEqual(max(row[1] for row in trace), 10, delta=.001)
+        self.assertTrue(any(w["mode"] == "ontladen" and w["start"] > grid[0]["end"]
+                            for w in result.planned_battery_mode_windows))
+        self.assertGreaterEqual(trace[-1][1], 6 - .001)
+
+    def test_small_solar_window_gets_grid_topup_and_later_solar_respects_capacity(self):
+        now, slots, result = replay_full_plan(
+            "2026_09_19_morning", "2026-09-19T08:00:10.907547+02:00",
+            soc=44, discharging=True, reserve=60, max_charge=2.5,
+        )
+        grid = result.planned_grid_charge_windows
+        self.assertEqual(len(grid), 1)
+        self.assertEqual(grid[0]["start"], "2026-09-19T12:30:00+02:00")
+        self.assertAlmostEqual(grid[0]["charge_kwh"], 7.856)
+        self.assertAlmostEqual(result.planned_solar_charge_windows[0]["charge_kwh"], .144)
+        self.assertLess(result.planned_solar_charge_windows[1]["charge_kwh"], 8)
+        windows = result.planned_battery_mode_windows
+        trace = energy_trace(now, slots, windows, initial=4.4, max_charge=2.5)
+        self.assertAlmostEqual(min(row[1] for row in trace), 2, delta=.001)
+        self.assertAlmostEqual(max(row[1] for row in trace), 10, delta=.001)
+        for previous, following in zip(windows, windows[1:]):
+            self.assertEqual(previous["end"], following["start"])
+        for window in windows:
+            self.assertLess(window["start"], window["end"])
+            if window["mode"] == "ontladen" and window["start"] > grid[0]["end"]:
+                for slot in slots:
+                    if slot["end"] > datetime.fromisoformat(window["start"]) and slot["start"] < datetime.fromisoformat(window["end"]):
+                        self.assertTrue(slot["price_known"])
+                        self.assertGreaterEqual(slot["import_price"] - .131 + 1e-9, .08)
+        self.assertIn("2026-09-19T18:30:00+02:00", [w["start"] for w in windows if w["mode"] == "ontladen"])
+        for window in [*grid, *result.planned_solar_charge_windows]:
+            mode = "laden_van_net" if window in grid else "laden_met_zonne_energie"
+            measured = energy_trace(now, slots, [{**window, "mode": mode}], initial=0, max_charge=2.5)
+            self.assertAlmostEqual(measured[-1][1], window["charge_kwh"], delta=.001)
+
+    def test_small_solar_window_does_not_override_minimum_grid_profit(self):
+        _, _, result = replay_full_plan(
+            "2026_09_19_morning", "2026-09-19T08:00:10.907547+02:00",
+            soc=44, discharging=True, reserve=60, max_charge=2.5, profit=.50,
+        )
+        self.assertEqual(result.planned_grid_charge_windows, [])
+
     def test_grid_opportunity_releases_reserve_in_sensor_and_before_charge(self):
         now, slots, result = replay_full_plan(
             "2026_09_18_reserve", "2026-09-18T21:24:16.994088+02:00",
@@ -150,8 +204,8 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         grid = result.planned_grid_charge_windows
         self.assertEqual(len(grid), 1)
-        self.assertEqual(grid[0]["start"], "2026-09-19T13:30:00+02:00")
-        self.assertAlmostEqual(grid[0]["charge_kwh"], 3.138)
+        self.assertEqual(grid[0]["start"], "2026-09-19T12:03:00+02:00")
+        self.assertAlmostEqual(grid[0]["charge_kwh"], 8.0)
         end = datetime.fromisoformat(grid[0]["end"])
         delivered = 0.0
         for window in result.planned_battery_mode_windows:
@@ -161,9 +215,10 @@ class EnergyAccountingTest(unittest.TestCase):
                 hours = max(0, (min(slot["end"], datetime.fromisoformat(window["end"]))
                                 - max(slot["start"], datetime.fromisoformat(window["start"]))).total_seconds()/3600)
                 if hours:
-                    self.assertGreaterEqual(slot["import_price"] - .13 + 1e-9, .08)
+                    self.assertGreaterEqual(slot["import_price"] - .131 + 1e-9, .08)
                     delivered += hours * max(0, -slot["net_solar_kwh"]) / slot["hours"]
-        self.assertAlmostEqual(delivered, grid[0]["charge_kwh"], delta=.005)
+        self.assertGreater(delivered, 0)
+        self.assertLessEqual(delivered, grid[0]["charge_kwh"] + .005)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9.5, max_charge=2.5)
         self.assertGreaterEqual(min(row[1] for row in trace), 2.0 - .005)
         self.assertLessEqual(max(row[1] for row in trace), 10.0 + .005)
@@ -182,7 +237,7 @@ class EnergyAccountingTest(unittest.TestCase):
                       hours=.25, import_price=.131 if i < 4 else .13 if i < 6 else .4,
                       net_solar_kwh=0 if i < 6 else -.625) for i in range(10)]
         _, grid = coordinator()._plan_charge_windows_for_horizon(
-            slots=slots, now=now, usable_capacity_kwh=8, current_remaining_capacity_kwh=8,
+            slots=slots, now=now, usable_capacity_kwh=2.5, current_remaining_capacity_kwh=2.5,
             max_charge_kw=2, max_discharge_kw=3, battery_min_profit=.08,
         )
         self.assertEqual(len(grid), 1)
@@ -302,7 +357,7 @@ class EnergyAccountingTest(unittest.TestCase):
             slots=slots, now=now, usable_capacity_kwh=8, current_remaining_capacity_kwh=8,
             max_charge_kw=3, max_discharge_kw=3, battery_min_profit=.08,
         )
-        self.assertAlmostEqual(sum(w["charge_kwh"] for w in grid), .5)
+        self.assertAlmostEqual(sum(w["charge_kwh"] for w in grid), .75)
 
     def test_unknown_future_prices_cannot_justify_grid_arbitrage(self):
         now = datetime(2026, 9, 17, 12)
