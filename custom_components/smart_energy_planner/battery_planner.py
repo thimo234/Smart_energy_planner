@@ -29,8 +29,8 @@ def reserve_without_charge_opportunity(
 ) -> float:
     """Keep extra reserve unless the remaining horizon offers replenishment."""
 
-    if any(slot["end"] > after and float(slot.get("net_solar_kwh", 0.0)) > 0 for slot in slots):
-        return 0.0
+    # Raw sunshine is not sufficient: the price-aware planner must actually
+    # have selected a replenishment window before releasing extra reserve.
     if any(
         (end := _parse_datetime(window.get("end"))) is not None and end > after
         for window in charge_windows

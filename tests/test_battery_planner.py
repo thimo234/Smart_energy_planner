@@ -84,11 +84,11 @@ from custom_components.smart_energy_planner.coordinator import SmartEnergyPlanne
 
 
 class BatteryPlannerTest(unittest.TestCase):
-    def test_no_charge_reserve_requires_future_surplus_or_charge(self):
+    def test_no_charge_reserve_requires_selected_charge(self):
         now = datetime(2026, 9, 17, 12)
         for net_solar, charge_end, expected in (
             (-0.5, None, 2.0), (0.0, None, 2.0),
-            (0.5, None, 0.0), (-0.5, now, 2.0),
+            (0.5, None, 2.0), (-0.5, now, 2.0),
             (-0.5, now + timedelta(hours=1), 0.0),
         ):
             with self.subTest(net_solar=net_solar, charge_end=charge_end):
@@ -130,7 +130,7 @@ class BatteryPlannerTest(unittest.TestCase):
                     self.assertEqual(datetime.fromisoformat(active[0]["end"]), now + timedelta(minutes=30))
                     self.assertEqual(windows[-1]["mode"], BATTERY_MODE_OFF)
 
-    def test_future_solar_surplus_releases_extra_reserve(self):
+    def test_unselected_solar_does_not_release_extra_reserve(self):
         now = datetime(2026, 9, 17, 12)
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator._active_charge_phase_end = None
@@ -149,7 +149,7 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_soc_percent=40.0, average_price=0.30, average_export_price=0.20,
             max_charge_kw=3.0, max_discharge_kw=3.0, no_charge_reserve_kwh=2.0,
         )
-        self.assertEqual(mode, "ontladen")
+        self.assertEqual(mode, "accu_uit")
 
     def test_standalone_grid_charge_respects_profit_room_and_discharge_latch(self):
         now = datetime(2026, 9, 17, 12)
@@ -512,7 +512,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertIn(current_mode, ("accu_uit", "ontladen", "ontladen_naar_net"))
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T11:30:39.600000")
         self.assertGreater(cycle_summary["next_charge_window_end"], cycle_summary["next_charge_window_start"])
         self.assertLessEqual(cycle_summary["next_charge_window_end"], "2026-06-26T15:00:00")
 
@@ -567,8 +567,15 @@ class BatteryPlannerTest(unittest.TestCase):
                 for window in mode_windows
             )
         )
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
-        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T12:17:44.400000")
+        # A discharge cycle may only reverse after the safe floor, even if
+        # an earlier solar window is cheaper.
+        from test_battery_energy_accounting import energy_trace
+        charge_start = cycle_summary["next_charge_window_start"]
+        self.assertIsNotNone(charge_start)
+        before = [w for w in mode_windows if w["end"] <= charge_start]
+        trace = energy_trace(now, slots, before, initial=9.8, max_charge=3)
+        self.assertAlmostEqual(trace[-1][1], 2, delta=.05)
+        self.assertGreaterEqual(charge_start, "2026-06-26T18:00:00")
 
     def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
         now = datetime(2026, 6, 25, 18, 30)
@@ -621,8 +628,15 @@ class BatteryPlannerTest(unittest.TestCase):
                 for window in mode_windows
             )
         )
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
-        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T12:18:52.800000")
+        # A discharge cycle may only reverse after the safe floor, even if
+        # an earlier solar window is cheaper.
+        from test_battery_energy_accounting import energy_trace
+        charge_start = cycle_summary["next_charge_window_start"]
+        self.assertIsNotNone(charge_start)
+        before = [w for w in mode_windows if w["end"] <= charge_start]
+        trace = energy_trace(now, slots, before, initial=9.6, max_charge=3)
+        self.assertAlmostEqual(trace[-1][1], 2, delta=.05)
+        self.assertGreaterEqual(charge_start, "2026-06-26T18:00:00")
 
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
@@ -1168,7 +1182,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
 
-    def test_solar_starts_at_first_surplus_with_or_without_safety_margin(self):
+    def test_equal_effective_solar_prices_use_contiguous_early_slots(self):
         now = datetime(2026, 6, 26, 8, 0)
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         slots = []
@@ -1235,7 +1249,7 @@ class BatteryPlannerTest(unittest.TestCase):
             round(sum(float(window["charge_kwh"]) for window in without_margin), 6),
         )
 
-    def test_solar_surplus_is_not_blocked_by_grid_purchase_margin(self):
+    def test_expensive_solar_without_minimum_profit_is_skipped(self):
         now = datetime(2026, 6, 25, 8, 0)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1246,7 +1260,7 @@ class BatteryPlannerTest(unittest.TestCase):
                 {
                     "start": start,
                     "end": start + timedelta(hours=1),
-                    "import_price": 0.30 if is_solar_valley else 0.27,
+                    "import_price": 0.31 if is_solar_valley else 0.27,
                     "export_price": 0.25 if is_solar_valley else 0.27,
                     "hours": 1.0,
                     "net_solar_kwh": 2.0 if is_solar_valley else -0.4,
@@ -1272,7 +1286,7 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertAlmostEqual(sum(w["charge_kwh"] for w in solar_windows), 2.0)
+        self.assertEqual(solar_windows, [])
         self.assertEqual(grid_windows, [])
 
     def test_charge_planning_locks_valley_before_next_cycle(self):
@@ -1356,7 +1370,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertEqual(grid_windows, [])
 
-    def test_charge_planning_skips_topup_when_solar_and_stock_cover_profitable_demand(self):
+    def test_partial_solar_cycle_keeps_full_recharge_target_for_later_cheap_grid(self):
         now = datetime(2026, 6, 26, 11, 30)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1397,7 +1411,8 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertTrue(solar_windows)
-        self.assertEqual(grid_windows, [])
+        self.assertTrue(grid_windows)
+        self.assertTrue(all(w["price"] == .16 for w in grid_windows))
 
     def test_charge_planning_uses_projected_room_after_pre_charge_demand_for_grid_topup(self):
         now = datetime(2026, 6, 29, 16, 0)
@@ -1464,7 +1479,7 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertTrue(solar_windows)
+        self.assertEqual(solar_windows, [])  # Full cheap grid beats weak solar plus expensive topup.
         self.assertTrue(grid_windows)
         self.assertGreater(sum(float(window["charge_kwh"]) for window in grid_windows), 1.0)
         self.assertTrue(
@@ -2072,7 +2087,10 @@ class BatteryPlannerTest(unittest.TestCase):
             ("laden_met_zonne_energie", charge_start.isoformat()),
             {(window["mode"], window["start"]) for window in mode_windows},
         )
-        self.assertEqual(mode_windows[-1]["mode"], "accu_uit")
+        from test_battery_energy_accounting import energy_trace
+        trace = energy_trace(now, slots, mode_windows, initial=10, max_charge=2)
+        self.assertAlmostEqual(min(row[1] for row in trace), 2, delta=.001)
+        self.assertAlmostEqual(trace[-1][1], 10, delta=.001)
 
     def test_high_soc_grid_topup_blocked_after_discharge_started(self):
         now = datetime(2026, 6, 25, 13, 30)
@@ -2428,15 +2446,11 @@ class BatteryPlannerTest(unittest.TestCase):
             max_discharge_kw=3.0,
         )
 
-        self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
-        self.assertIn(
-            ("laden_met_zonne_energie", now.replace(hour=11, minute=0).isoformat()),
-            {(window["mode"], window["start"]) for window in mode_windows},
-        )
-        self.assertNotIn(
-            ("laden_van_net", now.replace(hour=10, minute=0).isoformat()),
-            {(window["mode"], window["start"]) for window in mode_windows},
-        )
+        self.assertEqual(current_mode, "accu_uit")  # No home demand now.
+        self.assertTrue(coordinator._discharge_session_started)
+        self.assertTrue(any(w["mode"] == "ontladen" for w in mode_windows))
+        self.assertFalse(any(w["mode"] in ("laden_van_net", "laden_met_zonne_energie")
+                             for w in mode_windows))
 
     def test_discharge_session_blocks_grid_charge_until_net_demand_depletes_usable_energy(self):
         now = datetime(2026, 6, 24, 20, 0)

@@ -40,7 +40,7 @@
           "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)",
-          "battery_charge_safety_margin": "Charge planning safety margin (%)",
+          "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
           "battery_demand_safety_margin": "Demand forecast safety margin (%)"
         }
       }
@@ -80,7 +80,7 @@
           "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)",
-          "battery_charge_safety_margin": "Charge planning safety margin (%)",
+          "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
           "battery_demand_safety_margin": "Demand forecast safety margin (%)"
         }
       }

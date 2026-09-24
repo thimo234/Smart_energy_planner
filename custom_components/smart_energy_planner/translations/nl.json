@@ -40,7 +40,7 @@
           "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
-          "battery_charge_safety_margin": "Veiligheidsmarge laadplanning (%)",
+          "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
           "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)"
         }
       }
@@ -80,7 +80,7 @@
           "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
           "battery_max_charge_kw": "Max laadvermogen (kW)",
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
-          "battery_charge_safety_margin": "Veiligheidsmarge laadplanning (%)",
+          "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
           "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)"
         }
       }

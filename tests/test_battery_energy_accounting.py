@@ -57,7 +57,8 @@ def replay():
 
 
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
-                     discharging=False, reserve=20, max_charge=3, profit=.08, instance=None):
+                     discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
+                     solar_margin=0):
     """Exercise final sensor scheduling with the already computed demand input."""
     now, slots = feedback_slots(snapshot, timestamp)
     data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
@@ -73,6 +74,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                                           "battery_max_charge_kw": max_charge, "battery_max_discharge_kw": 3,
                                           "battery_min_profit_per_kwh": profit,
                                           "battery_demand_safety_margin": 0,
+                                          "battery_charge_safety_margin": solar_margin,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
     c._locked_eco_window = c._locked_preheat_end = c._preheat_expired_at = None
     namespace = c._build_plan.__globals__
@@ -117,6 +119,36 @@ def energy_trace(now, slots, windows, initial=6.8, max_charge=3):
 
 
 class EnergyAccountingTest(unittest.TestCase):
+    def test_solar_moves_to_cheapest_sufficient_daytime_slots(self):
+        now, slots, result = replay_full_plan(
+            "2026_09_24_cheap_solar", "2026-09-24T20:04:29.361358+02:00",
+            soc=28, discharging=True, reserve=60, max_charge=2.5,
+        )
+        solar = result.planned_solar_charge_windows
+        self.assertEqual(solar[0]["start"], "2026-09-25T11:45:00+02:00")
+        self.assertAlmostEqual(sum(w["charge_kwh"] for w in solar), 8)
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        # All selected energy fits in slots <=22 ct; the earlier morning
+        # surplus has a higher opportunity cost and must remain unselected.
+        for window in solar:
+            for slot in slots:
+                if slot["end"] > datetime.fromisoformat(window["start"]) and slot["start"] < datetime.fromisoformat(window["end"]):
+                    self.assertLessEqual(slot["import_price"], .22)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=2.8, max_charge=2.5)
+        self.assertAlmostEqual(max(row[1] for row in trace), 10, delta=.005)
+
+    def test_cheap_solar_waits_in_morning_then_completes_across_updates(self):
+        _, _, result = replay_full_plan(
+            "2026_09_24_cheap_solar", "2026-09-25T08:00:00+02:00",
+            soc=20, reserve=60, max_charge=2.5,
+        )
+        self.assertEqual(result.battery_strategy, "accu_uit")
+        _, history = self.run_feedback_updates(
+            "2026_09_24_cheap_solar", "2026-09-25T11:45:00+02:00", 20, 48,
+        )
+        self.assertEqual(history[0][1].battery_strategy, "laden_met_zonne_energie")
+        self.assertGreaterEqual(max(energy for _, _, energy in history), 9.95)
+
     def run_feedback_updates(self, snapshot, timestamp, soc, count, minutes=5):
         """Execute successive commands, update SOC, and reuse persisted state."""
         c = coordinator()
@@ -141,16 +173,17 @@ class EnergyAccountingTest(unittest.TestCase):
             now = until
         return c, history
 
-    def test_september_23_current_solar_runs_across_updates(self):
+    def test_september_23_cheap_charging_runs_across_updates(self):
         _, history = self.run_feedback_updates(
             "2026_09_23", "2026-09-23T13:55:04.999681+02:00", 81, 24,
         )
-        self.assertTrue(all(r.battery_strategy == "laden_met_zonne_energie" for _, r, _ in history))
+        self.assertTrue(all(r.battery_strategy in ("laden_met_zonne_energie", "laden_van_net") for _, r, _ in history))
         self.assertGreater(history[-1][2], 8.4)
         _, first, _ = history[0]
         self.assertTrue(any(w["mode"] == "ontladen" and w["start"].startswith("2026-09-23")
                             for w in first.planned_battery_mode_windows))
-        self.assertEqual(first.planned_grid_charge_windows, [])
+        self.assertTrue(first.planned_grid_charge_windows)
+        self.assertTrue(all(w["price"] <= .186 for w in first.planned_grid_charge_windows))
 
     def test_september_24_stale_charge_latch_does_not_defer_discharge(self):
         c, history = self.run_feedback_updates(
@@ -160,21 +193,26 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertTrue(c._discharge_session_started)
         self.assertLess(history[-1][2], 2.6)
 
-    def test_small_solar_cycle_then_next_day_recharge_across_live_updates(self):
+    def test_incomplete_discharge_does_not_reverse_for_next_day_solar(self):
         _, history = self.run_feedback_updates(
             "2026_09_23", "2026-09-23T13:55:04.999681+02:00", 81, 112, minutes=15,
         )
         self.assertTrue(any(now.day == 23 and r.battery_strategy == "ontladen"
                             for now, r, _ in history))
         tomorrow = [(r, energy) for now, r, energy in history if now.day == 24]
-        self.assertTrue(any(r.battery_strategy == "laden_met_zonne_energie" for r, _ in tomorrow))
-        self.assertGreaterEqual(max(energy for _, energy in tomorrow), 9.95)
+        # This forecast never consumes the remaining energy at profitable
+        # prices. Cheap sunshine alone must not reverse that discharge cycle.
+        self.assertGreater(min(energy for _, energy in tomorrow), 2.05)
+        self.assertTrue(any(r.battery_strategy == "ontladen" for r, _ in tomorrow))
+        self.assertFalse(any(r.battery_strategy in ("laden_met_zonne_energie", "laden_van_net")
+                             for r, _ in tomorrow))
+        self.assertLess(tomorrow[-1][1], tomorrow[0][1])
 
     def test_committed_grid_refill_does_not_cancel_itself_halfway(self):
         _, history = self.run_feedback_updates(
             "2026_09_19_morning", "2026-09-19T12:30:00+02:00", 20, 60,
         )
-        self.assertTrue(all(r.battery_strategy == "laden_van_net" for _, r, _ in history[:36]))
+        self.assertTrue(all(r.battery_strategy == "laden_van_net" for _, r, _ in history[2:36]))
         # The integration treats >=99.5% as full to avoid SOC sensor chatter.
         self.assertGreaterEqual(history[-1][2], 9.95)
 
@@ -214,10 +252,10 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         grid = result.planned_grid_charge_windows
         self.assertEqual(len(grid), 1)
-        self.assertEqual(grid[0]["start"], "2026-09-19T12:30:00+02:00")
+        self.assertEqual(grid[0]["start"], "2026-09-19T12:36:27.360000+02:00")
         self.assertAlmostEqual(grid[0]["charge_kwh"], 7.856)
         self.assertAlmostEqual(result.planned_solar_charge_windows[0]["charge_kwh"], .144)
-        self.assertLess(result.planned_solar_charge_windows[1]["charge_kwh"], 8)
+        self.assertTrue(all(w["start"].startswith("2026-09-19") for w in result.planned_solar_charge_windows))
         windows = result.planned_battery_mode_windows
         trace = energy_trace(now, slots, windows, initial=4.4, max_charge=2.5)
         self.assertAlmostEqual(min(row[1] for row in trace), 2, delta=.001)

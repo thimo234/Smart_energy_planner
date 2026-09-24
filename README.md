@@ -84,7 +84,7 @@ Battery strategy values:
 
 Grid charging requires forecast home consumption at a known later tariff
 at least `battery_min_profit_per_kwh` above the purchase tariff, beyond what
-existing usable energy and planned solar charging can supply. Once justified,
+existing usable energy can supply. Once justified,
 the cycle aims to refill the battery to 100%, using solar and eligible cheap
 grid slots, including slots before a small solar window. This prioritizes a
 full recharge: energy retained as reserve does not yet have a proven profitable
@@ -94,13 +94,31 @@ A running grid refill keeps its full-charge target across updates, while still
 checking known future tariffs against the minimum margin. Energy already bought
 in that cycle must not cancel the remaining charge halfway through.
 
-Present solar surplus fills available capacity immediately. Within a continuous
-solar window, earlier slots are used first, and today's opportunities take
-precedence over a cheaper window tomorrow. The minimum purchase/sale margin
-does not block solar charging. Partially filled
+Both sources compete on effective price within each charge cycle. The configured
+pricing model values solar at the import tariff minus EUR 0.11/kWh; this is a
+user-selected assumption, not a dynamically maintained tax rate. Grid charging
+uses the full import tariff. Cheaper grid energy can therefore displace later,
+more expensive solar, even with abundant solar forecast. At a known negative
+import tariff, the requested strategy is grid charging, including when solar
+surplus is present. A slot uses one charging mode and respects inverter power.
+Positive effective costs require a known later tariff with the minimum margin;
+unknown later prices do not justify a profitable cycle. Equal-price slots nearest
+the cheapest block are preferred. Partially filled
 cycles carry their remaining capacity into the next cycle's calculation.
-The remembered charge state only protects an active or imminent charge phase;
-it cannot indefinitely defer an expensive discharge slot at each update.
+Once discharging starts, both solar and grid refills wait until the safe minimum
+is reached (within 0.05 kWh tolerance). A cheaper opportunity can be skipped if
+the discharge cycle is still incomplete. Charging pauses across expensive gaps
+without reversing direction while another selected charging window remains that
+day. After the final profitable window, evening discharge may start even if weak
+sun prevented a full charge. The additional reserve and minimum profit still apply.
+
+**Solar forecast safety margin (%)** now reduces the solar energy used throughout
+the battery plan, instead of merely padding charging duration. The default is
+20%: plan with 80% of forecast solar. An explicitly saved 0% stays disabled.
+The separate demand safety margin defaults to 20% extra demand. These margins
+can bring charging and evening discharge forward while keeping price and cycle
+constraints. They are forecast safeguards, not an instantaneous power controller;
+unexpected peaks can still require grid power between updates or at power limits.
 
 After grid charging, discharge and export also respect the minimum price
 difference. The highest grid purchase price is retained across refreshes and
@@ -109,16 +127,15 @@ rule also protects mixed battery energy. Historical energy with no recorded
 purchase price cannot be checked retroactively. The margin is a tariff
 difference per modeled kWh; conversion losses and battery wear are not modeled.
 
-Solar surplus and a profitable planned grid charge both release the extra
-no-charge reserve. There is no separate reserve for grid-only cycles. After the
-last charging opportunity, the extra floor applies again if no further solar
-surplus or profitable grid charge is forecast. It prevents further discharge;
+A selected solar or grid charge window releases the extra no-charge reserve.
+Unselected raw solar surplus does not. There is no separate reserve for grid-only
+cycles. After the last selected charging opportunity, the extra floor applies
+again. It prevents further discharge;
 it does not force charging if the battery is already below that floor.
 
 Battery options include **Minimum battery state of charge without a charging
 opportunity (%)**. This additional reserve applies when the remaining planning
-horizon contains neither a planned profitable charge window nor forecast solar
-surplus after home consumption. It limits both home discharge and grid export;
+horizon contains no selected replenishment window. It limits both home discharge and grid export;
 the normal minimum state of charge always remains the absolute lower limit.
 For example, with a normal minimum of 20% and this setting at 40%, the battery
 stops discharging at 40% when no replenishment is forecast. A future charge
