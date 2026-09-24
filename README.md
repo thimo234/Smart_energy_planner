@@ -90,6 +90,17 @@ grid slots, including slots before a small solar window. This prioritizes a
 full recharge: energy retained as reserve does not yet have a proven profitable
 discharge. Equal-price grid slots nearest the cheapest block avoid idle gaps.
 Charging durations account for power limits and remaining battery capacity.
+A running grid refill keeps its full-charge target across updates, while still
+checking known future tariffs against the minimum margin. Energy already bought
+in that cycle must not cancel the remaining charge halfway through.
+
+Present solar surplus fills available capacity immediately. Within a continuous
+solar window, earlier slots are used first, and today's opportunities take
+precedence over a cheaper window tomorrow. The minimum purchase/sale margin
+does not block solar charging. Partially filled
+cycles carry their remaining capacity into the next cycle's calculation.
+The remembered charge state only protects an active or imminent charge phase;
+it cannot indefinitely defer an expensive discharge slot at each update.
 
 After grid charging, discharge and export also respect the minimum price
 difference. The highest grid purchase price is retained across refreshes and

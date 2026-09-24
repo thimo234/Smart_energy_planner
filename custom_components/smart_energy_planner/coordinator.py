@@ -2425,7 +2425,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # The live discharge latch protects the current cycle, not the entire
         # forecast horizon. A later grid cycle can start after its depletion.
         first_grid_charge_start = now
-        if self._discharge_session_started or current_usable_kwh >= usable_capacity_kwh * 0.95:
+        active_grid_cycle = (
+            getattr(self, "_active_charge_phase_mode", "accu_uit") == "laden_van_net"
+            and self._active_charge_phase_end is not None
+            and now < self._active_charge_phase_end
+        )
+        if not active_grid_cycle and (self._discharge_session_started or current_usable_kwh >= usable_capacity_kwh * 0.95):
             first_grid_charge_start = self._estimate_battery_depletion_time(
                 slots=future_slots, now=now, initial_usable_energy_kwh=current_usable_kwh,
                 max_discharge_kw=max_discharge_kw,
@@ -2509,6 +2514,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return max(prices, default=None)
 
         def _is_profitable_charge(candidate: dict[str, Any]) -> bool:
+            # Solar surplus can refill available capacity immediately. The
+            # configured purchase/sale margin gates grid purchases, not solar.
+            if candidate["kind"] == "solar":
+                return True
             if float(candidate["cost"]) < 0:
                 return True
             peak_price = _future_peak_price(
@@ -2581,6 +2590,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         cursor = first_charge_not_before
         cycle_index = 0
         previous_charge_end: datetime | None = None
+        previous_charge_shortfall_kwh = 0.0
         while cursor < horizon_end:
             selected_for_cycle: list[dict[str, Any]] = []
             charged_kwh = 0.0
@@ -2629,7 +2639,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             best_candidate = min(
                 profitable_primary_candidates,
-                key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"]),
+                key=lambda item: (
+                    0 if item["kind"] == "solar" and item["start"] <= now < item["end"] else 1,
+                    item["start"].date(),
+                    float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"],
+                ),
             )
 
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
@@ -2658,14 +2672,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     # Do not assume discharge while waiting in the cheap band.
                     target_kwh = min(target_kwh, current_remaining_capacity_kwh)
             elif previous_charge_end is not None:
-                target_kwh = min(
-                    usable_capacity_kwh,
-                    sum(
-                        max(0.0, -float(slot.get("net_solar_kwh", 0.0)))
-                        for slot in future_slots
-                        if previous_charge_end <= cast(datetime, slot["start"]) < cast(datetime, best_candidate["start"])
-                    ),
-                )
+                # Carry unfilled capacity forward when the previous cycle
+                # supplied only a small solar surplus.
+                target_kwh = min(usable_capacity_kwh, previous_charge_shortfall_kwh + sum(
+                    max(0.0, -float(slot.get("net_solar_kwh", 0.0)))
+                    for slot in future_slots
+                    if previous_charge_end <= cast(datetime, slot["start"]) < cast(datetime, best_candidate["start"])
+                ))
             else:
                 target_kwh = usable_capacity_kwh
             if target_kwh <= 0.05:
@@ -2718,7 +2731,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 selected_for_cycle,
                 sorted(
                     primary_candidates,
-                    key=lambda item: (float(item["cost"]), 0 if item["kind"] == "solar" else 1,
+                    key=lambda item: (0 if item["kind"] == "solar" else 1,
+                                      item["start"] if item["kind"] == "solar" else float(item["cost"]),
                                       abs((item["start"] - best_candidate["start"]).total_seconds())
                                       if item["kind"] == "grid" else 0, item["start"]),
                 ),
@@ -2822,7 +2836,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_selected = [item for item in selected_for_cycle if item["kind"] == "solar"]
                 grid_budget = max(0.0, profitable_demand - existing_energy
                                   - sum(float(item["charge_kwh"]) for item in solar_selected))
-                if grid_budget > 1e-9:
+                continuing_grid_cycle = (
+                    active_grid_cycle
+                    and any(item["start"] <= now < item["end"] for item in grid_selected)
+                    and profitable_demand > 1e-9
+                )
+                # Energy bought by this running cycle is not pre-existing
+                # supply that cancels its own full-recharge decision midway.
+                if grid_budget > 1e-9 or continuing_grid_cycle:
                     grid_budget = max(0.0, target_kwh - sum(
                         float(item["charge_kwh"]) for item in solar_selected
                     ))
@@ -2858,6 +2879,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
 
             cycle_end = max(cast(datetime, selected["end"]) for selected in selected_for_cycle)
+            previous_charge_shortfall_kwh = max(0.0, target_kwh - sum(
+                float(selected["charge_kwh"]) for selected in selected_for_cycle
+            ))
             previous_charge_end = cycle_end
             cursor = cycle_end + min_discharge_gap
             cycle_index += 1
@@ -2883,7 +2907,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 usable_hours = slot_hours
                 charge_start = active_start
                 charge_end = slot_end
-                if 0 < charge_kwh < slot_solar_charge_kwh:
+                if 0 < charge_kwh < slot_solar_charge_kwh - 1e-6:
                     usable_hours = slot_hours * (charge_kwh / slot_solar_charge_kwh)
                     if slot_end in selected_solar_starts:
                         charge_start = slot_end - timedelta(hours=usable_hours)
@@ -3525,13 +3549,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     (
                         charge_session_started
                         and (
-                            # The persisted charge-cycle latch is authoritative
-                            # for the current slot.  Around the minimum SOC, a
-                            # small charge can make the freshly planned charge
-                            # window disappear or move.  That must not let this
-                            # refresh reverse the battery straight back into
-                            # discharge mode.
-                            segment_slot_start <= now < segment_slot_end
+                            # Keep short pauses before an imminent recharge.
+                            # A stale latch alone must never block the current
+                            # slot on every refresh and defer discharge forever.
+                            (segment_slot_start <= now < segment_slot_end
+                             and first_charge_phase_start is not None
+                             and first_charge_phase_start <= now + timedelta(minutes=30))
                             or (
                                 active_charge_phase_end is not None
                                 and segment_slot_start < active_charge_phase_end

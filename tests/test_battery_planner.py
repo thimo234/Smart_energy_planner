@@ -512,7 +512,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertIn(current_mode, ("accu_uit", "ontladen", "ontladen_naar_net"))
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < tomorrow for window in grid_windows))
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T11:30:39.600000")
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
         self.assertGreater(cycle_summary["next_charge_window_end"], cycle_summary["next_charge_window_start"])
         self.assertLessEqual(cycle_summary["next_charge_window_end"], "2026-06-26T15:00:00")
 
@@ -567,8 +567,8 @@ class BatteryPlannerTest(unittest.TestCase):
                 for window in mode_windows
             )
         )
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T12:00:00")
-        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T14:45:15.929204")
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
+        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T12:17:44.400000")
 
     def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
         now = datetime(2026, 6, 25, 18, 30)
@@ -621,8 +621,8 @@ class BatteryPlannerTest(unittest.TestCase):
                 for window in mode_windows
             )
         )
-        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T12:00:00")
-        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T14:47:47.256637")
+        self.assertEqual(cycle_summary["next_charge_window_start"], "2026-06-26T07:00:00")
+        self.assertEqual(cycle_summary["next_charge_window_end"], "2026-06-26T12:18:52.800000")
 
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
@@ -1168,7 +1168,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
 
-    def test_charge_safety_margin_starts_solar_charge_window_earlier(self):
+    def test_solar_starts_at_first_surplus_with_or_without_safety_margin(self):
         now = datetime(2026, 6, 26, 8, 0)
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         slots = []
@@ -1228,19 +1228,14 @@ class BatteryPlannerTest(unittest.TestCase):
             charge_safety_margin=0.5,
         )
 
-        self.assertEqual(without_margin[0]["start"], (day + timedelta(hours=14, minutes=45)).isoformat())
-        self.assertEqual(with_margin[0]["end"], without_margin[0]["end"])
-        self.assertLess(
-            datetime.fromisoformat(str(with_margin[0]["start"])),
-            datetime.fromisoformat(str(without_margin[0]["start"])),
-        )
-        self.assertEqual(with_margin[0]["start"], (day + timedelta(hours=14, minutes=37, seconds=30)).isoformat())
+        self.assertEqual(without_margin[0]["start"], (day + timedelta(hours=14)).isoformat())
+        self.assertEqual(with_margin[0]["start"], without_margin[0]["start"])
         self.assertEqual(
             round(sum(float(window["charge_kwh"]) for window in with_margin), 6),
             round(sum(float(window["charge_kwh"]) for window in without_margin), 6),
         )
 
-    def test_charge_planning_ignores_valley_without_minimum_profit(self):
+    def test_solar_surplus_is_not_blocked_by_grid_purchase_margin(self):
         now = datetime(2026, 6, 25, 8, 0)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1277,7 +1272,7 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertEqual(solar_windows, [])
+        self.assertAlmostEqual(sum(w["charge_kwh"] for w in solar_windows), 2.0)
         self.assertEqual(grid_windows, [])
 
     def test_charge_planning_locks_valley_before_next_cycle(self):
