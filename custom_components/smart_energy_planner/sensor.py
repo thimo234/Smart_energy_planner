@@ -189,6 +189,20 @@ class CheapestPriceWindowStartSensor(PlannerSensor):
 class BatteryPlannerSensor(PlannerSensor):
     """Battery planner sensor with battery-only attributes."""
 
+    # Keep forecast series available to cards and automations, but do not
+    # duplicate the entire changing forecast in Recorder on every update.
+    _unrecorded_attributes = frozenset(
+        {
+            "upcoming_energy_price_windows",
+            "upcoming_export_price_windows",
+            "estimated_battery_mode_windows",
+            "estimated_hourly_home_demand",
+            "estimated_hourly_solar_forecast",
+            "planned_battery_mode_schedule",
+            "planned_battery_mode_windows",
+        }
+    )
+
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 

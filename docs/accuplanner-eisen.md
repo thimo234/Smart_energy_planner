@@ -139,6 +139,18 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Een latere zonnecyclus plannen alsof er altijd ruimte is voor een volledig
   lege accu, terwijl er nog energie van de vorige cyclus over is.
 
+## 9. Recorder en actuele kaartgegevens
+
+- Uitgebreide prijs-, verbruiks-, zonne- en planningsreeksen moeten actueel
+  beschikbaar blijven voor de Lovelace-card en automatiseringen.
+- Sla deze reeksen niet bij iedere update opnieuw op in Recorder; behoud de
+  sensorstanden en compacte attributen in de geschiedenis.
+- Lokaal geïmplementeerd via `_unrecorded_attributes` op de gedeelde
+  accuplannersensor. Dit geldt ook voor de strategie- en verbruikssensor.
+- Lokaal gecontroleerd met prognosedata boven de 16384-bytegrens: de actuele
+  reeksen blijven intact en de gefilterde attributen passen onder de grens.
+  Live controle na installatie/herstart staat nog open.
+
 ## Werkstatus bij laatste bijwerking
 
 - Prijsgerichte bronkeuze met EUR 0,11 zonnevoordeel, negatieve netprijzen,

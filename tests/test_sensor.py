@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import sys
 import types
 import unittest
@@ -63,7 +65,59 @@ def _install_homeassistant_stubs() -> None:
 
 _install_homeassistant_stubs()
 
-from custom_components.smart_energy_planner.sensor import CheapestPriceWindowStartSensor
+from custom_components.smart_energy_planner.sensor import (
+    BatteryPlannerSensor,
+    BatteryStrategySensor,
+    CheapestPriceWindowStartSensor,
+    HomeDemandSensor,
+)
+
+
+class BatteryRecorderAttributesTest(unittest.TestCase):
+    def test_large_forecasts_remain_live_but_fit_recorder_after_exclusions(self):
+        forecast = json.loads(
+            (Path(__file__).parent / "fixtures/battery_2026_09_24_cheap_solar.json")
+            .read_text(encoding="utf-8")
+        )
+        data = types.SimpleNamespace(
+            **forecast,
+            planner_kind="battery", score=70, source_status={}, source_errors=[],
+            current_price=0.30, price_spread=0.20,
+            next_window_start=None, next_window_end=None,
+            battery_min_profit_per_kwh=0.08, price_resolution="quarter_hourly",
+            rationale="Test forecast", battery_strategy="ontladen",
+            battery_energy_available_kwh=4.0, battery_remaining_capacity_kwh=4.0,
+            estimated_total_home_demand_kwh=12.0,
+            upcoming_export_price_windows=forecast["upcoming_energy_price_windows"],
+            estimated_battery_mode_windows=forecast["planned_battery_mode_windows"],
+            planned_battery_mode_schedule=[
+                {"at": window["start"], "mode": window["mode"]}
+                for window in forecast["planned_battery_mode_windows"]
+            ],
+        )
+        coordinator = types.SimpleNamespace(data=data)
+        entry = types.SimpleNamespace(entry_id="battery-entry", title="Battery")
+        entities = [
+            BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
+            BatteryStrategySensor(coordinator, entry),
+            HomeDemandSensor(coordinator, entry),
+        ]
+        for entity in entities:
+            with self.subTest(sensor=type(entity).__name__):
+                live = entity.extra_state_attributes
+                self.assertGreater(len(json.dumps(live).encode("utf-8")), 16384)
+                # Mirror Recorder's attribute-name exclusion, without changing
+                # the live state consumed by Lovelace and automations.
+                recorded = {
+                    key: value for key, value in live.items()
+                    if key not in entity._unrecorded_attributes
+                }
+                self.assertLess(len(json.dumps(recorded).encode("utf-8")), 16384)
+                self.assertEqual(recorded[entity._value_key], entity.native_value)
+                self.assertEqual(recorded["current_price"], 0.30)
+                for key in entity._unrecorded_attributes:
+                    self.assertEqual(live[key], getattr(data, key))
+
 
 
 class CheapestPriceWindowStartSensorTest(unittest.TestCase):

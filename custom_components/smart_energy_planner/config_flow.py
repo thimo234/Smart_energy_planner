@@ -240,7 +240,8 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
                 CONF_EXPORT_PRICE_TAX_DEDUCTION,
                 default=user_input.get(CONF_EXPORT_PRICE_TAX_DEDUCTION, DEFAULT_EXPORT_PRICE_TAX_DEDUCTION),
             ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=1, step=0.0001, mode=selector.NumberSelectorMode.BOX)
+                # HA rejects numeric steps below 0.001; allow precise tax values.
+                selector.NumberSelectorConfig(min=0, max=1, step="any", mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_SOLCAST_TODAY_SENSOR, default=user_input.get(CONF_SOLCAST_TODAY_SENSOR)
