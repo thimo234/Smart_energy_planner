@@ -1366,6 +1366,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             end = datetime.fromisoformat(window["end"])
         return end
 
+    @property
+    def _cycle_export_enabled(self) -> bool:
+        """Evaluate recharge after feasible surplus export, still energy-gated."""
+        return bool(getattr(self, "_isolated_cycle_preview", False)
+                    or getattr(self, "_cycle_export_planning", False))
+
     def _build_plan(self, **inputs) -> PlannerResult:
         """Execute two cycles; calculate any later outlook on isolated state."""
         if inputs["planner_kind"] != PLANNER_KIND_BATTERY:
@@ -1377,10 +1383,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         # Keep the economic look-ahead: later known tariffs are necessary to
         # assess a charge cycle's profitability. Only the first two cycles are
         # published as executable commands; the outlook is computed afterwards.
-        result = self._build_plan_for_horizon(**inputs)
+        if inputs["battery_soc_percent"] is not None and inputs["battery_soc_percent"] >= 99.5:
+            # Complete the live charge cycle before selecting future windows,
+            # including the first refresh that reports a full battery.
+            self._charge_session_started = False
+            self._discharge_session_started = True
+        previous_export_planning = getattr(self, "_cycle_export_planning", False)
+        self._cycle_export_planning = True
+        try:
+            result = self._build_plan_for_horizon(**inputs)
+        finally:
+            self._cycle_export_planning = previous_export_planning
         cutoff = self._two_cycle_end(result.planned_battery_mode_windows) or tomorrow
         result.planned_battery_mode_windows = [
-            {**w, "end": min(datetime.fromisoformat(w["end"]), cutoff).isoformat()}
+            {**w, "end": min(datetime.fromisoformat(w["end"]), cutoff).isoformat(),
+             "usable_hours": (min(datetime.fromisoformat(w["end"]), cutoff)
+                              - datetime.fromisoformat(w["start"])).total_seconds() / 3600}
             for w in result.planned_battery_mode_windows
             if datetime.fromisoformat(w["start"]) < cutoff
         ]
@@ -2560,7 +2578,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         else:
             first_charge_not_before = now
 
-        if (getattr(self, "_isolated_cycle_preview", False)
+        if (self._cycle_export_enabled
                 and self._discharge_session_started and max_discharge_kw > 0):
             # Leave enough time to complete discharge and the existing
             # half-hour no-export buffer before a hypothetical new cycle.
@@ -2593,7 +2611,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_end = cast(datetime, slot["end"])
                 if slot_end <= after:
                     continue
-                if getattr(self, "_isolated_cycle_preview", False) and slot_start < after:
+                if self._cycle_export_enabled and slot_start < after:
                     continue
                 active_start = max(slot_start, after)
                 active_hours = max((slot_end - active_start).total_seconds() / 3600, 0.0)
@@ -2748,7 +2766,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             profitable_primary_candidates = [
                 candidate for candidate in cycle_candidates
                 if _is_profitable_charge(candidate)
-                and (getattr(self, "_isolated_cycle_preview", False)
+                and (self._cycle_export_enabled
                      or (candidate["kind"] == "solar" and not self._discharge_session_started) or (
                     first_grid_charge_start is not None
                     and max(now, candidate["start"]) >= first_grid_charge_start
@@ -2785,7 +2803,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 break
 
             projected_usable_at_charge_kwh = _project_usable_energy_until(cast(datetime, best_candidate["start"]))
-            if cycle_index == 0 and cursor <= now:
+            if (cycle_index == 0 and cursor <= now) or (
+                self._cycle_export_enabled and previous_charge_end is None
+                and current_usable_kwh >= usable_capacity_kwh - _BATTERY_DEPLETION_EPSILON_KWH
+                and not self._discharge_session_started
+            ):
+                # While still full after a charge, skipping a candidate does
+                # not create a new empty-battery cycle later that afternoon.
                 target_kwh = max(0.0, usable_capacity_kwh - projected_usable_at_charge_kwh)
                 if best_candidate["kind"] == "grid" and first_grid_charge_start == now:
                     # Do not assume discharge while waiting in the cheap band.
@@ -2800,7 +2824,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ))
             else:
                 target_kwh = usable_capacity_kwh
-            if getattr(self, "_isolated_cycle_preview", False) and self._discharge_session_started:
+            if self._cycle_export_enabled and self._discharge_session_started:
                 # A hypothetical refill follows a completed discharge cycle,
                 # including profitable surplus export. The simulation below
                 # still rejects it if the safe floor cannot actually be reached.
@@ -3391,7 +3415,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     initial_usable_energy_kwh=initial_usable_energy_kwh,
                     max_discharge_kw=max_discharge_kw,
                 )
-                if getattr(self, "_isolated_cycle_preview", False):
+                if self._cycle_export_enabled:
                     # Own demand alone omits potential surplus export. Let the
                     # isolated simulation evaluate it; its energy check at each
                     # charge window still enforces completion of discharge.
@@ -3622,7 +3646,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if _next_charge_after_segment is not None
                 else None
             )
-            if getattr(self, "_isolated_cycle_preview", False):
+            if self._cycle_export_enabled:
                 forced_export_kwh = self._plan_segment_export_kwh(
                     slots=[s for s in segment_slots if (
                         _export_allowed_from is not None
@@ -3663,7 +3687,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slot_start < first_charge_phase_start
                     and segment_slot_end >= first_charge_phase_start - timedelta(minutes=30)
                 )
-                if (getattr(self, "_isolated_cycle_preview", False)
+                if (self._cycle_export_enabled
                         and first_charge_phase_start is not None
                         and segment_slot_end == first_charge_phase_start - timedelta(minutes=30)):
                     charge_phase_imminent = False

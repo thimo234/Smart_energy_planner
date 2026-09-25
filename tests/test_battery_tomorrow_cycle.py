@@ -8,6 +8,49 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 
 
 class TomorrowCycleTest(unittest.TestCase):
+    def test_full_feedback_has_executable_discharge_then_recharge(self):
+        for previously_charging in (False, True):
+            with self.subTest(previously_charging=previously_charging):
+                instance = coordinator()
+                instance._charge_session_started = previously_charging
+                instance._discharge_session_started = not previously_charging
+                if previously_charging:
+                    replay_full_plan(
+                        snapshot="2026_09_25_afternoon",
+                        timestamp="2026-09-25T15:17:12.932148+02:00",
+                        soc=99, reserve=60, tax_deduction=.11,
+                        instance=instance, isolated_cycles=True,
+                    )
+                now, slots, result = replay_full_plan(
+                    snapshot="2026_09_25_full",
+                    timestamp="2026-09-25T15:43:02.916946+02:00",
+                    soc=100, reserve=60, tax_deduction=.11,
+                    instance=instance, isolated_cycles=True,
+                )
+                live = result.planned_battery_mode_windows
+                charge = [w for w in live if w["mode"].startswith("laden_")]
+                self.assertTrue(charge, "second executable cycle must contain tomorrow's refill")
+                self.assertTrue(charge[0]["start"].startswith("2026-09-26"))
+                self.assertEqual(result.next_charge_window_start, charge[0]["start"])
+                self.assertGreater(result.next_charge_window_hours, 0)
+                self.assertGreater(result.next_discharge_window_hours, 0)
+                self.assertFalse(result.battery_no_charge_reserve_active)
+                self.assertFalse(instance._charge_session_started)
+                self.assertTrue(instance._discharge_session_started)
+                before = [w for w in live if w["end"] <= charge[0]["start"]]
+                self.assertAlmostEqual(energy_trace(now, slots, before, initial=10)[-1][1], 2, delta=.05)
+                trace = energy_trace(now, slots, live, initial=10)
+                self.assertAlmostEqual(trace[-1][1], 10, delta=.05)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
+                self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
+                preview = result.estimated_battery_mode_windows
+                self.assertTrue(preview)
+                self.assertEqual(preview[0]["start"], charge[-1]["end"])
+                self.assertTrue(any(w["mode"] == "ontladen" for w in preview))
+                # Skipped near-full candidates must not turn into an invented
+                # extra refill cycle later in the same sunny afternoon.
+                self.assertFalse(any(w["mode"].startswith("laden_") for w in preview))
+
     def test_cycle_boundary_ignores_pauses_and_charging_source_changes(self):
         modes = ["laden_met_zonne_energie", "accu_uit", "laden_van_net",
                  "ontladen", "accu_uit", "ontladen_naar_net", "laden_van_net"]

@@ -151,6 +151,13 @@ geverifieerd is. Lees ook de open punten onderaan.
   verbruik meetellen.
 - Een latere zonnecyclus plannen alsof er altijd ruimte is voor een volledig
   lege accu, terwijl er nog energie van de vorige cyclus over is.
+- Bij het bereiken van 100% SOC de volgende rendabele laadcyclus verliezen:
+  sluit eerst de lopende laadcyclus af en plan ontladen gevolgd door laden.
+  Een mogelijke aanvulling mag pas starten als de energiesimulatie bevestigt
+  dat de ontlaadcyclus voltooid is. Neem uitvoerbare, rendabele export van
+  werkelijk overtollige energie mee; eigen verbruik alleen kan te weinig zijn.
+- Laadvensters die wegens een volle accu worden overgeslagen mogen niet
+  worden geteld alsof er inmiddels een nieuwe lege accu is ontstaan.
 
 ## 9. Recorder en actuele kaartgegevens
 
@@ -165,6 +172,17 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde correctie: volle accu behoudt volgende laadcyclus
+
+- De gebruiker heeft op 25 september de reconstructie van de 100%-meting
+  goedgekeurd en opdracht gegeven deze correctie naar main te pushen.
+- De laadcyclus wordt vóór de nieuwe selectie afgesloten zodra de accu vol
+  is. Uitvoerbare export van overtollige energie kan de volgende rendabele
+  laadcyclus mogelijk maken; de energiesimulatie bewaakt de veilige ondergrens.
+- Lokaal gecontroleerd: 150 Python-tests, kaarttest en browsercontrole.
+  De vier cyclusregressietests zijn na uitbreiding met opeenvolgende updates
+  van 99% naar 100% opnieuw geslaagd. Live verificatie staat nog open.
 
 ### Goedgekeurde wijziging: twee cycli en aparte vooruitblik
 
