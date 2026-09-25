@@ -1347,7 +1347,98 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "last_observed_delta_temp_c": last_observed_delta,
         }
 
-    def _build_plan(
+    @staticmethod
+    def _two_cycle_end(windows):
+        """End of two mode families; pauses and source changes are not cycles."""
+        family = None
+        cycles = 0
+        end = None
+        for window in windows:
+            mode = window["mode"]
+            if mode == "accu_uit":
+                continue
+            next_family = "charge" if mode in ("laden_van_net", "laden_met_zonne_energie") else "discharge"
+            if next_family != family:
+                cycles += 1
+                if cycles > 2:
+                    break
+                family = next_family
+            end = datetime.fromisoformat(window["end"])
+        return end
+
+    def _build_plan(self, **inputs) -> PlannerResult:
+        """Execute two cycles; calculate any later outlook on isolated state."""
+        if inputs["planner_kind"] != PLANNER_KIND_BATTERY:
+            return self._build_plan_for_horizon(**inputs)
+
+        now = dt_util.now()
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        horizon_end = tomorrow + timedelta(days=1)
+        # Keep the economic look-ahead: later known tariffs are necessary to
+        # assess a charge cycle's profitability. Only the first two cycles are
+        # published as executable commands; the outlook is computed afterwards.
+        result = self._build_plan_for_horizon(**inputs)
+        cutoff = self._two_cycle_end(result.planned_battery_mode_windows) or tomorrow
+        result.planned_battery_mode_windows = [
+            {**w, "end": min(datetime.fromisoformat(w["end"]), cutoff).isoformat()}
+            for w in result.planned_battery_mode_windows
+            if datetime.fromisoformat(w["start"]) < cutoff
+        ]
+        result.planned_battery_mode_schedule = [w for w in result.planned_battery_mode_schedule
+                                               if datetime.fromisoformat(w["at"]) < cutoff]
+        result.planned_battery_mode_schedule.append({"at": cutoff.isoformat(), "mode": "accu_uit"})
+
+        # These complete series are presentation inputs only. They are attached
+        # after all live decisions, summaries and persistent cycle state updates.
+        prices = inputs["battery_switch_windows"] or inputs["all_windows"]
+        exports = inputs["all_export_windows"] or inputs["export_windows"] or prices
+        margin = max(0.0, min(0.5, float(self._config.get(
+            CONF_BATTERY_CHARGE_SAFETY_MARGIN, DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
+        )) / 100.0))
+        solar = [replace(w, forecast_kwh=max(0.0, w.forecast_kwh * (1.0 - margin)))
+                 for w in inputs["all_solar_windows"]]
+        demand = result.estimated_hourly_home_demand
+        slots = build_energy_balance_slots(
+            price_windows=prices, export_price_windows=exports, solar_windows=solar,
+            hourly_demand=demand, horizon_start=now, demand_safety_margin=0.0,
+        )
+        for key in ("planned_solar_charge_windows", "planned_grid_charge_windows"):
+            setattr(result, key, [w for w in getattr(result, key)
+                                  if datetime.fromisoformat(w["end"]) <= cutoff])
+        for key, value in summarize_battery_cycles(
+            full_planned_mode_windows=result.planned_battery_mode_windows,
+            energy_balance_slots=slots, now=now,
+        ).items():
+            if hasattr(result, key):
+                setattr(result, key, value)
+        if (result.next_charge_opportunity_start is not None
+                and datetime.fromisoformat(result.next_charge_opportunity_start) >= cutoff):
+            result.next_charge_opportunity_start = None
+        capacity = result.battery_total_energy_kwh + result.battery_remaining_capacity_kwh
+        minimum = capacity * result.battery_min_soc_percent / 100.0
+        reserve = max(0.0, capacity * result.battery_no_charge_min_soc_percent / 100.0 - minimum)
+        result.estimated_battery_mode_windows = self._estimate_unknown_price_plan(
+            slots=slots, now=now, actual_windows=result.planned_battery_mode_windows,
+            initial_energy=result.battery_energy_available_kwh, capacity=max(0.0, capacity-minimum),
+            max_charge=float(self._config.get(CONF_BATTERY_MAX_CHARGE_KW, DEFAULT_BATTERY_MAX_CHARGE_KW)),
+            max_discharge=float(self._config.get(CONF_BATTERY_MAX_DISCHARGE_KW, DEFAULT_BATTERY_MAX_DISCHARGE_KW)),
+            reserve=reserve, min_profit=result.battery_min_profit_per_kwh,
+            include_known_prices=True, preview_start=cutoff,
+        ) if inputs["battery_soc_percent"] is not None else []
+        result.upcoming_energy_price_windows = self._serialize_price_windows(
+            inputs["all_windows"], horizon_start=now-timedelta(hours=1), horizon_end=horizon_end,
+        )
+        result.upcoming_export_price_windows = self._serialize_price_windows(
+            exports, horizon_start=now-timedelta(hours=1), horizon_end=horizon_end,
+        )
+        result.estimated_hourly_solar_forecast = self._serialize_solar_windows(
+            solar, horizon_start=now.replace(hour=0, minute=0, second=0, microsecond=0),
+            horizon_end=horizon_end,
+        )
+        result.estimated_hourly_home_demand = demand
+        return result
+
+    def _build_plan_for_horizon(
         self,
         *,
         planner_kind: str,
@@ -2469,6 +2560,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         else:
             first_charge_not_before = now
 
+        if (getattr(self, "_isolated_cycle_preview", False)
+                and self._discharge_session_started and max_discharge_kw > 0):
+            # Leave enough time to complete discharge and the existing
+            # half-hour no-export buffer before a hypothetical new cycle.
+            first_charge_not_before = now + timedelta(
+                hours=current_usable_kwh / max_discharge_kw, minutes=30,
+            )
+
         min_discharge_gap = (
             timedelta(hours=usable_capacity_kwh / max_discharge_kw)
             if max_discharge_kw > 0
@@ -2493,6 +2592,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_start = cast(datetime, slot["start"])
                 slot_end = cast(datetime, slot["end"])
                 if slot_end <= after:
+                    continue
+                if getattr(self, "_isolated_cycle_preview", False) and slot_start < after:
                     continue
                 active_start = max(slot_start, after)
                 active_hours = max((slot_end - active_start).total_seconds() / 3600, 0.0)
@@ -2647,7 +2748,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             profitable_primary_candidates = [
                 candidate for candidate in cycle_candidates
                 if _is_profitable_charge(candidate)
-                and ((candidate["kind"] == "solar" and not self._discharge_session_started) or (
+                and (getattr(self, "_isolated_cycle_preview", False)
+                     or (candidate["kind"] == "solar" and not self._discharge_session_started) or (
                     first_grid_charge_start is not None
                     and max(now, candidate["start"]) >= first_grid_charge_start
                 ))
@@ -2697,6 +2799,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     if previous_charge_end <= cast(datetime, slot["start"]) < cast(datetime, best_candidate["start"])
                 ))
             else:
+                target_kwh = usable_capacity_kwh
+            if getattr(self, "_isolated_cycle_preview", False) and self._discharge_session_started:
+                # A hypothetical refill follows a completed discharge cycle,
+                # including profitable surplus export. The simulation below
+                # still rejects it if the safe floor cannot actually be reached.
                 target_kwh = usable_capacity_kwh
             if target_kwh <= 0.05:
                 next_cursor = cast(datetime, best_candidate["end"])
@@ -3284,6 +3391,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     initial_usable_energy_kwh=initial_usable_energy_kwh,
                     max_discharge_kw=max_discharge_kw,
                 )
+                if getattr(self, "_isolated_cycle_preview", False):
+                    # Own demand alone omits potential surplus export. Let the
+                    # isolated simulation evaluate it; its energy check at each
+                    # charge window still enforces completion of discharge.
+                    depletion_time = now
                 grid_charge_starts = {
                     start: window
                     for start, window in grid_charge_starts.items()
@@ -3510,6 +3622,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if _next_charge_after_segment is not None
                 else None
             )
+            if getattr(self, "_isolated_cycle_preview", False):
+                forced_export_kwh = self._plan_segment_export_kwh(
+                    slots=[s for s in segment_slots if (
+                        _export_allowed_from is not None
+                        and s["start"] >= _export_allowed_from
+                        and not (before_first_charge_phase and first_charge_phase_start is not None
+                                 and s["end"] > first_charge_phase_start - timedelta(minutes=30))
+                        and s.get("price_known", True)
+                        and float(s["export_price"]) > 0
+                        and (grid_cost_floor is None or
+                             float(s["export_price"]) + 1e-9 >= grid_cost_floor + battery_min_profit)
+                    )],
+                    available_energy_kwh=discharge_budget_kwh,
+                    total_segment_demand_kwh=total_segment_battery_demand_kwh,
+                    max_discharge_kw=max_discharge_kw,
+                )
 
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
             # total planned discharge for all segment slots that start AFTER s.
@@ -3535,6 +3663,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and segment_slot_start < first_charge_phase_start
                     and segment_slot_end >= first_charge_phase_start - timedelta(minutes=30)
                 )
+                if (getattr(self, "_isolated_cycle_preview", False)
+                        and first_charge_phase_start is not None
+                        and segment_slot_end == first_charge_phase_start - timedelta(minutes=30)):
+                    charge_phase_imminent = False
                 within_export_window = (
                     _export_allowed_from is not None
                     and segment_slot_start >= _export_allowed_from
@@ -3773,17 +3905,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     def _estimate_unknown_price_plan(
         self, *, slots, now, actual_windows, initial_energy, capacity,
-        max_charge, max_discharge, reserve, min_profit,
+        max_charge, max_discharge, reserve, min_profit, include_known_prices=False, preview_start=None,
     ):
-        """Preview the unknown-price tail without changing live commands/state."""
+        """Preview a speculative tail without changing live commands or state."""
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        start = min((s["start"] for s in slots
-                     if s["start"] >= tomorrow and not s.get("price_known", True)), default=None)
-        if start is None:
+        start = preview_start or min((s["start"] for s in slots
+                     if s["start"] >= tomorrow
+                     and (include_known_prices or not s.get("price_known", True))), default=None)
+        if start is None or not any(s["end"] > start for s in slots):
             return []
         # Continue from the energy and cycle produced by the real-price plan.
         energy = initial_energy
         preview = copy(self)
+        preview._isolated_cycle_preview = include_known_prices
         preview._store_battery_cycle_state_snapshot = lambda timestamp: None
         preview._active_charge_phase_end = None
         preview._active_charge_phase_mode = "accu_uit"
@@ -3818,7 +3952,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     preview._battery_grid_charge_price = None
         # Treat estimates as inputs only within this isolated preview. The
         # published prices stay unknown and no live reserve is released by it.
-        future = [{**s, "price_known": True} for s in slots if s["start"] >= start]
+        future = []
+        for slot in slots:
+            if slot["end"] <= start:
+                continue
+            clipped = {**slot, "price_known": True}
+            if slot["start"] < start:
+                fraction = (slot["end"] - start).total_seconds() / (slot["end"] - slot["start"]).total_seconds()
+                clipped.update(start=start, hours=slot["hours"] * fraction)
+                for key in ("solar_kwh", "demand_kwh", "net_solar_kwh"):
+                    clipped[key] = slot[key] * fraction
+            future.append(clipped)
         solar, grid = preview._plan_charge_windows_for_horizon(
             slots=future, now=start, usable_capacity_kwh=capacity,
             current_remaining_capacity_kwh=max(0., capacity-energy),
@@ -3832,7 +3976,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             max_charge_kw=max_charge, max_discharge_kw=max_discharge,
             no_charge_reserve_kwh=reserve, battery_min_profit=min_profit,
         )
-        return [{**w, "price_estimated": True} for w in modes]
+        return [{**w, "planning_estimated": True,
+                 "price_estimated": any(not s.get("price_known", True) for s in slots
+                                        if s["start"] < datetime.fromisoformat(w["end"])
+                                        and s["end"] > datetime.fromisoformat(w["start"]))}
+                for w in modes]
 
     def _plan_segment_export_kwh(
         self,

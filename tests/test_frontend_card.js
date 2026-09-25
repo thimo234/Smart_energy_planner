@@ -95,6 +95,8 @@ const previewState = {
   },
 };
 const previewSchedule = card.extractModeSchedule(previewState, horizonStart, horizonEnd);
+assert.equal(card.isPreviewTime(previewState, new Date('2026-08-07T12:30:00+02:00')), false);
+assert.equal(card.isPreviewTime(previewState, new Date('2026-08-07T13:30:00+02:00')), true);
 assert.equal(previewSchedule[0].mode, 'ontladen');
 assert.equal(previewSchedule[1].mode, 'laden_met_zonne_energie');
 assert.equal(previewState.attributes.planned_battery_mode_schedule[1].mode, 'accu_uit', 'preview must not mutate live schedule');

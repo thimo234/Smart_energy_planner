@@ -65,7 +65,7 @@ geverifieerd is. Lees ook de open punten onderaan.
 - De normale minimum-SOC is de absolute veilige ondergrens. In de aangeleverde
   voorbeelden is dit **20%** bij een accu van **10 kWh**. Dit zijn voorbeeldwaarden,
   geen universele vaste instellingen.
-- Als een volgend rendabel laadvenster beschikbaar is, mag de extra reserve
+- Als een volgend rendabel laadvenster in de uitvoerbare planning beschikbaar is, mag de extra reserve
   worden vrijgegeven en moet zoveel mogelijk bruikbare energie vóór dat venster
   worden benut, tot de veilige ondergrens waar vermogen, afname en rendement
   dat toelaten. Maak geen onrendabele export noodzakelijk om de accu leeg te krijgen.
@@ -121,7 +121,20 @@ geverifieerd is. Lees ook de open punten onderaan.
   mag geen zekere winst suggereren of vandaag alvast de extra reserve vrijgeven.
 - Bereken de schatting vanuit de energie die de echte planning overlaat, met
   dezelfde cyclusvergrendeling, veilige ondergrens en minimumwinst.
-- Vervang de voorlopige planning zodra echte prijzen beschikbaar komen.
+- Nieuwste afspraak van 25 september: plan **twee opeenvolgende cycli** als
+  uitvoerbare planning (laden en daarna ontladen, of omgekeerd). De lopende
+  cyclus telt mee. Pauzes en wisselingen tussen zonne- en netladen tellen niet
+  als nieuwe cyclus. De grens mag over middernacht lopen.
+- Alles na die twee cycli is een afzonderlijke, speculatieve vooruitblik, ook
+  bij bekende prijzen. Dit vervangt het tussentijds besproken kalenderdagmodel.
+- De vooruitblik mag de uitvoerbare opdrachten, reserve, cyclusvergrendeling
+  of opgeslagen status niet wijzigen. Bekende latere tarieven blijven nodig
+  als economische onderbouwing voor de minimumwinst van het uitvoerbare laden.
+- Begin de vooruitblik met de energie en cyclusstatus die de uitvoerbare twee
+  cycli naar verwachting overlaten. Herbereken de uitvoerbare planning steeds
+  met de werkelijke SOC; neem de vooruitblik niet over als vastgezette opdracht.
+- Markeer de planning als vooruitblik en maak afzonderlijk duidelijk of de
+  prijzen bekend zijn of met het daggemiddelde zijn geschat.
 
 ## 8. Bekende fouten die niet mogen terugkomen
 
@@ -152,6 +165,17 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: twee cycli en aparte vooruitblik
+
+- Op 25 september heeft de gebruiker de grafiek met twee uitvoerbare cycli
+  en een afzonderlijke vooruitblik goedgekeurd en commit/push naar main gevraagd.
+- De lopende cyclus telt mee; pauzes en wisselingen tussen laadbronnen niet.
+  De vooruitblik blijft apart, ook bij bekende prijzen, en wordt op een kopie
+  van de plannerstatus berekend vanaf de verwachte energie aan de cyclusgrens.
+- Lokaal gecontroleerd: 149 Python-tests, kaarttest en browsercontrole van de
+  grafiek. Na de laatste grenscorrecties zijn de drie cyclusregressietests
+  opnieuw geslaagd. Live verificatie na installatie staat nog open.
 
 - Prijsgerichte bronkeuze met EUR 0,11 zonnevoordeel, negatieve netprijzen,
   reservevrijgave en cyclusvergrendeling zijn lokaal aangepast.

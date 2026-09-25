@@ -59,7 +59,7 @@ def replay():
 
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
-                     solar_margin=0, tax_deduction=.10, estimate_tomorrow=False):
+                     solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False):
     """Exercise final sensor scheduling with the already computed demand input."""
     now, slots = feedback_slots(snapshot, timestamp)
     data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
@@ -89,12 +89,15 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                                           "battery_charge_safety_margin": solar_margin,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
     c._locked_eco_window = c._locked_preheat_end = c._preheat_expired_at = None
-    namespace = c._build_plan.__globals__
+    namespace = c._build_plan_for_horizon.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {
         "build_hourly_home_demand_forecast": lambda **kwargs: data["estimated_hourly_home_demand"],
         "align_price_responsive_demand_to_cheap_hours": lambda demand, prices: demand,
     }):
-        result = c._build_plan(
+        # Existing tests exercise the horizon algorithm; isolation is tested
+        # separately through the production entry point.
+        build = c._build_plan if isolated_cycles else c._build_plan_for_horizon
+        result = build(
             planner_kind="battery", windows=[p for p in prices if p.price_known], all_windows=prices,
             export_windows=exports, all_export_windows=exports, battery_switch_windows=prices,
             price_average=None, export_price_average=None, current_price=prices[0].price,

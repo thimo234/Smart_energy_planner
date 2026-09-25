@@ -86,7 +86,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
           ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
           ${plannerState?.attributes?.estimated_battery_mode_windows?.length
-            ? '<div class="legend">Morgen: voorlopige planning op basis van het laatste bekende daggemiddelde.</div>' : ''}
+            ? `<div class="legend">Na twee cycli: aparte vooruitblik; geen uitvoerbare opdrachten. ${plannerState.attributes.estimated_battery_mode_windows.some(w => w.price_estimated) ? 'Ontbrekende prijzen zijn geschat met het laatste bekende daggemiddelde.' : 'Met bekende prijzen en verwacht verbruik en zon.'}</div>` : ''}
         </div>
       </ha-card>
       ${this.renderStyles()}
@@ -322,7 +322,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand)}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
-                  data-selected-mode="${this.escape(this.modeLabel(selectedMode) + (window.priceKnown === false ? ' (schatting)' : ''))}"
+                  data-selected-mode="${this.escape(this.modeLabel(selectedMode) + (this.isPreviewTime(plannerState, selectTime) ? ' (vooruitblik)' : window.priceKnown === false ? ' (schatting)' : ''))}"
                   ${isCurrentWindow ? "data-now-selection" : ""}
                 ></rect>
               `;
@@ -379,7 +379,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand, "0.00")}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
-                  data-selected-mode="${this.escape(this.modeLabel(band.mode))}"
+                  data-selected-mode="${this.escape(this.modeLabel(band.mode) + (this.isPreviewTime(plannerState, start) ? ' (vooruitblik)' : ''))}"
                   data-mode-start-ms="${start.getTime()}"
                   data-mode-end-ms="${end.getTime()}"
                   data-mode="${this.escape(band.mode)}"
@@ -661,6 +661,12 @@ class SmartEnergyPlannerCard extends HTMLElement {
     }
 
     return filled.sort((left, right) => left.time - right.time);
+  }
+
+  isPreviewTime(plannerState, time) {
+    return (plannerState?.attributes?.estimated_battery_mode_windows || []).some(
+      window => this.parseDate(window.start) <= time && this.parseDate(window.end) > time
+    );
   }
 
   extractModeSchedule(plannerState, horizonStart, horizonEnd) {
