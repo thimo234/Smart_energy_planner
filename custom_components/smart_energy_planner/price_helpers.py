@@ -3,10 +3,32 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from dataclasses import replace
 from typing import Any
 
-from .const import PRICE_RESOLUTION_HOURLY
+from .const import (
+    PRICE_RESOLUTION_HOURLY, CONF_PRICE_SENSOR, CONF_EXPORT_PRICE_SENSOR,
+    CONF_EXPORT_PRICE_TAX_DEDUCTION, DEFAULT_EXPORT_PRICE_TAX_DEDUCTION,
+)
 from .price_models import PlannerWindow
+
+
+def export_price_deduction(config: dict[str, Any]) -> float:
+    """Only derive export tariffs when there is no distinct export sensor."""
+    export_sensor = config.get(CONF_EXPORT_PRICE_SENSOR)
+    if export_sensor and export_sensor != config.get(CONF_PRICE_SENSOR):
+        return 0.0
+    return float(config.get(CONF_EXPORT_PRICE_TAX_DEDUCTION, DEFAULT_EXPORT_PRICE_TAX_DEDUCTION))
+
+
+def deduct_export_prices(current, average, windows, all_windows, deduction):
+    """Subtract once, after parsing; keep negative prices and source metadata."""
+    return (
+        current - deduction if current is not None else None,
+        average - deduction if average is not None else None,
+        [replace(w, price=w.price - deduction) for w in windows],
+        [replace(w, price=w.price - deduction) for w in all_windows],
+    )
 
 
 def extract_price_windows(
@@ -174,7 +196,16 @@ def extend_price_window_tail(
     interval = last_window.end - last_window.start
     if interval <= timedelta(0):
         interval = timedelta(hours=1)
-    fill_price = last_window.price if last_window.price is not None else (fallback_price or 0.0)
+    # Use the last known day's duration-weighted mean, never the final expensive
+    # evening slot or a mean contaminated by previously estimated prices.
+    known = [w for w in extended_windows if w.price_known]
+    known_end = max((w.end for w in known), default=last_window.end)
+    day_start = known_end - timedelta(days=1)
+    weighted = [(w.price, max(0.0, (min(w.end, known_end) - max(w.start, day_start)).total_seconds()))
+                for w in known]
+    duration = sum(seconds for _, seconds in weighted)
+    fill_price = (sum(price * seconds for price, seconds in weighted) / duration
+                  if duration else (fallback_price if fallback_price is not None else last_window.price))
     tail_start = last_window.end
     while tail_start < horizon_end:
         tail_end = min(tail_start + interval, horizon_end)

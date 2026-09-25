@@ -11,6 +11,7 @@ from test_battery_planner import SmartEnergyPlannerCoordinator
 from custom_components.smart_energy_planner.battery_forecast import build_energy_balance_slots
 from custom_components.smart_energy_planner.battery_models import SolarWindow
 from custom_components.smart_energy_planner.price_models import PlannerWindow
+from custom_components.smart_energy_planner.price_helpers import extend_price_window_tail
 
 
 def feedback_slots(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00"):
@@ -58,14 +59,25 @@ def replay():
 
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
-                     solar_margin=0):
+                     solar_margin=0, tax_deduction=.10, estimate_tomorrow=False):
     """Exercise final sensor scheduling with the already computed demand input."""
     now, slots = feedback_slots(snapshot, timestamp)
     data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
     prices = [PlannerWindow(s["start"], s["end"], s["import_price"], s["price_known"]) for s in slots]
-    exports = [PlannerWindow(s["start"], s["end"], s["export_price"], s["price_known"]) for s in slots]
+    if estimate_tomorrow:
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        # Include the full known day, including prices before the replay time.
+        prices = [PlannerWindow(datetime.fromisoformat(w['start']), datetime.fromisoformat(w['end']),
+                                w['price'], w['price_known']) for w in data['upcoming_energy_price_windows']
+                  if datetime.fromisoformat(w['start']) < midnight]
+        prices = extend_price_window_tail(windows=prices, horizon_end=midnight+timedelta(days=1), fallback_price=None)
+    exports = [PlannerWindow(w.start, w.end, w.price-tax_deduction, w.price_known) for w in prices]
     solar = [SolarWindow(datetime.fromisoformat(w["start"]), datetime.fromisoformat(w["end"]),
                          w["estimated_kwh"], None, None) for w in data["estimated_hourly_solar_forecast"]]
+    if estimate_tomorrow:
+        slots = build_energy_balance_slots(price_windows=prices, export_price_windows=exports,
+                                          solar_windows=solar, hourly_demand=data['estimated_hourly_home_demand'],
+                                          horizon_start=now, demand_safety_margin=0)
     c = instance if instance is not None else coordinator()
     if instance is None:
         c._charge_session_started = not discharging

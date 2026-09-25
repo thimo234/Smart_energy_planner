@@ -5,7 +5,11 @@
         "title": "Smart Energy Planner",
         "description": "Choose whether you want a battery planner, thermostat planner, or price window planner.",
         "data": {
-          "planner_kind": "Planner type"
+          "planner_kind": "Planner type",
+          "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
+        },
+        "data_description": {
+          "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged."
         }
       },
       "configure": {
@@ -81,7 +85,11 @@
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)",
           "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
-          "battery_demand_safety_margin": "Demand forecast safety margin (%)"
+          "battery_demand_safety_margin": "Demand forecast safety margin (%)",
+          "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
+        },
+        "data_description": {
+          "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged."
         }
       }
     }

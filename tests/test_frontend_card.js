@@ -82,4 +82,22 @@ assert.equal(
   "a short leading gap must not pull the running forecast curve down to zero",
 );
 
-console.log("frontend card solar forecast checks passed");
+const previewState = {
+  state: 'accu_uit',
+  attributes: {
+    planned_battery_mode_schedule: [
+      {at: '2026-08-07T12:00:00+02:00', mode: 'ontladen'},
+      {at: '2026-08-07T13:00:00+02:00', mode: 'accu_uit'},
+    ],
+    estimated_battery_mode_windows: [
+      {start: '2026-08-07T13:00:00+02:00', end: '2026-08-07T14:00:00+02:00', mode: 'laden_met_zonne_energie'},
+    ],
+  },
+};
+const previewSchedule = card.extractModeSchedule(previewState, horizonStart, horizonEnd);
+assert.equal(previewSchedule[0].mode, 'ontladen');
+assert.equal(previewSchedule[1].mode, 'laden_met_zonne_energie');
+assert.equal(previewState.attributes.planned_battery_mode_schedule[1].mode, 'accu_uit', 'preview must not mutate live schedule');
+delete previewState.attributes.estimated_battery_mode_windows;
+assert.equal(card.extractModeSchedule(previewState, horizonStart, horizonEnd)[1].mode, 'accu_uit');
+console.log("frontend card solar forecast and estimated schedule checks passed");

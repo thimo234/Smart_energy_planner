@@ -95,8 +95,13 @@ checking known future tariffs against the minimum margin. Energy already bought
 in that cycle must not cancel the remaining charge halfway through.
 
 Both sources compete on effective price within each charge cycle. The configured
-pricing model values solar at the import tariff minus EUR 0.11/kWh; this is a
-user-selected assumption, not a dynamically maintained tax rate. Grid charging
+pricing model values stored solar at the export revenue it forgoes. Without a
+separate export sensor (or when selecting the same sensor for both), export is
+derived from import minus **Export price tax deduction (EUR/kWh)**, default 0.11.
+Enter 0.11 for 11 cents, or 0 to disable the deduction. The import sensor should
+include the taxes you want to subtract. A distinct export sensor is used as-is.
+This is a user-configured fixed amount, not an automatically maintained tax rate
+or a percentage VAT calculation. Grid charging
 uses the full import tariff. Cheaper grid energy can therefore displace later,
 more expensive solar, even with abundant solar forecast. At a known negative
 import tariff, the requested strategy is grid charging, including when solar
@@ -148,6 +153,19 @@ the reserve. The planner supplies a strategy; the inverter or your automation
 must follow it to stop actual discharge.
 
 ## Lovelace card
+
+When tomorrow's prices are missing, the card shows a **provisional** battery plan
+through tomorrow midnight. Missing tariffs use the duration-weighted average of
+the latest known 24-hour period (available observations if incomplete). These
+prices retain `price_known: false`. The provisional schedule is separate from
+the executable plan: it does not change today's command, cycle state or reserve.
+It is recalculated and replaced when actual prices arrive. A flat estimate cannot
+identify tomorrow's cheapest hour or prove profitable grid arbitrage by itself.
+
+The strategy sensor exposes `current_export_price` and
+`upcoming_export_price_windows` for the effective export tariffs, and
+`estimated_battery_mode_windows` for the provisional schedule. The card marks
+the latter as a forecast; automations should keep using the strategy state.
 
 The integration includes a custom Lovelace card that shows the upcoming energy
 price as a stepped graph, the expected home demand as a dotted line, and the

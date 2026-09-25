@@ -472,6 +472,10 @@ class BatteryPlannerTest(unittest.TestCase):
         slots = self._feedback_state_slots(now)
         tomorrow = datetime(2026, 6, 26)
 
+        # These scenarios use import-derived export prices with 11 ct tax.
+        for slot in slots:
+            slot["export_price"] = slot["import_price"] - .11
+
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})
         coordinator._active_charge_phase_end = None
@@ -970,6 +974,10 @@ class BatteryPlannerTest(unittest.TestCase):
             )
         slots.sort(key=lambda slot: slot["start"])
 
+        # These scenarios use import-derived export prices with 11 ct tax.
+        for slot in slots:
+            slot["export_price"] = slot["import_price"] - .11
+
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})
         coordinator._active_charge_phase_end = None
@@ -1160,6 +1168,10 @@ class BatteryPlannerTest(unittest.TestCase):
                 }
             )
 
+        # These scenarios use import-derived export prices with 11 ct tax.
+        for slot in slots:
+            slot["export_price"] = slot["import_price"] - .11
+
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})
         coordinator._active_charge_phase_end = None
@@ -1212,6 +1224,10 @@ class BatteryPlannerTest(unittest.TestCase):
                 "solar_kwh": 0.0,
             }
         )
+
+        # These scenarios use import-derived export prices with 11 ct tax.
+        for slot in slots:
+            slot["export_price"] = slot["import_price"] - .11
 
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})
@@ -1349,6 +1365,10 @@ class BatteryPlannerTest(unittest.TestCase):
                     "solar_kwh": 2.0 if has_solar else 0.0,
                 }
             )
+
+        # These scenarios use import-derived export prices with 11 ct tax.
+        for slot in slots:
+            slot["export_price"] = slot["import_price"] - .11
 
         coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
         coordinator.config_entry = types.SimpleNamespace(data={}, options={})

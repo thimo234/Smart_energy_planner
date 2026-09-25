@@ -85,6 +85,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
           ${this.config.show_legend ? this.renderLegend() : ""}
+          ${plannerState?.attributes?.estimated_battery_mode_windows?.length
+            ? '<div class="legend">Morgen: voorlopige planning op basis van het laatste bekende daggemiddelde.</div>' : ''}
         </div>
       </ha-card>
       ${this.renderStyles()}
@@ -320,7 +322,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   data-selected-price="${this.formatSelectedValue(values.price)}"
                   data-selected-demand="${this.formatSelectedValue(values.demand)}"
                   data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
-                  data-selected-mode="${this.escape(this.modeLabel(selectedMode))}"
+                  data-selected-mode="${this.escape(this.modeLabel(selectedMode) + (window.priceKnown === false ? ' (schatting)' : ''))}"
                   ${isCurrentWindow ? "data-now-selection" : ""}
                 ></rect>
               `;
@@ -662,7 +664,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   extractModeSchedule(plannerState, horizonStart, horizonEnd) {
-    const raw = plannerState?.attributes?.planned_battery_mode_schedule;
+    let raw = plannerState?.attributes?.planned_battery_mode_schedule;
+    const estimated = plannerState?.attributes?.estimated_battery_mode_windows;
+    if (Array.isArray(estimated) && estimated.length && Array.isArray(raw)) {
+      const start = this.parseDate(estimated[0].start);
+      if (start) {
+        raw = [...raw.filter(item => this.parseDate(item.at) < start),
+          ...estimated.map(item => ({ at: item.start, mode: item.mode }))];
+      }
+    }
     if (!Array.isArray(raw)) {
       return [{ at: horizonStart, mode: String(plannerState?.state || "accu_uit") }];
     }

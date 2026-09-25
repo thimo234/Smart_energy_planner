@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from dataclasses import replace
+from copy import copy
 import logging
 import statistics
 from typing import Any, cast
@@ -109,6 +110,8 @@ from .const import (
     STORAGE_VERSION,
 )
 from .price_helpers import (
+    deduct_export_prices,
+    export_price_deduction,
     aggregate_price_windows_to_hourly,
     build_neutral_price_windows,
     extend_price_window_tail,
@@ -372,6 +375,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 export_price_state.attributes if export_price_state else (price_state.attributes if price_state else {}),
                 export_windows,
             )
+            if planner_kind == PLANNER_KIND_BATTERY:
+                export_current_price, export_price_average, export_windows, all_export_windows = deduct_export_prices(
+                    export_current_price, export_price_average, export_windows, all_export_windows,
+                    export_price_deduction(self._config),
+                )
 
             if not price_state:
                 source_status["price_sensor"] = "waiting_for_price_sensor"
@@ -453,8 +461,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solar_windows = merge_solar_windows(solar_windows)
             all_solar_windows = merge_solar_windows(all_solar_windows)
             if planner_kind == PLANNER_KIND_BATTERY:
-                battery_price_horizon_end = (now + timedelta(days=1)).replace(
-                    hour=18,
+                battery_price_horizon_end = (now + timedelta(days=2)).replace(
+                    hour=0,
                     minute=0,
                     second=0,
                     microsecond=0,
@@ -1929,6 +1937,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             planned_current_mode = _mode_at_time(full_planned_mode_windows, now) or planned_current_mode
 
+        estimated_mode_windows = self._estimate_unknown_price_plan(
+            slots=energy_balance_slots, now=now, actual_windows=full_planned_mode_windows,
+            initial_energy=battery_energy_available_kwh, capacity=usable_battery_capacity_kwh,
+            max_charge=max_charge, max_discharge=max_discharge,
+            reserve=no_charge_reserve_kwh, min_profit=battery_min_profit,
+        )
+
         # Publish the capacity-limited windows actually simulated, including
         # later solar cycles that start with energy left in the battery.
         def actual_charge_windows(windows, mode):
@@ -2139,6 +2154,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 horizon_start=now - timedelta(hours=1),
                 horizon_end=planning_horizon_end,
             ),
+            current_export_price=next((w.price for w in all_export_windows if w.start <= now < w.end), None),
+            upcoming_export_price_windows=self._serialize_price_windows(
+                all_export_windows,
+                horizon_start=now - timedelta(hours=1),
+                horizon_end=planning_horizon_end,
+            ),
             estimated_total_home_demand_kwh=estimated_total_home_demand_kwh,
             estimated_hourly_home_demand=estimated_hourly_home_demand,
             estimated_hourly_solar_forecast=estimated_hourly_solar_forecast,
@@ -2151,6 +2172,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_grid_charge_windows=planned_grid_charge_windows,
             planned_solar_charge_windows=planned_solar_charge_windows,
             planned_battery_mode_schedule=planned_battery_mode_schedule,
+            estimated_battery_mode_windows=estimated_mode_windows,
             planned_battery_mode_windows=planned_battery_mode_windows,
             battery_soc_percent=battery_soc_percent,
             battery_min_soc_percent=battery_min_soc_percent,
@@ -2457,12 +2479,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         selected_grid_charge_by_start: dict[datetime, float] = {}
 
         def _solar_cost(slot: dict[str, Any]) -> float:
-            # User's effective-price model: solar avoids 11 ct/kWh tax.
-            return float(slot["import_price"]) - 0.11
+            # Storing solar forgoes the configured export revenue. That tariff
+            # already includes any deduction; never subtract tax a second time.
+            return float(slot["export_price"])
 
         def _slot_candidates(after: datetime) -> list[dict[str, Any]]:
             candidates: list[dict[str, Any]] = []
             for slot in future_slots:
+                if not slot.get("price_known", True):
+                    # Estimated tariffs are evaluated only by the isolated
+                    # preview, including negative estimated solar prices.
+                    continue
                 slot_start = cast(datetime, slot["start"])
                 slot_end = cast(datetime, slot["end"])
                 if slot_end <= after:
@@ -3743,6 +3770,69 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "usable_hours": (slots[-1]["end"] - cursor).total_seconds() / 3600,
             })
         return self._merge_mode_windows(complete_modes), current_mode
+
+    def _estimate_unknown_price_plan(
+        self, *, slots, now, actual_windows, initial_energy, capacity,
+        max_charge, max_discharge, reserve, min_profit,
+    ):
+        """Preview the unknown-price tail without changing live commands/state."""
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        start = min((s["start"] for s in slots
+                     if s["start"] >= tomorrow and not s.get("price_known", True)), default=None)
+        if start is None:
+            return []
+        # Continue from the energy and cycle produced by the real-price plan.
+        energy = initial_energy
+        preview = copy(self)
+        preview._store_battery_cycle_state_snapshot = lambda timestamp: None
+        preview._active_charge_phase_end = None
+        preview._active_charge_phase_mode = "accu_uit"
+        preview._battery_cycle_state_restored_recent = False
+        for window in actual_windows:
+            begin, end = datetime.fromisoformat(window["start"]), datetime.fromisoformat(window["end"])
+            if begin >= start:
+                break
+            mode = window["mode"]
+            for slot in slots:
+                hours = max(0.0, (min(start, end, slot["end"]) - max(now, begin, slot["start"])).total_seconds()/3600)
+                if not hours:
+                    continue
+                net_kw = float(slot["net_solar_kwh"])/max(float(slot["hours"]), 1e-9)
+                rate = {"laden_van_net": max_charge,
+                        "laden_met_zonne_energie": min(max_charge, max(0., net_kw)),
+                        "ontladen": -min(max_discharge, max(0., -net_kw)),
+                        "ontladen_naar_net": -max_discharge, "accu_uit": 0.}[mode]
+                energy = max(0., min(capacity, energy + hours*rate))
+                if rate > 0:
+                    preview._charge_session_started = True
+                    preview._discharge_session_started = False
+                    if mode == "laden_van_net":
+                        preview._battery_grid_charge_price = max(
+                            float(slot["import_price"]),
+                            getattr(preview, "_battery_grid_charge_price", None) or float(slot["import_price"]),
+                        )
+                elif rate < 0:
+                    preview._charge_session_started = False
+                    preview._discharge_session_started = True
+                if energy <= _BATTERY_DEPLETION_EPSILON_KWH:
+                    preview._battery_grid_charge_price = None
+        # Treat estimates as inputs only within this isolated preview. The
+        # published prices stay unknown and no live reserve is released by it.
+        future = [{**s, "price_known": True} for s in slots if s["start"] >= start]
+        solar, grid = preview._plan_charge_windows_for_horizon(
+            slots=future, now=start, usable_capacity_kwh=capacity,
+            current_remaining_capacity_kwh=max(0., capacity-energy),
+            max_charge_kw=max_charge, max_discharge_kw=max_discharge, battery_min_profit=min_profit,
+        )
+        modes, _ = preview._build_mode_windows_from_hourly_plan(
+            slots=future, now=start, planned_solar_charge_windows=solar, planned_grid_charge_windows=grid,
+            initial_usable_energy_kwh=energy, usable_capacity_kwh=capacity,
+            average_price=sum(s["import_price"] for s in future)/len(future),
+            average_export_price=sum(s["export_price"] for s in future)/len(future),
+            max_charge_kw=max_charge, max_discharge_kw=max_discharge,
+            no_charge_reserve_kwh=reserve, battery_min_profit=min_profit,
+        )
+        return [{**w, "price_estimated": True} for w in modes]
 
     def _plan_segment_export_kwh(
         self,

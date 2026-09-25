@@ -100,3 +100,6 @@ class PlannerResult:
     rationale: str
     battery_no_charge_min_soc_percent: float = 20.0
     battery_no_charge_reserve_active: bool = False
+    current_export_price: float | None = None
+    estimated_battery_mode_windows: list[dict] | None = None
+    upcoming_export_price_windows: list[dict[str, str | float | bool]] | None = None

@@ -10,8 +10,11 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Vergelijk netladen en zonneladen op hun effectieve prijs. Zonneoverschot krijgt
   niet automatisch voorrang en is geen voorwaarde om een laadcyclus te plannen.
 - Gebruik het door de gebruiker opgegeven voordeel van **€0,11/kWh** voor zon:
-  effectieve zonneprijs = importtarief − €0,11/kWh. Dit is het afgesproken
-  rekenmodel, geen automatisch bijgewerkte fiscale regel.
+  standaard belastingaftrek = €0,11/kWh, nu instelbaar in EUR/kWh.
+  Zonder aparte terugleversensor (of met dezelfde sensor) is de terugleverprijs
+  importtarief min deze aftrek. Een aparte terugleversensor blijft ongewijzigd.
+  De effectieve zonneprijs is deze terugleverprijs; trek de belasting niet dubbel
+  af. 0 schakelt de aftrek uit. Dit is geen automatisch bijgewerkte fiscale regel.
 - Bij een bekende negatieve importprijs wil de gebruiker **netladen**, ook
   als er tegelijkertijd zonneoverschot is. Respecteer capaciteit, vermogen en
   de geldende cyclusvergrendeling.
@@ -108,7 +111,19 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Vermeld of alleen lokaal/simulatie is getest of ook in Home Assistant.
   Gepusht betekent niet dat de draaiende integratie al is bijgewerkt.
 
-## 7. Bekende fouten die niet mogen terugkomen
+## 7. Voorlopige planning bij ontbrekende prijzen
+
+- Op verzoek van 25 september 2026: toon alvast morgen wanneer Nord Pool nog
+  geen prijzen heeft gepubliceerd, met het gemiddelde van de laatst bekende dag.
+- Gebruik het tijdgewogen gemiddelde van de laatste bekende 24 uur; bij een
+  onvolledige reeks alleen de beschikbare waarnemingen. Behoud negatieve prijzen.
+- Markeer tarieven en planning duidelijk als schatting. De voorlopige planning
+  mag geen zekere winst suggereren of vandaag alvast de extra reserve vrijgeven.
+- Bereken de schatting vanuit de energie die de echte planning overlaat, met
+  dezelfde cyclusvergrendeling, veilige ondergrens en minimumwinst.
+- Vervang de voorlopige planning zodra echte prijzen beschikbaar komen.
+
+## 8. Bekende fouten die niet mogen terugkomen
 
 - Het huidige kwartier bij iedere update blokkeren met een oude laadstatus,
   waardoor ontladen steeds naar het volgende kwartier verschuift.
@@ -147,3 +162,14 @@ geverifieerd is. Lees ook de open punten onderaan.
   Dit document en AGENTS.md horen bij dezelfde goedgekeurde wijziging.
 - **Nog open:** live verificatie in Home Assistant na installatie. De lokale
   tests en goedkeuring betekenen niet dat de draaiende integratie is bijgewerkt.
+
+### Goedgekeurde wijziging na commit 13bce4b
+
+- Instelbare belastingaftrek en consistente zonne-/terugleverprijs toegevoegd.
+- Afzonderlijke voorlopige planning voor morgen en aanduiding in Lovelace toegevoegd.
+- Lokale eindcontrole geslaagd: 145 Python-tests, frontend-cardtest, compilatie,
+  diffcontrole en browsercontrole van de grafiek. De grafiek is een reconstructie
+  met eerder aangeleverde data, geen nieuwe live meting.
+- De gebruiker heeft op 25 september 2026 de grafiek goedgekeurd en opdracht
+  gegeven deze wijzigingen naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
