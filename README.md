@@ -203,3 +203,8 @@ dashboards still need a manual resource entry.
 4. Install `Smart Energy Planner`.
 5. Restart Home Assistant.
 6. Add the integration from **Settings -> Devices & services**.
+
+The integration includes its icon and logo in
+`custom_components/smart_energy_planner/brand/`. Home Assistant 2026.3 or newer
+loads these local brand images automatically. After updating, restart Home
+Assistant and refresh the browser or reopen the app if an old placeholder remains.

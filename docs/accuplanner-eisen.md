@@ -180,6 +180,17 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie 26 september: integratie-icoon
+
+- Het bestaande icoon en logo moeten zichtbaar zijn in het integratieoverzicht.
+- De bestaande PNG-bestanden zijn toegevoegd onder de door Home Assistant
+  vanaf 2026.3 ondersteunde map `custom_components/smart_energy_planner/brand/`.
+  Bestanden in de repositoryhoofdmap of direct naast manifest.json volstaan niet.
+- PNG-formaat, leesbaarheid en gelijkheid aan de bestaande afbeeldingen zijn
+  lokaal gecontroleerd. Controle in Home Assistant staat nog open.
+- De gebruiker heeft op 26 september deze correctie goedgekeurd voor commit
+  en push naar main.
+
 ### Goedgekeurde correctie 26 september: geen onnodige pauze na export
 
 - Het energiebudget voor export en huisverbruik werd volledig op maximaal
