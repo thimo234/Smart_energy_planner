@@ -2635,29 +2635,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                             "cost": round(_solar_cost(slot), 6),
                         }
                     )
-                # Solar and grid are alternative commands, not overlapping
-                # allocations of the same inverter's charging capacity.
+                # Grid charging means solar plus a grid top-up, sharing the
+                # inverter limit. Price the solar portion at its export value;
+                # only the remaining capacity is bought from the grid.
                 grid_kwh = slot_capacity_kwh
-                if not slot.get("price_known", True):
-                    grid_kwh = 0.0
-                if grid_kwh > 0 and float(slot["import_price"]) < 0:
+                import_price = float(slot["import_price"])
+                if grid_kwh > 0:
+                    mixed_cost = (
+                        (solar_kwh * _solar_cost(slot) if solar_kwh > 0 else 0.0)
+                        + max(0.0, grid_kwh - solar_kwh) * import_price
+                    ) / grid_kwh
                     candidates.append(
                         {
                             "kind": "grid",
                             "start": slot_start,
                             "end": slot_end,
                             "charge_kwh": round(grid_kwh, 6),
-                            "cost": round(float(slot["import_price"]), 6),
-                        }
-                    )
-                elif grid_kwh > 0:
-                    candidates.append(
-                        {
-                            "kind": "grid",
-                            "start": slot_start,
-                            "end": slot_end,
-                            "charge_kwh": round(grid_kwh, 6),
-                            "cost": round(float(slot["import_price"]), 6),
+                            "cost": mixed_cost,
+                            # Cheap solar must not hide an unprofitable import.
+                            "profit_cost": import_price,
                         }
                     )
             return candidates
@@ -2672,14 +2668,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return max(prices, default=None)
 
         def _is_profitable_charge(candidate: dict[str, Any]) -> bool:
-            if float(candidate["cost"]) < 0:
+            profit_cost = float(candidate.get("profit_cost", candidate["cost"]))
+            if profit_cost < 0:
                 return True
             peak_price = _future_peak_price(
                 cast(datetime, candidate["end"]), known_only=True,
             )
             return (
                 peak_price is not None
-                and peak_price - float(candidate["cost"]) >= battery_min_profit
+                and peak_price - profit_cost >= battery_min_profit
             )
 
         def _primary_charge_cost(candidates: list[dict[str, Any]]) -> float | None:
@@ -2733,9 +2730,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         continue
                     if previous and not (previous["kind"] == "solar" and candidate["kind"] == "grid"):
                         continue
-                    # Replacing a weak solar command with grid charging uses
-                    # the same slot once. Compare its incremental cost, including
-                    # the solar energy that the replacement displaces.
+                    # Replacing solar-only with mixed charging uses this slot
+                    # once. Compare the extra energy and cost, retaining the
+                    # solar contribution within the shared charging power.
                     cost = float(candidate["cost"])
                     if previous:
                         added_kwh = min(extra_kwh, target_kwh - charged_kwh)
@@ -2967,7 +2964,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             grid_selected = [item for item in selected_for_cycle if item["kind"] == "grid"]
             if grid_selected:
                 charge_end = max(cast(datetime, item["end"]) for item in selected_for_cycle)
-                minimum_sale_price = max(float(item["cost"]) for item in grid_selected) + battery_min_profit
+                minimum_sale_price = max(float(item["profit_cost"]) for item in grid_selected) + battery_min_profit
                 existing_energy = (current_usable_kwh if first_grid_charge_start == now and cycle_index == 0
                                    else projected_usable_at_charge_kwh)
                 historical_cost = getattr(self, "_battery_grid_charge_price", None)
@@ -2989,10 +2986,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 # Energy bought by this running cycle is not pre-existing
                 # supply that cancels its own full-recharge decision midway.
-                if grid_budget > 1e-9 or continuing_grid_cycle or all(float(item["cost"]) < 0 for item in grid_selected):
+                if grid_budget > 1e-9 or continuing_grid_cycle or all(float(item["profit_cost"]) < 0 for item in grid_selected):
                     grid_budget = max(0.0, target_kwh - sum(
                         float(item["charge_kwh"]) for item in solar_selected
                     ))
+                else:
+                    # Rejecting the import supplement must not discard its
+                    # profitable solar contribution as well. Restore the
+                    # solar-only command for those mixed slots.
+                    for item in grid_selected:
+                        solar_alternative = next((candidate for candidate in primary_candidates
+                            if candidate["kind"] == "solar"
+                            and candidate["start"] == item["start"]), None)
+                        if solar_alternative is not None:
+                            solar_selected.append({**solar_alternative, "charge_kwh": min(
+                                float(solar_alternative["charge_kwh"]), float(item["charge_kwh"]),
+                            )})
                 # Equal-price slots nearest the cheapest slot avoid unnecessary
                 # gaps without buying more energy or accepting a higher price.
                 anchor = min(grid_selected, key=lambda item: (float(item["cost"]), item["start"]))["start"]

@@ -9,6 +9,12 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 - Vergelijk netladen en zonneladen op hun effectieve prijs. Zonneoverschot krijgt
   niet automatisch voorrang en is geen voorwaarde om een laadcyclus te plannen.
+- Verduidelijking 26 september: `laden_van_net` gebruikt ook het zonneoverschot;
+  het net vult alleen aan tot het totale laadvermogen. Reken de zonnebijdrage
+  tegen de terugleverprijs en uitsluitend de aanvulling tegen het importtarief.
+  Op hetzelfde tijdstip blijft zon doorgaans goedkoper. Goedkope netaanvulling
+  mag duurdere latere zonnelading vervangen; goedkopere latere zon gaat voor.
+  De importaanvulling moet zelfstandig aan de minimumwinst voldoen.
 - Gebruik het door de gebruiker opgegeven voordeel van **€0,11/kWh** voor zon:
   standaard belastingaftrek = €0,11/kWh, nu instelbaar in EUR/kWh.
   Zonder aparte terugleversensor (of met dezelfde sensor) is de terugleverprijs
@@ -179,6 +185,23 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde correctie 26 september: netladen vult zonneladen aan
+
+- De gebruiker bevestigde dat netladen zonne-energie niet vervangt. De oude
+  selectie rekende ten onrechte het volledige laadvermogen tegen importtarief.
+- Lokaal aangepast: vergelijk gemengde laadkosten en behoud de gezamenlijke
+  vermogenslimiet. Controleer de minimumwinst van netaanvulling op het ongewogen
+  importtarief. Bij afwijzing van de aanvulling blijft geschikte zonnelading over.
+- Nieuwe controles: goedkope aanvulling boven duurdere latere zon, goedkopere
+  zon behouden, minimumwinst niet verbergen met goedkope zon, opeenvolgende updates.
+- De nieuwe 13:30-meting is afgebroken vóór de prognoses. De voorbeeldgrafiek
+  gebruikt daarom de eerdere volledige 26-septemberprognose met 29% SOC;
+  dit is geen exacte reconstructie van de nieuwste meting. Live verificatie
+  staat nog open.
+- Alle 160 Python-tests, de kaarttest en browsercontrole van de grafiek slagen.
+  De gebruiker heeft tijdens het afronden expliciet gevraagd deze correctie
+  te pushen; de voorbeeldgrafiek wordt bij de terugkoppeling meegeleverd.
 
 ### Goedgekeurde correctie 26 september: integratie-icoon
 
