@@ -3833,6 +3833,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         sim_usable_energy_kwh = max(0.0, sim_usable_energy_kwh - min(slot_export_capacity_kwh, exportable_kwh))
 
                 mode_end = segment_slot_end
+                remainder_mode = "accu_uit"
                 reserve_kwh = reserve_without_charge_opportunity(
                     slots=slots, charge_windows=charge_windows,
                     after=max(now, segment_slot_start), reserve_kwh=no_charge_reserve_kwh,
@@ -3851,8 +3852,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         sim_usable_energy_kwh = energy_before_slot
                     elif discharge_kw > 0:
                         discharge_hours = min(active_hours, allocated_kwh / discharge_kw)
+                        home_kw = min(
+                            max_discharge_kw,
+                            max(0.0, -float(segment_slot["net_solar_kwh"])) / max(float(segment_slot["hours"]), 1e-9),
+                        )
+                        home_kwh = home_kw * active_hours
+                        if (mode == "ontladen_naar_net" and home_kw > 0
+                                and segment_discharge_kwh + 1e-9 >= home_kwh
+                                and allocated_kwh + 1e-9 >= home_kwh):
+                            # Export mode also supplies the house. Reserve its
+                            # demand for the whole slot, then spend only the
+                            # surplus at the additional export power. Otherwise
+                            # compressing both budgets into export leaves a false
+                            # idle gap and forces the house to buy grid energy.
+                            export_kw = max_discharge_kw - home_kw
+                            discharge_hours = min(active_hours, max(0.0,
+                                (allocated_kwh - home_kwh) / export_kw,
+                            )) if export_kw > 1e-9 else 0.0
+                            if discharge_hours <= 1e-9:
+                                mode = "ontladen"
+                                discharge_kw = home_kw
+                                discharge_hours = active_hours
+                            else:
+                                remainder_mode = "ontladen"
                         mode_end = active_start + timedelta(hours=discharge_hours)
-                        sim_usable_energy_kwh = max(reserve_kwh, energy_before_slot - discharge_hours * discharge_kw)
+                        used_kwh = discharge_hours * discharge_kw
+                        if remainder_mode == "ontladen":
+                            used_kwh += (active_hours - discharge_hours) * home_kw
+                        sim_usable_energy_kwh = max(reserve_kwh, energy_before_slot - used_kwh)
 
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
@@ -3877,7 +3904,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "start": mode_end.isoformat(), "end": segment_slot_end.isoformat(),
                         "price": round(float(segment_slot["import_price"]), 6),
                         "usable_hours": round((segment_slot_end - mode_end).total_seconds() / 3600, 3),
-                        "mode": "accu_uit",
+                        "mode": remainder_mode,
                     })
                 if sim_usable_energy_kwh <= 0.01:
                     grid_cost_floor = None

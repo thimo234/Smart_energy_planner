@@ -58,6 +58,10 @@ geverifieerd is. Lees ook de open punten onderaan.
   vanzelfsprekend toegestaan uitgangspunt.
 - `accu_uit` tijdens een noodzakelijke pauze is niet hetzelfde als de cyclus
   omkeren. Houd de cyclusstatus vast over herberekeningen en herstarts.
+- Na een kort exportdeel direct doorgaan met normaal ontladen als daarvoor
+  huisverbruik en energie zijn ingepland. Verkort zo nodig het exportdeel om
+  de rest van het kwartier uit de accu te blijven leveren; voeg geen energie
+  toe aan het budget. Zonder afname of bij de reservegrens blijft uit toegestaan.
 - Voorkom tegelijk dat een verouderde cyclusstatus de accu eindeloos blokkeert.
   **Expliciet akkoord van de gebruiker:** na het laatste rendabele laadvenster
   van die dag mag de avondontlading beginnen, ook als tegenvallende zon een
@@ -175,6 +179,21 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde correctie 26 september: geen onnodige pauze na export
+
+- Het energiebudget voor export en huisverbruik werd volledig op maximaal
+  vermogen uitgevoerd, met daarna uit tot de kwartiergrens. Het budget moet
+  het huis juist gedurende het hele geselecteerde kwartier kunnen bedienen.
+- Lokaal aangepast: bereken de exportduur uit het overschot gedeeld door het
+  vermogen boven het huisverbruik; vervolg direct met normaal ontladen.
+- Gereproduceerd met de eerdere volledige-accumeting van 25 september.
+  De nieuwste screenshot bevat geen sensorwaarden voor een exacte reconstructie.
+- Gerichte controles voor de overgang, behoud van het energiebudget en terecht
+  uitschakelen zonder huisverbruik slagen. Alle 156 Python-tests, de kaarttest
+  en browsercontrole van de grafiek slagen. Live controle staat nog open.
+- De gebruiker heeft de getoonde grafiek en deze correctie goedgekeurd en
+  op 26 september toestemming gegeven voor commit en push naar main.
 
 ### Correctie 26 september: laadstart schuift bij updates vooruit
 
