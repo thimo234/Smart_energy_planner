@@ -2573,15 +2573,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=future_slots, now=now, initial_usable_energy_kwh=current_usable_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
-        if max_discharge_kw <= 0:
-            first_charge_not_before = now
-        else:
-            first_charge_not_before = now
+        first_charge_not_before = now
 
         if (self._cycle_export_enabled
-                and self._discharge_session_started and max_discharge_kw > 0):
+                and self._discharge_session_started and max_discharge_kw > 0
+                and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH):
             # Leave enough time to complete discharge and the existing
             # half-hour no-export buffer before a hypothetical new cycle.
+            # Once depleted, a stale/restored discharge latch must not restart
+            # that waiting period on every refresh.
             first_charge_not_before = now + timedelta(
                 hours=current_usable_kwh / max_discharge_kw, minutes=30,
             )
@@ -2611,7 +2611,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_end = cast(datetime, slot["end"])
                 if slot_end <= after:
                     continue
-                if self._cycle_export_enabled and slot_start < after:
+                # A future depletion boundary must not charge before discharge
+                # finishes. The current quarter, however, remains available:
+                # excluding it at every refresh postpones charging indefinitely.
+                if self._cycle_export_enabled and after > now and slot_start < after:
                     continue
                 active_start = max(slot_start, after)
                 active_hours = max((slot_end - active_start).total_seconds() / 3600, 0.0)

@@ -24,6 +24,9 @@ geverifieerd is. Lees ook de open punten onderaan.
   worden gepland. Een klein beetje zon mag benodigd netladen niet blokkeren.
 - Vermijd onnodige onderbrekingen bij gelijke prijzen. Een pauze vanwege een
   werkelijk duurder tarief kan wel logisch zijn en moet zichtbaar zijn.
+- Een gekozen laadvenster mag niet bij iedere herberekening vooruit schuiven
+  doordat het lopende kwartier wordt overgeslagen. Veranderende SOC, tarieven
+  of prognoses mogen de benodigde resterende laadtijd wel veranderen.
 
 ## 2. Rendement en volledige laadcyclus
 
@@ -172,6 +175,24 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Correctie 26 september: laadstart schuift bij updates vooruit
+
+- Gereproduceerd met de meting van 26 september, 20% SOC: het lopende
+  kwartier werd telkens uitgesloten. Een bewaarde ontlaadstatus voegde bovendien
+  opnieuw 30 minuten wachttijd toe terwijl de bruikbare energie al op was.
+- Lokaal aangepast: gebruik de resterende minuten van het huidige kwartier;
+  pas de wachttijd voor ontladen alleen toe zolang er nog bruikbare energie is.
+  De bestaande tolerantie van 0,05 kWh en de bescherming tegen pendelen blijven.
+- Nieuwe regressiecontroles: zonneladen tot vol met opeenvolgende updates op
+  onronde tijdstippen en berekende SOC, herstelde status bij 20%, netladen tussen
+  kwartiergrenzen en niet bijladen tijdens een onvoltooide ontlaadcyclus.
+- Lokaal geslaagd: 154 Python-tests, kaarttest, diffcontrole en browsercontrole
+  van de vergelijkingsgrafiek op desktop- en telefoonbreedte.
+- De gebruiker heeft voor deze correctie expliciet gevraagd direct na het
+  oplossen en controleren te pushen; hiervoor is geen tweede akkoord nodig.
+  De gebruikelijke grafiek blijft onderdeel van de terugkoppeling.
+- Nog open: live verificatie na installatie in Home Assistant.
 
 ### Goedgekeurde correctie: volle accu behoudt volgende laadcyclus
 
