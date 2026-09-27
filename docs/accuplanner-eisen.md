@@ -30,6 +30,12 @@ geverifieerd is. Lees ook de open punten onderaan.
   worden gepland. Een klein beetje zon mag benodigd netladen niet blokkeren.
 - Vermijd onnodige onderbrekingen bij gelijke prijzen. Een pauze vanwege een
   werkelijk duurder tarief kan wel logisch zijn en moet zichtbaar zijn.
+- Akkoord 27 september: een lopende laadcyclus mag doorlopen bij maximaal
+  **EUR 0,005/kWh (0,5 cent)** verschil om korte pauzes te voorkomen. Dit
+  versoepelt de strikte prijsvolgorde uitsluitend binnen die band. Verschuif
+  geplande energie naar voren, laad niet extra en behoud de minimumwinst,
+  laadbron, vermogenslimiet en veilige capaciteit. Grotere verschillen blijven
+  bepalend. Voor een nog niet begonnen cyclus blijft de goedkoopste selectie gelden.
 - Een gekozen laadvenster mag niet bij iedere herberekening vooruit schuiven
   doordat het lopende kwartier wordt overgeslagen. Veranderende SOC, tarieven
   of prognoses mogen de benodigde resterende laadtijd wel veranderen.
@@ -185,6 +191,22 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil
+
+- De aangeleverde 53%-meting is exact gereproduceerd, inclusief de pauzes
+  om 12:45 en 13:15. Zij bespaarden samen circa EUR 0,00146.
+- De gebruiker heeft de band van EUR 0,005/kWh goedgekeurd. Binnen een
+  aansluitende rendabele band verschuift dezelfde hoeveelheid laadenergie
+  naar voren. Herberekeningen behouden een al begonnen laadfase.
+- Met dezelfde prognose: zonneladen van 12:38 tot circa 15:42 in plaats
+  van onderbroken tot 16:30; ontladen blijft vanaf 18:00. De prognoses zijn
+  overgenomen zonder aanvullende marge; maximaal vermogen aangenomen 3 kW.
+- De gebruiker heeft de grafiek en concrete wijziging op 27 september
+  goedgekeurd voor commit en push naar main. Live verificatie staat nog open.
+- Lokaal geslaagd: 163 Python-tests, kaarttest en browsercontrole van de
+  vergelijkingsgrafiek. De tests omvatten opeenvolgende SOC-updates, grotere
+  prijsverschillen en behoud van de minimumwinst bij netladen.
 
 ### Goedgekeurde correctie 26 september: netladen vult zonneladen aan
 

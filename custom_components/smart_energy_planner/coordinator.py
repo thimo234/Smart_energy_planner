@@ -3019,6 +3019,51 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     cycle_index += 1
                     continue
 
+            if (cursor <= now and getattr(self, "_charge_session_started", False)):
+                active_selection = next((item for item in selected_for_cycle
+                    if item["start"] <= now < item["end"]), None)
+                if (active_selection is None and self._active_charge_phase_end is not None
+                        and self._active_charge_phase_end > now):
+                    active_kind = {"laden_met_zonne_energie": "solar", "laden_van_net": "grid"}.get(
+                        self._active_charge_phase_mode,
+                    )
+                    active_selection = next((item for item in primary_candidates
+                        if item["kind"] == active_kind and item["start"] <= now < item["end"]
+                        and any(selected["kind"] == active_kind for selected in selected_for_cycle)), None)
+                if active_selection is not None:
+                    # Keep an already selected charge running through a narrow
+                    # price band (0.5 ct/kWh). Move, never add, energy; retain
+                    # the source, profit checks and shared inverter capacity.
+                    kind = active_selection["kind"]
+                    same_source = [item for item in selected_for_cycle if item["kind"] == kind]
+                    ceiling = min(float(item["cost"]) for item in same_source) + 0.005
+                    last_end = max(item["end"] for item in same_source)
+                    band = []
+                    expected_start = active_selection["start"]
+                    for candidate in sorted(
+                        (item for item in primary_candidates if item["kind"] == kind
+                         and active_selection["start"] <= item["start"] < last_end),
+                        key=lambda item: item["start"],
+                    ):
+                        if (candidate["start"] != expected_start
+                                or float(candidate["cost"]) > ceiling + 1e-9
+                                or any(item["start"] == candidate["start"] and item["kind"] != kind
+                                       for item in selected_for_cycle)):
+                            break
+                        band.append(candidate)
+                        expected_start = candidate["end"]
+                    band_starts = {item["start"] for item in band}
+                    remaining_kwh = sum(float(item["charge_kwh"]) for item in same_source
+                                        if item["start"] in band_starts)
+                    if band:
+                        selected_for_cycle = [item for item in selected_for_cycle
+                                              if item["start"] not in band_starts]
+                        for candidate in band:
+                            take = min(remaining_kwh, float(candidate["charge_kwh"]))
+                            if take > 1e-9:
+                                selected_for_cycle.append({**candidate, "charge_kwh": take})
+                                remaining_kwh -= take
+
             for selected in selected_for_cycle:
                 selected_start = cast(datetime, selected["start"])
                 selected_kwh = float(selected["charge_kwh"])
