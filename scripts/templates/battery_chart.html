@@ -1,0 +1,101 @@
+<div id="sep-battery-snapshot">
+  <h3>Accuplanning · sensorbestand</h3>
+  <label class="form-label">Planning
+    <select class="form-select" id="sep-plan-select"><option value="nieuw" selected>Ingelezen planning</option><option value="oud">Vergelijkingsplanning</option></select>
+  </label>
+  <div class="viz-row" id="sep-legend"></div>
+  <svg id="sep-prices" role="img" aria-label="Stroomprijs, verbruik en zonneprognose met laad- en ontlaadvensters"></svg>
+  <div class="viz-row text-small"><span style="color:var(--green)">■</span> Laden zon <span style="color:var(--blue)">■</span> Zon + netaanvulling <span style="color:var(--yellow)">■</span> Ontladen</div>
+  <svg id="sep-soc" role="img" aria-label="Verwacht accupercentage bij de geselecteerde planning"></svg>
+  <div class="text-small tabular-nums" id="sep-selection" aria-live="polite"></div>
+  <div class="tooltip" role="tooltip" id="sep-tooltip" hidden></div>
+</div>
+<style>
+#sep-battery-snapshot { position:relative; }
+#sep-battery-snapshot svg { display:block; width:100%; overflow:visible; }
+#sep-battery-snapshot svg text { fill:var(--foreground); font-size:12px; }
+#sep-battery-snapshot .domain,#sep-battery-snapshot .tick line { stroke:var(--border); }
+#sep-battery-snapshot #sep-legend { margin-top:16px; gap:16px; }
+#sep-battery-snapshot #sep-legend button { border:0; background:transparent; color:var(--foreground); padding:0;  }
+#sep-battery-snapshot #sep-tooltip { position:absolute; pointer-events:none; background:var(--popover); color:var(--popover-foreground); padding:8px; z-index:2; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+(() => {
+const data = __BATTERY_DATA__;
+const root = document.getElementById('sep-battery-snapshot');
+const select = root.querySelector('#sep-plan-select');
+const tooltip = root.querySelector('#sep-tooltip');
+const time = value => new Date(value);
+
+const clock = d => new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',hour:'2-digit',minute:'2-digit'}).format(d);
+const colors = {price:'var(--viz-series-1)',solar:'var(--yellow)',demand:'var(--purple)',soc:'var(--viz-series-2)'};
+const series = [{key:'price',label:'Prijs €/kWh'},{key:'solar',label:'Zon kW'},{key:'demand',label:'Verbruik kW'}];
+const visible = new Set(series.map(s=>s.key));
+series.forEach(s=>{
+  const b = document.createElement('button'); b.type='button';b.className='cursor-interaction';b.setAttribute('aria-pressed','true');
+  const swatch = document.createElement('span');swatch.textContent='━ ';swatch.style.color=colors[s.key];
+  b.append(swatch,document.createTextNode(s.label)); b.onclick=()=>{visible.has(s.key)?visible.delete(s.key):visible.add(s.key);b.setAttribute('aria-pressed',String(visible.has(s.key)));draw();};
+  root.querySelector('#sep-legend').append(b);
+});
+
+const modeColor = m => m==='laden_met_zonne_energie'?'var(--green)':m==='laden_van_net'?'var(--blue)':m.startsWith('ontladen')?'var(--yellow)':null;
+function draw(){
+  const plan=data[select.value];
+  const start=time(plan.start),end=time(plan.end);
+  const rows=plan.rows.map(r=>({...r,t:time(r.t)}));
+  const width = Math.max(300,root.clientWidth), left=64, right=48, inner=width-left-right;
+  const x=d3.scaleTime().domain([start,end]).range([left,width-right]);
+  const ticks=[0,.25,.5,.75,1].filter((_,i)=>width>=460||i%2===0).map(f=>new Date(+start+f*(end-start)));
+  const setup=(id,height,bottom,y,label)=>{
+    const svg=d3.select(root.querySelector(id));svg.selectAll('*').remove();svg.attr('viewBox',`0 0 ${width} ${height}`);
+    svg.append('rect').attr('data-chart-frame','').attr('x',left).attr('y',30).attr('width',inner).attr('height',bottom-30).attr('fill','none').attr('stroke','var(--border)');
+    svg.append('g').attr('transform',`translate(0,${bottom})`).call(d3.axisBottom(x).tickValues(ticks).tickFormat(clock));
+    svg.append('g').attr('transform',`translate(${left},0)`).call(d3.axisLeft(y).ticks(4));
+    svg.append('text').attr('class','axis-title').attr('data-axis','y').attr('x',left).attr('y',17).text(label);
+    svg.append('text').attr('class','axis-title').attr('data-axis','x').attr('x',width-right).attr('y',height-8).attr('text-anchor','end').text('Tijd · Nederland');
+    return svg;
+  };
+  const ymax=d3.max(rows,d=>d.price)*1.12;
+  const y=d3.scaleLinear().domain([Math.min(0,d3.min(rows,d=>d.price)*1.4),ymax]).range([220,30]);
+  const power=d3.scaleLinear().domain([0,d3.max(rows,d=>Math.max(d.solar,d.demand))*1.12]).range([220,30]);
+  const svg=setup('#sep-prices',276,220,y,'€/kWh');
+  svg.append('g').attr('transform',`translate(${width-right},0)`).call(d3.axisRight(power).ticks(4));
+  svg.append('text').attr('x',width-right).attr('y',17).attr('text-anchor','end').text('kW');
+  plan.windows.forEach(w=>{const a=Math.max(+start,+time(w.start)),b=Math.min(+end,+time(w.end)),color=modeColor(w.mode);if(b>a&&color)svg.append('rect').attr('x',x(a)).attr('y',30).attr('width',x(b)-x(a)).attr('height',190).attr('fill',color).attr('opacity',.13);});
+  const shown=rows.filter(d=>d.t>=start&&d.t<=end);
+  series.filter(s=>visible.has(s.key)).forEach(s=>svg.append('path').datum(shown).attr('fill','none').attr('stroke',colors[s.key]).attr('stroke-width',2).attr('stroke-dasharray',s.key==='demand'?'5 3':null).attr('d',d3.line().x(d=>x(d.t)).y(d=>(s.key==='price'?y:power)(d[s.key])).curve(d3.curveStepAfter)));
+  const sy=d3.scaleLinear().domain([Math.min(0,d3.min(plan.soc,d=>d[1])),Math.max(100,d3.max(plan.soc,d=>d[1]))]).range([128,30]);
+  const ss=setup('#sep-soc',183,128,sy,'Accu % · berekend');
+  ss.append('line').attr('x1',left).attr('x2',width-right).attr('y1',sy(plan.minimum)).attr('y2',sy(plan.minimum)).attr('stroke','var(--muted-foreground)').attr('stroke-dasharray','4 3');
+  const soc=plan.soc.map(d=>({t:time(d[0]),v:d[1]}));
+  ss.append('path').datum(soc).attr('fill','none').attr('stroke',colors.soc).attr('stroke-width',2).attr('d',d3.line().x(d=>x(d.t)).y(d=>sy(d.v)));
+  const guide=svg.append('line').attr('data-chart-hover-guide','').attr('y1',30).attr('y2',220).attr('stroke','var(--foreground)').attr('opacity',0);
+  const markers=svg.append('g');
+  function hover(event){
+    const [px]=d3.pointer(event,svg.node());const at=x.invert(Math.max(left,Math.min(width-right,px)));
+    const row=rows[Math.max(0,d3.bisector(d=>d.t).right(rows,at)-1)];
+    guide.attr('x1',x(at)).attr('x2',x(at)).attr('opacity',.5);markers.selectAll('*').remove();
+    const lines=[clock(at)];
+    series.filter(s=>visible.has(s.key)).forEach(s=>{const v=row[s.key];lines.push(`${s.label}: ${v.toFixed(3)}`);markers.append('circle').attr('data-chart-hover-marker','').attr('cx',x(at)).attr('cy',(s.key==='price'?y:power)(v)).attr('r',3).attr('fill',colors[s.key]);});
+    const mode=plan.windows.find(w=>time(w.start)<=at&&time(w.end)>at)?.mode||'accu_uit';lines.push(mode.replaceAll('_',' '));
+    tooltip.textContent=lines.join(' · ');tooltip.hidden=false;tooltip.style.left='0';tooltip.style.top='64px';
+  }
+  svg.append('rect').attr('data-chart-hit','').attr('data-chart-hover-overlay','cross-series').attr('x',left).attr('y',30).attr('width',inner).attr('height',190).attr('fill','transparent').on('pointermove',hover).on('click',hover).on('pointerleave',()=>{tooltip.hidden=true;guide.attr('opacity',0);markers.selectAll('*').remove();});
+  root.querySelector('#sep-selection').textContent=plan.label;
+}
+function restore(state){
+  const chosen=state?.modelContent?.scenario;
+  if(chosen && data[chosen]) select.value=chosen;
+  draw();
+}
+select.addEventListener('change',()=>{
+  draw();
+  window.openai?.setWidgetState?.({modelContent:{scenario:select.value}}).catch(()=>{});
+});
+window.addEventListener('openai:set_globals',e=>restore(e.detail?.globals?.widgetState));
+restore(window.openai?.widgetState);
+new ResizeObserver(draw).observe(root);
+draw();
+})();
+</script>

@@ -2965,8 +2965,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if grid_selected:
                 charge_end = max(cast(datetime, item["end"]) for item in selected_for_cycle)
                 minimum_sale_price = max(float(item["profit_cost"]) for item in grid_selected) + battery_min_profit
+                # The price anchor may be on an earlier day than the slots
+                # actually selected. Assess existing supply at the selected
+                # refill, after the intervening household consumption.
+                selected_charge_start = min(cast(datetime, item["start"]) for item in selected_for_cycle)
                 existing_energy = (current_usable_kwh if first_grid_charge_start == now and cycle_index == 0
-                                   else projected_usable_at_charge_kwh)
+                                   else _project_usable_energy_until(selected_charge_start))
                 historical_cost = getattr(self, "_battery_grid_charge_price", None)
                 if existing_energy > 0.01 and historical_cost is not None:
                     minimum_sale_price = max(minimum_sale_price, historical_cost + battery_min_profit)

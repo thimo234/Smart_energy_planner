@@ -114,6 +114,10 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## 6. Controle en werkwijze
 
+- Gebruik op verzoek van 27 september een herbruikbaar visualisatiescript:
+  `scripts/visualize_battery.py`, met een vaste template. Nieuwe metingen en
+  berekende vergelijkingsplannen worden als data ingelezen, niet telkens als
+  nieuw geschreven grafiek. Dit script toont plannen; het berekent ze niet.
 - Reproduceer fouten met de aangeleverde sensorinformatie; bewaar geschikte,
   noodzakelijke regressiedata in `tests/fixtures`.
 - Test opeenvolgende herberekeningen met veranderende SOC en bewaarde
@@ -322,4 +326,20 @@ geverifieerd is. Lees ook de open punten onderaan.
   met eerder aangeleverde data, geen nieuwe live meting.
 - De gebruiker heeft op 25 september 2026 de grafiek goedgekeurd en opdracht
   gegeven deze wijzigingen naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+### Lokale correctie 27 september: rendement bij werkelijk gekozen laadstart
+
+- Een vroeg prijsanker kon op de vorige dag liggen terwijl de geselecteerde
+  laaduren pas morgen vallen. De rendementscontrole gebruikte daardoor te veel
+  bestaande energie en verwierp het goedkope blok. De voorraad wordt nu op de
+  daadwerkelijk geselecteerde laadstart geraamd. Minimumwinst en de controle
+  op gesimuleerde ontlading blijven bestaan.
+- De meting van 16:54 is gereproduceerd: laden verschuift van 15:15–18:27 naar
+  11:30–14:30 en 15:00–15:12. Replay met aangeleverde prognoses, 10 kWh, veilige
+  grens 20%, maximaal laden 2,5 kW (8 kWh / 3,2 uur), ontladen 3 kW.
+- 165 plannertests en de kaarttest geslaagd, plus twee tests van de herbruikbare
+  visualisatie. Browsercontrole met vergelijking en mobiele breedte geslaagd.
+- De gebruiker heeft deze grafiek op 27 september goedgekeurd en opdracht
+  gegeven de correctie en het visualisatiescript naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.
