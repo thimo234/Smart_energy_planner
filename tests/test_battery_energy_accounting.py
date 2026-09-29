@@ -279,11 +279,9 @@ class EnergyAccountingTest(unittest.TestCase):
             self.assertEqual(previous["end"], following["start"])
         for window in windows:
             self.assertLess(window["start"], window["end"])
-            if window["mode"] == "ontladen" and window["start"] > grid[0]["end"]:
-                for slot in slots:
-                    if slot["end"] > datetime.fromisoformat(window["start"]) and slot["start"] < datetime.fromisoformat(window["end"]):
-                        self.assertTrue(slot["price_known"])
-                        self.assertGreaterEqual(slot["import_price"] - .131 + 1e-9, .08)
+            # Existing energy may now cover home demand below the historical
+            # purchase margin, including the estimated tail. New grid profit
+            # remains covered by test_small_solar_window_does_not_override_minimum_grid_profit.
         self.assertIn("2026-09-19T18:30:00+02:00", [w["start"] for w in windows if w["mode"] == "ontladen"])
         for window in [*grid, *result.planned_solar_charge_windows]:
             mode = "laden_van_net" if window in grid else "laden_met_zonne_energie"

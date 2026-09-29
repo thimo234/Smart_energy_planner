@@ -70,7 +70,9 @@ class CycleSafetyTest(unittest.TestCase):
             s.update(net_solar_kwh=-1., solar_kwh=0., import_price=.20 if i < 4 else .80)
         window = dict(start=(now+timedelta(hours=3)).isoformat(),
                       end=(now+timedelta(hours=4)).isoformat(), charge_kwh=2., usable_hours=1.)
-        windows, _ = modes(c, now, slots, 2., [], [window])
+        # Four kWh cannot be depleted by three hours of one-kW home demand,
+        # even though historical purchase cost no longer blocks home use.
+        windows, _ = modes(c, now, slots, 4., [], [window])
         self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
 

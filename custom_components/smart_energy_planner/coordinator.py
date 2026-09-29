@@ -3667,10 +3667,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             discharge_budget_kwh = max(0.0, sim_usable_energy_kwh - segment_reserve_kwh)
             planned_discharge_kwh = plan_segment_discharge_kwh(
-                slots=[slot for slot in segment_slots if grid_cost_floor is None or (
-                    slot.get("price_known", True)
-                    and float(slot["import_price"]) + 1e-9 >= grid_cost_floor + battery_min_profit
-                )],
+                # Already stored energy may serve the home without earning
+                # the charge margin again. Reserve, power and cycle limits
+                # still apply; export retains its historical cost floor.
+                slots=segment_slots,
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
             )

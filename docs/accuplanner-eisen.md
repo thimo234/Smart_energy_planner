@@ -42,6 +42,11 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## 2. Rendement en volledige laadcyclus
 
+- Akkoord 29 september: bestaande accustroom mag voor eigen huisverbruik
+  worden gebruikt zonder opnieuw de minimumwinst tegenover de historische
+  inkoopprijs te eisen. Veilige ondergrens, extra reserve, vermogenslimieten
+  en cyclusvergrendeling blijven gelden. Nieuwe netlading moet de minimumwinst
+  zelfstandig blijven halen; export houdt de bestaande winstbescherming.
 - Houd rekening met de instelbare minimumwinst per kWh en bekende latere
   tarieven. Toon ook het bijbehorende latere ontladen; een laadplan zonder
   onderbouwing aan de afnamekant is onvoldoende.
@@ -342,4 +347,20 @@ geverifieerd is. Lees ook de open punten onderaan.
   visualisatie. Browsercontrole met vergelijking en mobiele breedte geslaagd.
 - De gebruiker heeft deze grafiek op 27 september goedgekeurd en opdracht
   gegeven de correctie en het visualisatiescript naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+### Lokale wijziging 29 september: bestaande stroom voor eigen verbruik
+
+- Op expliciet akkoord blokkeert de historische inkoopprijs huisverbruik niet meer.
+  Nieuwe netlading en export houden de winstcontrole. Veilige ondergrens, extra
+  reserve en cyclusvergrendeling blijven behouden. Tests zijn aan deze afspraak
+  aangepast; blokkeren van onvoltooide ontlaadcycli blijft getest.
+- Replay met 75% SOC en aangenomen historische inkoop EUR 0,322, 2,5 kW laden
+  en 3 kW ontladen: huisverbruik tot de 60%-reserve. Geen laadvenster vandaag,
+  wegens te weinig afname vóór de zonuren en behoud van exportbescherming.
+- Een synthetisch scenario met voldoende eigen verbruik voltooit de ontlading
+  wel vóór een nieuw laadvenster. Herhaalde updates en reserve zijn getest.
+- Lokaal: 170 Python-tests, frontendtest en browsercontrole geslaagd.
+- De gebruiker heeft de concrete grafiek op 29 september goedgekeurd en
+  opdracht gegeven deze wijziging naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.
