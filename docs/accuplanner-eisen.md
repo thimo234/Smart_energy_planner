@@ -52,6 +52,14 @@ geverifieerd is. Lees ook de open punten onderaan.
   onderbouwing aan de afnamekant is onvoldoende.
 - Een geldige laadcyclus streeft naar een volle accu, rekening houdend met
   verwachte ontlading vóór de cyclus, zonnebijdrage en het maximale laadvermogen.
+- Nieuw akkoord 29 september: een nachtlading vóór een goedkopere rendabele
+  aanvulling overdag mag bewust gedeeltelijk zijn. Koop alleen de rendabele
+  behoefte vóór die aanvulling, rekening houdend met bestaande voorraad.
+  Exporteer niet extra om vervolgens onnodig opnieuw netstroom te kopen.
+  De beperkte laadcyclus mag na het geplande einde overgaan in ochtendontlading
+  zonder eerst vol te zijn; opnieuw laden wacht op de veilige ondergrens.
+  Bewaar deze uitzondering over herberekeningen en recente herstarts.
+  Een schatting zonder bekende prijzen is geen bewijs voor deze extra cyclus.
 - Stop een gestarte netlaadcyclus niet halverwege doordat de zojuist geladen
   energie bij een herberekening als al aanwezige voorraad wordt afgetrokken.
 - Ga niet bij ieder toekomstig laadvenster opnieuw uit van een lege accu:
@@ -363,4 +371,27 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Lokaal: 170 Python-tests, frontendtest en browsercontrole geslaagd.
 - De gebruiker heeft de concrete grafiek op 29 september goedgekeurd en
   opdracht gegeven deze wijziging naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+
+### Lokale wijziging 29 september: beperkte nachtcyclus vóór goedkoper dagladen
+
+- Geïmplementeerd: een noodzakelijke nachtelijke netlaadcyclus koopt alleen
+  voldoende voor rendabele afname vóór een goedkoper volgend laadmoment.
+  Deze bewust gedeeltelijke cyclus mag daarna ontladen zonder eerst 100% te
+  bereiken. De minimumwinst blijft gelden voor deze nieuwe netenergie.
+- De gedeeltelijke cyclus wordt bewaard bij updates en een herstart. Een
+  lopende gemengde daglading wordt hierdoor niet in kleine cycli opgesplitst.
+- Replay van de meting van 29 september 18:59 (68%): bestaande energie gaat
+  naar huisverbruik; geen onnodige nachtelijke aankoop. Op 30 september volgt
+  zonneladen vanaf circa 09:16, zon met netaanvulling 11:45–13:30 en vervolgens
+  zonneladen tot 16:00. Aannames: 10 kWh, veilige grens 20%, laden 2,5 kW,
+  ontladen 3 kW; geen historische inkoopprijs in de aangeleverde meting.
+- Synthetisch met lege bruikbare accu: beperkte nachtlading, rendabele
+  ochtendontlading en opnieuw dagladen. Ook met vijfminutenupdates en herstel
+  van opgeslagen cyclusgegevens getest; de energie blijft binnen de grenzen.
+- Lokaal geslaagd: 173 Python-tests, frontendtest en browsercontrole van de
+  vergelijking, inclusief wisselen van planning en mobiele breedte.
+- De gebruiker heeft deze concrete grafiek op 29 september goedgekeurd en
+  opdracht gegeven de wijziging naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.

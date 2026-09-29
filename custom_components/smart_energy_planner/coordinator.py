@@ -209,6 +209,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             or self._discharge_session_started
         )
         self._battery_cycle_state_restored_recent = True
+        self._partial_grid_cycle = None
+        partial = cycle_state.get("partial_grid_cycle")
+        if isinstance(partial, list) and len(partial) == 2:
+            begin, end = (dt_util.parse_datetime(value) for value in partial)
+            if begin is not None and end is not None and begin < end:
+                self._partial_grid_cycle = (begin, end)
 
     @callback
     def _schedule_source_error_retry(self) -> None:
@@ -248,6 +254,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             "discharge_session_started": bool(getattr(self, "_discharge_session_started", False)),
             "initialized": bool(getattr(self, "_battery_cycle_state_initialized", False)),
             "updated_at": dt_util.as_local(now).isoformat(),
+            "partial_grid_cycle": [value.isoformat() for value in self._partial_grid_cycle]
+                if getattr(self, "_partial_grid_cycle", None) else None,
         }
         runtime_state["battery_grid_charge_price"] = getattr(self, "_battery_grid_charge_price", None)
 
@@ -2555,6 +2563,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
+        self._partial_grid_cycles = []
+        partial = getattr(self, "_partial_grid_cycle", None)
+        if partial and partial[0] <= now < partial[1]:
+            self._charge_session_started = False
+            self._discharge_session_started = True
+            self._active_charge_phase_end = None
+            self._active_charge_phase_mode = "accu_uit"
         future_slots = sorted((slot for slot in slots if slot["end"] > now), key=lambda item: item["start"])
         if not future_slots or usable_capacity_kwh <= 0 or max_charge_kw <= 0:
             return planned_solar_charge_windows, planned_grid_charge_windows
@@ -2761,6 +2776,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             selected_for_cycle: list[dict[str, Any]] = []
             charged_kwh = 0.0
             cycle_candidates = _slot_candidates(cursor)
+            all_cycle_candidates = cycle_candidates
+            if cycle_index == 0 and partial and now < partial[0]:
+                cycle_candidates = [item for item in cycle_candidates if item["end"] <= partial[0]]
             # Compare every eligible source by effective price. Solar availability
             # does not make a more expensive solar slot preferable to cheap grid.
             profitable_primary_candidates = [
@@ -2782,6 +2800,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     float(item["cost"]), 0 if item["kind"] == "solar" else 1, item["start"],
                 ),
             )
+
+            # A later daily minimum must not hide an earlier profitable
+            # morning cycle when the battery cannot supply that demand.
+            earlier_bridges = []
+            for candidate in profitable_primary_candidates:
+                if candidate["kind"] != "grid" or candidate["end"] >= best_candidate["start"]:
+                    continue
+                demand = sum(min(max_discharge_kw * float(slot["hours"]),
+                                 max(0., -float(slot["net_solar_kwh"])))
+                             for slot in future_slots
+                             if candidate["end"] <= slot["start"] < best_candidate["start"]
+                             and slot.get("price_known", True)
+                             and float(slot["import_price"]) >= float(candidate["profit_cost"]) + battery_min_profit)
+                if demand > current_usable_kwh + .05:
+                    earlier_bridges.append(candidate)
+            if earlier_bridges:
+                best_candidate = min(earlier_bridges, key=lambda item: (item["cost"], item["start"]))
 
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
             for candidate in cycle_candidates:
@@ -2974,10 +3009,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 historical_cost = getattr(self, "_battery_grid_charge_price", None)
                 if existing_energy > 0.01 and historical_cost is not None:
                     minimum_sale_price = max(minimum_sale_price, historical_cost + battery_min_profit)
+                # A cheaper refill after a profitable discharge interval is a
+                # separate cycle. Buy only the energy needed to reach it.
+                cheaper_refill = min((cast(datetime, candidate["start"])
+                    for candidate in all_cycle_candidates
+                    if candidate["start"] > charge_end
+                    and float(candidate["cost"]) < min(float(item["cost"]) for item in grid_selected) - .005
+                    and float(candidate["charge_kwh"]) > .05
+                    and _is_profitable_charge(candidate)
+                    and any(charge_end <= slot["start"] < candidate["start"]
+                            and float(slot["net_solar_kwh"]) < 0
+                            and slot.get("price_known", True)
+                            and float(slot["import_price"]) >= minimum_sale_price
+                            for slot in future_slots)), default=None)
+                if any(item["kind"] == "solar" for item in selected_for_cycle) or any(
+                    float(slot.get("solar_kwh", 0.)) > .01 for slot in future_slots
+                    if any(item["start"] == slot["start"] for item in grid_selected)
+                ):
+                    # Do not split an ongoing mixed daytime fill into small
+                    # cycles merely because another solar slot is cheaper.
+                    cheaper_refill = None
                 profitable_demand = sum(
                     min(max_discharge_kw * float(slot["hours"]), max(0.0, -float(slot["net_solar_kwh"])))
                     for slot in future_slots
-                    if charge_end <= slot["start"] < horizon_end
+                    if charge_end <= slot["start"] < (cheaper_refill or horizon_end)
                     and slot.get("price_known", True)
                     and float(slot["import_price"]) + 1e-9 >= minimum_sale_price
                 )
@@ -2990,7 +3045,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 # Energy bought by this running cycle is not pre-existing
                 # supply that cancels its own full-recharge decision midway.
-                if grid_budget > 1e-9 or continuing_grid_cycle or all(float(item["profit_cost"]) < 0 for item in grid_selected):
+                if cheaper_refill is not None:
+                    grid_budget = min(grid_budget, max(0., target_kwh - sum(
+                        float(item["charge_kwh"]) for item in solar_selected)))
+                elif grid_budget > 1e-9 or continuing_grid_cycle or all(float(item["profit_cost"]) < 0 for item in grid_selected):
                     grid_budget = max(0.0, target_kwh - sum(
                         float(item["charge_kwh"]) for item in solar_selected
                     ))
@@ -3018,6 +3076,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         trimmed_grid.append({**item, "charge_kwh": round(take, 6)})
                         grid_budget -= take
                 selected_for_cycle = solar_selected + trimmed_grid
+                if cheaper_refill is not None:
+                    partial_end = max((item["end"] for item in trimmed_grid), default=now)
+                    self._partial_grid_cycles.append((partial_end, cheaper_refill))
                 if not selected_for_cycle:
                     cursor = charge_end
                     cycle_index += 1
@@ -3527,6 +3588,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         grid_cost_floor = getattr(self, "_battery_grid_charge_price", None)
+        partial_cycles = list(getattr(self, "_partial_grid_cycles", []))
+        restored_partial = getattr(self, "_partial_grid_cycle", None)
+        if restored_partial and restored_partial[1] > now:
+            partial_cycles.append(restored_partial)
         if initial_usable_energy_kwh <= 0.01:
             grid_cost_floor = None
             self._battery_grid_charge_price = None
@@ -3670,7 +3735,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # Already stored energy may serve the home without earning
                 # the charge margin again. Reserve, power and cycle limits
                 # still apply; export retains its historical cost floor.
-                slots=segment_slots,
+                slots=[s for s in segment_slots if not any(
+                    begin <= s["start"] < end for begin, end in partial_cycles)
+                    or grid_cost_floor is None
+                    or (s.get("price_known", True) and
+                        float(s["import_price"]) + 1e-9 >= grid_cost_floor + battery_min_profit)],
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
@@ -3824,6 +3893,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and more_todays_charge_ahead
                     )
                 )
+                if any(begin <= segment_slot_start < end for begin, end in partial_cycles):
+                    # A deliberately limited night cycle is complete before
+                    # the cheaper daytime refill, even below full SOC.
+                    suppress_discharge = within_charge_phase
                 simulated_soc_percent = (
                     (sim_usable_energy_kwh / usable_capacity_kwh) * 100.0
                     if usable_capacity_kwh > 0
@@ -3975,6 +4048,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             current_price = next(float(slot["import_price"]) for slot in slots if slot["start"] <= now < slot["end"])
             previous_cost = getattr(self, "_battery_grid_charge_price", None)
             self._battery_grid_charge_price = max(current_price, previous_cost) if previous_cost is not None else current_price
+            self._partial_grid_cycle = next((period for period in partial_cycles
+                                             if now < period[0]), None)
+        elif restored_partial and restored_partial[1] <= now:
+            self._partial_grid_cycle = None
         self._charge_session_started = charge_session_started and not battery_is_full
         self._battery_cycle_state_initialized = True
         self._store_battery_cycle_state_snapshot(now)
