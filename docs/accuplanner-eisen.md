@@ -52,14 +52,21 @@ geverifieerd is. Lees ook de open punten onderaan.
   onderbouwing aan de afnamekant is onvoldoende.
 - Een geldige laadcyclus streeft naar een volle accu, rekening houdend met
   verwachte ontlading vóór de cyclus, zonnebijdrage en het maximale laadvermogen.
-- Nieuw akkoord 29 september: een nachtlading vóór een goedkopere rendabele
-  aanvulling overdag mag bewust gedeeltelijk zijn. Koop alleen de rendabele
-  behoefte vóór die aanvulling, rekening houdend met bestaande voorraad.
-  Exporteer niet extra om vervolgens onnodig opnieuw netstroom te kopen.
-  De beperkte laadcyclus mag na het geplande einde overgaan in ochtendontlading
-  zonder eerst vol te zijn; opnieuw laden wacht op de veilige ondergrens.
-  Bewaar deze uitzondering over herberekeningen en recente herstarts.
-  Een schatting zonder bekende prijzen is geen bewijs voor deze extra cyclus.
+- Verduidelijking 30 september: meerdere volledige cycli per dag zijn gewenst
+  als elke extra cyclus de minimumwinst behaalt. Voorbeeld: dagladen, avondexport,
+  nachtladen, ochtendexport en opnieuw dagladen. Geen bewust kleine bijlaadcycli.
+- Tussen het einde van laden en de volgende laadstart is minimaal de tijd nodig
+  om de bruikbare capaciteit met maximaal ontlaadvermogen af te geven. Dat is
+  slechts een fysieke ondergrens: voldoende rendabele afname moet er ook zijn.
+- Toets eigen verbruik tegen het importtarief en verkoop tegen de terugleverprijs.
+  Deel het ontlaadvermogen tussen beide, tel energie niet dubbel en gebruik voor
+  de extra cyclus uitsluitend bekende tarieven. Een losse hoge prijspiek is
+  onvoldoende om een volledige laadcyclus economisch te onderbouwen.
+- Ontbreekt voldoende rendabele ontlading vóór het goedkopere volgende venster,
+  sla de extra cyclus over. Dagladen gevolgd door huisverbruik in de nacht en
+  opnieuw dagladen blijft mogelijk. Dit vervangt de gedeeltelijke nachtcyclus.
+- De bestaande uitzondering bij tegenvallende zon na het laatste rendabele
+  laadvenster blijft gelden. Veilige SOC en bescherming tegen pendelen blijven.
 - Stop een gestarte netlaadcyclus niet halverwege doordat de zojuist geladen
   energie bij een herberekening als al aanwezige voorraad wordt afgetrokken.
 - Ga niet bij ieder toekomstig laadvenster opnieuw uit van een lege accu:
@@ -394,4 +401,33 @@ geverifieerd is. Lees ook de open punten onderaan.
   vergelijking, inclusief wisselen van planning en mobiele breedte.
 - De gebruiker heeft deze concrete grafiek op 29 september goedgekeurd en
   opdracht gegeven de wijziging naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+
+### Lokale wijziging 30 september: volledige rendabele cycli
+
+- De uitzondering voor gedeeltelijke nachtlading uit 846c3d8 is vervangen.
+  Oude opgeslagen partial_grid_cycle-velden worden niet meer toegepast.
+- Extra laadcycli vóór een goedkopere aanvulling moeten voldoende bekende,
+  rendabele ontlaadcapaciteit hebben voor de volledige bruikbare accu.
+  Eigen verbruik gebruikt het importtarief, export het teruglevertarief;
+  beide delen het maximale ontlaadvermogen. Een enkele prijspiek volstaat niet.
+- Een eerdere volledige nachtcyclus kan nu vóór het goedkopere dagminimum
+  worden geselecteerd wanneer rendabele ochtendafname/export de accu kan legen.
+  Voltooide cycli mogen ook op dezelfde dag opvolgen; de simulatie controleert
+  bij elke laadstart de werkelijk resterende energie. Meer dan twee richtingen
+  blijft als afzonderlijke vooruitblik weergegeven volgens de bestaande afspraak.
+- De eerdere volledige meting van 29 september 18:59, 68% SOC, geeft geen
+  rendabele extra volledige nachtcyclus. Dagladen blijft behouden. De nieuwste
+  screenshot bevat onvoldoende invoer voor een exacte reconstructie daarvan.
+- Synthetisch met een ochtendimportprijs van EUR 0,60 (export EUR 0,49): volledig
+  nachtladen, rendabele ochtendontlading tot 20% en opnieuw dagladen tot 100%.
+  Ook dagladen/avondontlading/nachtladen/ochtendontlading/dagladen is getest.
+- Lokaal: 176 Python-tests en de kaarttest geslaagd. De cycluscontroles omvatten
+  vijfminutenupdates, herstart, oude gedeeltelijke status, een te korte prijspiek,
+  minimumwinst bij export en onafhankelijke energiegrenzen. Browsercontrole van
+  beide grafieken en mobiele breedte geslaagd. Grafieken gebruiken 10 kWh,
+  20% veilige grens, 2,5 kW laden en 3 kW ontladen, zonder extra prognosemarge.
+- De gebruiker heeft beide grafieken en deze concrete wijziging op 30 september
+  goedgekeurd en opdracht gegeven naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.

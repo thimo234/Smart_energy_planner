@@ -5,7 +5,7 @@
   </label>
   <div class="viz-row" id="sep-legend"></div>
   <svg id="sep-prices" role="img" aria-label="Stroomprijs, verbruik en zonneprognose met laad- en ontlaadvensters"></svg>
-  <div class="viz-row text-small"><span style="color:var(--green)">■</span> Laden zon <span style="color:var(--blue)">■</span> Zon + netaanvulling <span style="color:var(--yellow)">■</span> Ontladen</div>
+  <div class="viz-row text-small"><span style="color:var(--green)">■</span> Laden zon <span style="color:var(--blue)">■</span> Zon + netaanvulling <span style="color:var(--yellow)">■</span> Ontladen <span style="color:var(--red)">■</span> Naar net</div>
   <svg id="sep-soc" role="img" aria-label="Verwacht accupercentage bij de geselecteerde planning"></svg>
   <div class="text-small tabular-nums" id="sep-selection" aria-live="polite"></div>
   <div class="tooltip" role="tooltip" id="sep-tooltip" hidden></div>
@@ -39,7 +39,7 @@ series.forEach(s=>{
   root.querySelector('#sep-legend').append(b);
 });
 
-const modeColor = m => m==='laden_met_zonne_energie'?'var(--green)':m==='laden_van_net'?'var(--blue)':m.startsWith('ontladen')?'var(--yellow)':null;
+const modeColor = m => m==='laden_met_zonne_energie'?'var(--green)':m==='laden_van_net'?'var(--blue)':m==='ontladen_naar_net'?'var(--red)':m==='ontladen'?'var(--yellow)':null;
 function draw(){
   const plan=data[select.value];
   const start=time(plan.start),end=time(plan.end);
