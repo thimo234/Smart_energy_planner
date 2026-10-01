@@ -90,6 +90,10 @@ geverifieerd is. Lees ook de open punten onderaan.
   vanzelfsprekend toegestaan uitgangspunt.
 - `accu_uit` tijdens een noodzakelijke pauze is niet hetzelfde als de cyclus
   omkeren. Houd de cyclusstatus vast over herberekeningen en herstarts.
+- Een ontbrekende SOC tijdens opstarten betekent niet dat de accu leeg is.
+  Initialiseer of wijzig geen cyclus totdat een geldige SOC beschikbaar is;
+  overschrijf daarbij ook geen opgeslagen status of tijdstempel. Herstel de
+  inkoopprijs voor exportbescherming samen met de cyclusstatus.
 - Na een kort exportdeel direct doorgaan met normaal ontladen als daarvoor
   huisverbruik en energie zijn ingepland. Verkort zo nodig het exportdeel om
   de rest van het kwartier uit de accu te blijven leveren; voeg geen energie
@@ -430,4 +434,32 @@ geverifieerd is. Lees ook de open punten onderaan.
   20% veilige grens, 2,5 kW laden en 3 kW ontladen, zonder extra prognosemarge.
 - De gebruiker heeft beide grafieken en deze concrete wijziging op 30 september
   goedgekeurd en opdracht gegeven naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+
+### Lokale correctie 1 oktober: opstarten zonder geldige SOC
+
+- Gereproduceerd: meerdere updates zonder SOC initialiseren een lege accu en
+  activeren vervolgens de laadvergrendeling. Bij terugkomst van 39% SOC blijft
+  de ochtendontlading daardoor geblokkeerd. Met de aangeleverde meting en een
+  behouden ontlaadstatus is ontladen wel mogelijk. Zonder opstartlog is niet
+  bewezen dat precies deze volgorde in de draaiende installatie is opgetreden.
+- Zonder SOC geeft de planner nu een wachtresultaat met accu_uit en geen
+  opdrachten. Cyclusstatus en het opgeslagen tijdstempel worden niet gewijzigd.
+  Na terugkomst van de sensor wordt opnieuw met de echte SOC gerekend.
+- Ook herstelt de integratie nu de opgeslagen battery_grid_charge_price vanuit
+  de opslag bij setup; dit veld werd eerder wel opgeslagen maar niet ingelezen.
+- Nieuwe regressies: herhaalde ontbrekende SOC bij koude start, behouden laad-
+  en ontlaadrichting, en JSON-opslag gevolgd door een nieuw runtime-object met
+  de echte setup-veldtoewijzing. Bij gelijke invoer is het volledige uitvoerbare
+  plan plus vooruitblik gelijk vóór en na herstel, inclusief inkoopprijs.
+- De meting van 1 oktober 08:34, 39%: herstelde ontlading tot 11:45, daarna
+  netladen tot vol en avondontlading in de vooruitblik. Grafiek rekent met
+  10 kWh, veilige grens 20%, 2,5 kW laden, 3 kW ontladen, EUR 0,11 aftrek en
+  aangeleverde prognoses zonder extra marge. Historische inkoopprijs ontbreekt
+  in de meting; voor deze grafiek is geen historische exportprijsgrens aangenomen.
+- Lokaal: 179 Python-tests, kaarttest en browsercontrole van vergelijking en
+  mobiele breedte geslaagd.
+- De gebruiker heeft deze concrete grafiek op 1 oktober goedgekeurd en opdracht
+  gegeven de correctie naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.

@@ -703,7 +703,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     import_price=current_price,
                     export_price=export_current_price,
                 )
-            if planner_kind == PLANNER_KIND_BATTERY:
+            if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
                     self.config_entry.entry_id,
                     {},
@@ -1376,6 +1376,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         """Execute two cycles; calculate any later outlook on isolated state."""
         if inputs["planner_kind"] != PLANNER_KIND_BATTERY:
             return self._build_plan_for_horizon(**inputs)
+
+        if inputs["battery_soc_percent"] is None:
+            # Startup sensors may remain unavailable over several refreshes.
+            # Unknown SOC is not an empty battery: do not initialize, reverse
+            # or persist a new cycle until a measured SOC is available.
+            return self._build_pending_result(
+                "waiting_for_battery_soc", PLANNER_KIND_BATTERY,
+                {**inputs["source_status"], "battery_soc_sensor": "waiting_for_battery_soc"},
+                list(inputs["source_errors"]),
+            )
 
         now = dt_util.now()
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
