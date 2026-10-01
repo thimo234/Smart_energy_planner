@@ -504,6 +504,26 @@ def build_battery_mode_schedule(
     return deduped_schedule
 
 
+PRICE_CONTINUITY_BAND = 0.01  # EUR/kWh; never relax eligibility/profit checks.
+
+
+def order_discharge_price_bands(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer earlier consumption within one cent of each remaining peak.
+
+    Anchor each band to its highest price, not to its previous member: a
+    sequence of small steps must not bridge a materially larger price gap.
+    """
+    remaining = sorted(slots, key=lambda item: -float(item["price"]))
+    ordered = []
+    while remaining:
+        floor = float(remaining[0]["price"]) - PRICE_CONTINUITY_BAND
+        boundary = next((i for i, item in enumerate(remaining)
+                         if float(item["price"]) < floor - 1e-9), len(remaining))
+        ordered.extend(sorted(remaining[:boundary], key=lambda item: item["start"]))
+        remaining = remaining[boundary:]
+    return ordered
+
+
 def plan_segment_discharge_kwh(
     *,
     slots: list[dict[str, Any]],
@@ -538,7 +558,7 @@ def plan_segment_discharge_kwh(
 
     remaining_energy_kwh = available_energy_kwh
     planned_discharge: dict[datetime, float] = {}
-    for slot in sorted(deficit_slots, key=lambda item: (-float(item["price"]), item["start"])):
+    for slot in order_discharge_price_bands(deficit_slots):
         if remaining_energy_kwh <= 0:
             break
         assigned_kwh = min(float(slot["required_kwh"]), remaining_energy_kwh)

@@ -48,7 +48,7 @@ class ChargeContinuityTest(unittest.TestCase):
     def test_price_band_respects_large_differences_and_profit(self):
         now = datetime(2026, 9, 27, 12)
         for kind in ('solar', 'grid'):
-            for expensive, peak in ((.104, .4), (.11, .4), (.104, .181)):
+            for expensive, peak in ((.104, .4), (.11, .4), (.111, .4), (.109, .181)):
                 with self.subTest(kind=kind, expensive=expensive, peak=peak):
                     prices = [.1, expensive, .1, .1, peak, peak]
                     slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1),
@@ -67,7 +67,7 @@ class ChargeContinuityTest(unittest.TestCase):
                     selected = solar if kind == 'solar' else grid
                     uses_second = any(datetime.fromisoformat(w['start']) <= now+timedelta(hours=1)
                                       < datetime.fromisoformat(w['end']) for w in selected)
-                    allowed = expensive <= .105 and (kind == 'solar' or peak-expensive >= .08)
+                    allowed = expensive <= .11 and (kind == 'solar' or peak-expensive >= .08)
                     self.assertEqual(uses_second, allowed)
                     total = sum(w['charge_kwh'] for w in selected)
                     self.assertGreater(total, 0)

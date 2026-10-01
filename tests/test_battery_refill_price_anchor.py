@@ -19,11 +19,13 @@ class RefillPriceAnchorTest(unittest.TestCase):
         windows = result.planned_battery_mode_windows
         charge = [w for w in windows if w['mode'].startswith('laden_')]
         self.assertEqual(charge[0]['start'], '2026-09-28T11:30:00+02:00')
-        self.assertEqual(charge[-1]['end'], '2026-09-28T15:12:00+02:00')
+        # One-cent continuity now fills the former half-hour pause rather
+        # than waiting until 15:00 for a marginally cheaper final fraction.
+        self.assertEqual(charge[-1]['end'], '2026-09-28T14:42:00+02:00')
         for window in charge:
             for slot in slots:
                 if slot['start'] < datetime.fromisoformat(window['end']) and slot['end'] > datetime.fromisoformat(window['start']):
-                    self.assertLessEqual(slot['import_price'], .315)
+                    self.assertLessEqual(slot['import_price'], .315 + .01)
         trace = energy_trace(now, slots, windows, initial=10, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)

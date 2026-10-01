@@ -30,12 +30,15 @@ geverifieerd is. Lees ook de open punten onderaan.
   worden gepland. Een klein beetje zon mag benodigd netladen niet blokkeren.
 - Vermijd onnodige onderbrekingen bij gelijke prijzen. Een pauze vanwege een
   werkelijk duurder tarief kan wel logisch zijn en moet zichtbaar zijn.
-- Akkoord 27 september: een lopende laadcyclus mag doorlopen bij maximaal
-  **EUR 0,005/kWh (0,5 cent)** verschil om korte pauzes te voorkomen. Dit
-  versoepelt de strikte prijsvolgorde uitsluitend binnen die band. Verschuif
-  geplande energie naar voren, laad niet extra en behoud de minimumwinst,
-  laadbron, vermogenslimiet en veilige capaciteit. Grotere verschillen blijven
-  bepalend. Voor een nog niet begonnen cyclus blijft de goedkoopste selectie gelden.
+- Gewijzigd op 1 oktober: bij prijsverschillen van maximaal **EUR 0,01/kWh
+  (1 cent)** krijgen minder schakelingen en zoveel mogelijk aaneengesloten
+  uitperiodes voorrang boven kleine tariefvoordelen. Dit geldt voor laden en
+  ontladen, ook in toekomstige vensters. Dit vervangt de band van 0,5 cent
+  die alleen voor een lopende laadcyclus gold.
+- Bundel dezelfde hoeveelheid energie binnen geschikte prijsbanden; voeg geen
+  extra lading toe. Behoud laadbron, minimumwinst, cyclusgrenzen, reserve,
+  afname en vermogen. Laat kleine opeenvolgende tariefstappen niet optellen
+  tot een toegestane verschuiving van meer dan 1 cent.
 - Een gekozen laadvenster mag niet bij iedere herberekening vooruit schuiven
   doordat het lopende kwartier wordt overgeslagen. Veranderende SOC, tarieven
   of prognoses mogen de benodigde resterende laadtijd wel veranderen.
@@ -462,4 +465,28 @@ geverifieerd is. Lees ook de open punten onderaan.
   mobiele breedte geslaagd.
 - De gebruiker heeft deze concrete grafiek op 1 oktober goedgekeurd en opdracht
   gegeven de correctie naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+
+### Lokale wijziging 1 oktober: minder schakelen binnen één cent
+
+- Laden bundelt geplande energie naar voren binnen aaneengesloten rendabele
+  blokken met dezelfde bron en hoogstens 1 cent totale prijsvariatie. Dit
+  gebeurt ook bij toekomstige cycli en bij meerdere prijsbanden in één cyclus.
+- Huisontlading gebruikt binnen 1 cent van elke resterende prijspiek eerst
+  eerdere afname. Daardoor blijft de noodzakelijke uitperiode meer bijeen.
+  Geen extra export om een pauze cosmetisch weg te werken. Grotere verschillen,
+  ontbrekende afname, winstgrenzen en veilige SOC kunnen pauzes blijven vereisen.
+- De extra volledige arbitragecyclus wordt na bundeling opnieuw gecontroleerd
+  op voldoende rendabele afname tegen de nieuwe maximale importprijs.
+- Reconstructie met de meting van 1 oktober 08:34, 39% SOC: netladen wordt
+  teruggebracht van zes naar drie blokken; het eerste loopt 11:45 tot circa
+  13:11. Zelfde aannames als de herstartgrafiek: 10 kWh, veilige grens 20%,
+  2,5 kW laden, 3 kW ontladen, EUR 0,11 aftrek, geen extra prognosemarge en
+  geen aangeleverde historische inkoopprijs.
+- Lokaal geslaagd: 183 Python-tests, kaarttest, diffcontrole en browsercontrole
+  op desktop- en telefoonbreedte. Inclusief toekomstige netlading, exact 1 cent,
+  grotere verschillen, winstgrens, herhaalde herberekeningen en energiebalans.
+- De gebruiker heeft deze concrete grafiek op 1 oktober goedgekeurd en opdracht
+  gegeven de wijziging naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.

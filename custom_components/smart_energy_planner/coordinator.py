@@ -38,6 +38,7 @@ from .battery_forecast import (
 )
 from .battery_models import SolarWindow
 from .battery_planner import (
+    PRICE_CONTINUITY_BAND,
     build_battery_mode_schedule,
     build_charge_window_lookup,
     merge_planned_windows,
@@ -3109,50 +3110,71 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     cycle_index += 1
                     continue
 
-            if (cursor <= now and getattr(self, "_charge_session_started", False)):
-                active_selection = next((item for item in selected_for_cycle
-                    if item["start"] <= now < item["end"]), None)
-                if (active_selection is None and self._active_charge_phase_end is not None
-                        and self._active_charge_phase_end > now):
-                    active_kind = {"laden_met_zonne_energie": "solar", "laden_van_net": "grid"}.get(
-                        self._active_charge_phase_mode,
-                    )
-                    active_selection = next((item for item in primary_candidates
-                        if item["kind"] == active_kind and item["start"] <= now < item["end"]
-                        and any(selected["kind"] == active_kind for selected in selected_for_cycle)), None)
-                if active_selection is not None:
-                    # Keep an already selected charge running through a narrow
-                    # price band (0.5 ct/kWh). Move, never add, energy; retain
-                    # the source, profit checks and shared inverter capacity.
-                    kind = active_selection["kind"]
-                    same_source = [item for item in selected_for_cycle if item["kind"] == kind]
-                    ceiling = min(float(item["cost"]) for item in same_source) + 0.005
-                    last_end = max(item["end"] for item in same_source)
-                    band = []
-                    expected_start = active_selection["start"]
-                    for candidate in sorted(
-                        (item for item in primary_candidates if item["kind"] == kind
-                         and active_selection["start"] <= item["start"] < last_end),
-                        key=lambda item: item["start"],
-                    ):
-                        if (candidate["start"] != expected_start
-                                or float(candidate["cost"]) > ceiling + 1e-9
-                                or any(item["start"] == candidate["start"] and item["kind"] != kind
-                                       for item in selected_for_cycle)):
-                            break
-                        band.append(candidate)
-                        expected_start = candidate["end"]
+            # Consolidate energy within chronological, profitable same-source
+            # runs whose TOTAL price spread is at most one cent. Do not bridge
+            # unavailable slots, a source change, or a larger price excursion.
+            selection_before_bundling = list(selected_for_cycle)
+            for kind in ("solar", "grid"):
+                same_source = [item for item in selected_for_cycle if item["kind"] == kind]
+                if not same_source:
+                    continue
+                first_start = min(item["start"] for item in same_source)
+                if (cursor <= now and getattr(self, "_charge_session_started", False)
+                        and self._active_charge_phase_end is not None
+                        and self._active_charge_phase_end > now
+                        and self._active_charge_phase_mode == (
+                            "laden_van_net" if kind == "grid" else "laden_met_zonne_energie")):
+                    first_start = now
+                last_end = max(item["end"] for item in same_source)
+                candidates = sorted((item for item in primary_candidates
+                    if item["kind"] == kind and item["end"] > first_start
+                    and item["start"] < last_end
+                    and not any(other["start"] == item["start"] and other["kind"] != kind
+                                for other in selected_for_cycle)), key=lambda item: item["start"])
+                bands = []
+                for candidate in candidates:
+                    cost = float(candidate["cost"])
+                    if (not bands or candidate["start"] != bands[-1][-1]["end"]
+                            or max(cost, *(float(item["cost"]) for item in bands[-1]))
+                            - min(cost, *(float(item["cost"]) for item in bands[-1]))
+                            > PRICE_CONTINUITY_BAND + 1e-9):
+                        bands.append([])
+                    bands[-1].append(candidate)
+                for band in bands:
                     band_starts = {item["start"] for item in band}
-                    remaining_kwh = sum(float(item["charge_kwh"]) for item in same_source
-                                        if item["start"] in band_starts)
-                    if band:
-                        selected_for_cycle = [item for item in selected_for_cycle
-                                              if item["start"] not in band_starts]
-                        for candidate in band:
-                            take = min(remaining_kwh, float(candidate["charge_kwh"]))
-                            if take > 1e-9:
-                                selected_for_cycle.append({**candidate, "charge_kwh": take})
-                                remaining_kwh -= take
+                    amounts = {item["start"]: float(item["charge_kwh"]) for item in same_source}
+                    already_contiguous = all(
+                        item["start"] in amounts and (index == 0 or
+                            amounts[item["start"]] >= float(item["charge_kwh"]) - 1e-6)
+                        for index, item in enumerate(band)
+                    )
+                    if already_contiguous:
+                        continue
+                    remaining_kwh = sum(amounts.get(item["start"], 0.) for item in band)
+                    selected_for_cycle = [item for item in selected_for_cycle
+                                          if item["start"] not in band_starts]
+                    for candidate in band:
+                        take = min(remaining_kwh, float(candidate["charge_kwh"]))
+                        if take > 1e-9:
+                            selected_for_cycle.append({**candidate, "charge_kwh": round(take, 6)})
+                            remaining_kwh -= take
+
+            # A complete extra arbitrage cycle has a stronger requirement than
+            # an individually profitable slot: all usable energy must still be
+            # sellable at its new maximum import cost before the next refill.
+            bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
+            if grid_selected and bundled_grid and cheaper_refill is not None and not mixed_fill:
+                bundled_cost = max(float(item["profit_cost"]) for item in selected_for_cycle
+                                   if item["kind"] == "grid")
+                bundled_end = max(item["end"] for item in selected_for_cycle)
+                if _profitable_discharge_capacity(bundled_end, cheaper_refill,
+                                                  bundled_cost) + 1e-6 < usable_capacity_kwh:
+                    selected_for_cycle = selection_before_bundling
+                else:
+                    self._full_arbitrage_intervals = [
+                        (period[0], period[1], max(period[2], bundled_cost))
+                        if period[0] == charge_end and period[1] == cheaper_refill else period
+                        for period in self._full_arbitrage_intervals]
 
             selected_start = min(item["start"] for item in selected_for_cycle)
             if (previous_charge_end is not None and previous_charge_cost is not None
