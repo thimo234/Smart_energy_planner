@@ -39,6 +39,61 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     card._hass.states[priceFixture.entity_id] = {attributes:{raw_today:priceFixture.raw_today}};
     card.render();
   },priceFixture);
+  if (process.argv.includes('--real-history')) {
+    const actual = JSON.parse(fs.readFileSync(path.resolve(__dirname,'../tests/fixtures/nspanel_consumption_history_2026_10_02.json'),'utf8'));
+    await page.evaluate(actual => {
+      const BaseDate = Date;
+      window.Date = class extends BaseDate {
+        constructor(...args) { super(...(args.length ? args : [actual.now])); }
+        static now() { return +new BaseDate(actual.now); }
+      };
+      document.querySelector('body > div').textContent = 'Verbruik uit CSV · Nord Pool-prijzen · zon/voorspelling synthetisch';
+      const card = document.querySelector('smart-energy-planner-mini-card');
+      card._hass.states['sensor.house'] = {attributes:actual.attributes};
+      card._history['sensor.house'] = actual.rows.map(([last_changed,state]) => ({last_changed,state}));
+      card.render();
+    },actual);
+  }
+  if (process.argv.includes('--total-corrections') || process.argv.includes('--real-history')) {
+    if (!process.argv.includes('--real-history')) {
+    await page.evaluate(() => {
+      const card = document.querySelector('smart-energy-planner-mini-card');
+      const start = new Date(); start.setHours(0,0,0,0);
+      const rows = [];
+      for (let minute=0;minute<=14*60+7;minute++) {
+        const time = new Date(+start+minute*60000);
+        const correction = minute === 10*60+5 ? 3 : minute === 11*60+35 ? 4 : 0;
+        rows.push({entity_id:'sensor.house',state:String(14000+minute*.6/60+correction),last_changed:time.toISOString()});
+      }
+      card._hass.states['sensor.house'] = {attributes:{unit_of_measurement:'kWh',state_class:'total'}};
+      card._history['sensor.house'] = rows;
+      card.render();
+    });
+    }
+    await page.screenshot({path:path.join(output,'mini-total-corrected.png')});
+    await page.evaluate(() => {
+      const card = document.querySelector('smart-energy-planner-mini-card');
+      card._correctedRecordedPower = card.recordedPower;
+      card.recordedPower = function(entity,start,end) {
+        const corrected = this._correctedRecordedPower(entity,start,end);
+        if (entity !== 'sensor.house') return corrected;
+        const rows = this._history[entity]; let energy = 0, duration = 0;
+        for (let i=0;i<rows.length-1;i++) {
+          const a = +new Date(rows[i].last_changed), b = +new Date(rows[i+1].last_changed);
+          const overlap = Math.max(0,Math.min(+end,b)-Math.max(+start,a));
+          const delta = Number(rows[i+1].state)-Number(rows[i].state);
+          if (overlap && delta >= 0) { energy += delta*overlap/(b-a); duration += overlap; }
+        }
+        return duration ? energy*3600000/duration : undefined;
+      };
+      card.render();
+    });
+    await page.screenshot({path:path.join(output,'mini-total-before.png')});
+    await page.evaluate(() => {
+      const card = document.querySelector('smart-energy-planner-mini-card');
+      card.recordedPower = card._correctedRecordedPower; card.render();
+    });
+  }
   const svg=page.locator('svg');
   if((await svg.boundingBox()).height>150) throw Error('Chart exceeds 150 px');
   await page.locator('[data-slot="6"]').dispatchEvent('pointerdown');

@@ -303,6 +303,31 @@ geverifieerd is. Lees ook de open punten onderaan.
   weg te halen en daarna te pushen. Na uitleg dat alleen het testvoorbeeld een
   uitlegtekst heeft, heeft de gebruiker bevestigd dat verwijderen niet nodig is.
   De minikaart heeft geen titel. Publicatie naar main is goedgekeurd.
+- Nieuwe melding 2 oktober: grote verbruikspieken in de minikaart. Concrete
+  kaartfout gereproduceerd: bij state_class total werden negatieve tellerdelta's
+  overgeslagen; latere stijgingen telden wel. Tijdelijke correcties in een
+  berekende teller konden zo extra verbruik veroorzaken. total-delta's worden nu
+  met hun teken samengenomen binnen de weergegeven periode. De bestaande
+  total_increasing-resetbehandeling blijft apart. Geen pieken afkappen of
+  tellerstanden willekeurig gladstrijken.
+- Lokaal gecontroleerd met een synthetische total-teller: tijdelijke stijgingen
+  en dalingen heffen elkaar op; 0,5 kWh per kwartier blijft 2 kW. Browservoorbeeld
+  toont dezelfde invoer voor/na de correctie, met aangeleverde Nord Pool-prijzen
+  en synthetische zon/verbruik. Frontend- en browsercontroles slagen.
+- De aangeleverde CSV bevestigt de oorzaak voor de getoonde dag: de oude
+  berekening reproduceert exact 49,7434 kW. Met dezelfde echte tellerhistorie
+  bedraagt het hoogste kwartiergemiddelde 1,7207 kW. Vandaag bevat 886 metingen
+  en 577 dalingen. Ook correcties met identieke tijdstempels komen voor; eerst
+  wordt de laatste stand op dat tijdstip gekozen, vervolgens worden delta's
+  berekend. Zo verdwijnen wijzigingen zonder duur niet uit de energiebalans.
+- De regressie controleert de echte CSV, zowel het maximum als de totale
+  weergegeven energie tegenover het geïnterpoleerde verschil tussen begin- en
+  eindstand. De vergelijking gebruikt echte verbruiksgegevens en aangeleverde
+  Nord Pool-prijzen; zon en toekomstige verbruiksprognose blijven synthetisch.
+  Frontend- en browsercontroles slagen. Live controle na installatie staat open.
+- De gebruiker heeft de grafiek met echte verbruikshistorie goedgekeurd en
+  opdracht gegeven te pushen, na afronden van beide schalen links op één decimaal.
+  De detailwaarden blijven op twee decimalen; alleen schaaltekst verandert.
 
 
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil

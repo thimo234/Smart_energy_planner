@@ -1678,15 +1678,23 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     const fallbackUnit = this._hass.states[entity]?.attributes?.unit_of_measurement;
     const stateClass = this._hass.states[entity]?.attributes?.state_class;
     if (!cache || cache.rows !== rows || cache.unit !== fallbackUnit || cache.stateClass !== stateClass) {
-      cache = {rows,unit:fallbackUnit,stateClass,intervals:rows.map((row,i) => {
+      // Multiple corrections at exactly the same timestamp have no duration.
+      // Use the final reading at that timestamp before calculating deltas.
+      const samples = [...new Map(rows.map(row => [+new Date(row.last_changed || row.last_updated),row])).entries()]
+        .filter(([time]) => Number.isFinite(time)).sort((a,b) => a[0]-b[0]).map(([,row]) => row);
+      cache = {rows,unit:fallbackUnit,stateClass,intervals:samples.map((row,i) => {
         const value = this.parseNumber(row.state), unit = row.attributes?.unit_of_measurement || fallbackUnit;
         const start = +new Date(row.last_changed || row.last_updated);
-        const end = i + 1 < rows.length ? +new Date(rows[i+1].last_changed || rows[i+1].last_updated) : Infinity;
+        const end = i + 1 < samples.length ? +new Date(samples[i+1].last_changed || samples[i+1].last_updated) : Infinity;
         let power = value !== undefined && ['W','kW'].includes(unit) ? value * (unit === 'W' ? .001 : 1) : undefined;
         if (['Wh','kWh'].includes(unit) && Number.isFinite(end) && end > start && value !== undefined) {
-          const next = this.parseNumber(rows[i+1].state);
+          const next = this.parseNumber(samples[i+1].state);
           if (next !== undefined) {
-            const delta = next >= value ? next-value : (row.attributes?.state_class || stateClass) === 'total_increasing' ? Math.max(0,next) : undefined;
+            // A total counter may decrease (e.g. an asynchronously updated
+            // import + solar - export template). Its signed corrections must
+            // cancel the subsequent rise, otherwise we invent consumed energy.
+            const counterClass = row.attributes?.state_class || stateClass;
+            const delta = next >= value || counterClass === 'total' ? next-value : counterClass === 'total_increasing' ? Math.max(0,next) : undefined;
             if (delta !== undefined) power = delta * (unit === 'Wh' ? .001 : 1) * 3600000 / (end-start);
           }
         }
@@ -1833,8 +1841,8 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
       <path d="M${x(now)} 12V126" stroke="var(--primary-text-color,#222)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
       <g fill="var(--primary-text-color,#222)" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
-      ${this.valueTicks(min,max,4).map(v => `<text x="28" y="${yp(v)+3}" text-anchor="end">${this.formatNumber(v)}</text>`).join('')}
-      ${this.valueTicks(0,powerMax,4).map(v => `<text x="59" y="${ye(v)+3}" text-anchor="end" opacity=".75">${this.formatNumber(v)}</text>`).join('')}
+      ${this.valueTicks(min,max,4).map(v => `<text x="28" y="${yp(v)+3}" text-anchor="end">${Number(v).toFixed(1)}</text>`).join('')}
+      ${this.valueTicks(0,powerMax,4).map(v => `<text x="59" y="${ye(v)+3}" text-anchor="end" opacity=".75">${Number(v).toFixed(1)}</text>`).join('')}
       <text x="28" y="9" text-anchor="end" font-size="7">€/kWh</text><text x="59" y="9" text-anchor="end" font-size="7">kW</text>
       <text x="${left}" y="145">00:00</text><text x="${x(new Date(+start+(+end-+start)/2))}" y="145" text-anchor="middle">12:00</text><text x="${right}" y="145" text-anchor="end">23:59</text></g>
       <g data-selected-column></g>

@@ -49,6 +49,37 @@ mini._history['sensor.energy'] = [
 assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T10:00:00Z'),new Date('2026-08-07T10:30:00Z')),2);
 assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T10:30:00Z'),new Date('2026-08-07T11:00:00Z')),1, 'counter reset accounts only for the new reading');
 assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T11:00:00Z'),new Date('2026-08-07T11:15:00Z')),undefined, 'energy counter must not extrapolate after its last reading');
+mini._hass.states['sensor.total'] = {attributes:{unit_of_measurement:'kWh',state_class:'total'}};
+mini._history['sensor.total'] = [
+  {state:'1000',last_changed:'2026-08-07T10:00:00Z'},
+  {state:'1003',last_changed:'2026-08-07T10:05:00Z'},
+  {state:'1000',last_changed:'2026-08-07T10:05:02Z'},
+  {state:'1000.5',last_changed:'2026-08-07T10:15:00Z'},
+];
+assert.ok(Math.abs(mini.recordedPower('sensor.total',new Date('2026-08-07T10:00:00Z'),new Date('2026-08-07T10:15:00Z'))-2) < 1e-8, 'total corrections must cancel: 0.5 kWh over 15 min is 2 kW, not an invented spike');
+assert.equal(mini.recordedPower('sensor.total',new Date('2026-08-07T10:05:00Z'),new Date('2026-08-07T10:05:02Z')),-5400, 'retain signed total corrections until period aggregation');
+const actualConsumption = require('./fixtures/nspanel_consumption_history_2026_10_02.json');
+mini._hass.states[actualConsumption.entity_id] = {attributes:actualConsumption.attributes};
+mini._history[actualConsumption.entity_id] = actualConsumption.rows.map(([last_changed,state]) => ({last_changed,state}));
+const actualStart = +new Date('2026-10-02T00:00:00+02:00'), actualEnd = +new Date(actualConsumption.now);
+const actualQuarters = [];
+for (let t=actualStart;t<actualEnd;t+=900000) {
+  const end = Math.min(t+900000,actualEnd);
+  actualQuarters.push({power:mini.recordedPower(actualConsumption.entity_id,new Date(t),new Date(end)),duration:end-t});
+}
+assert.ok(Math.abs(Math.max(...actualQuarters.map(q=>q.power))-1.720704404669761)<1e-8, 'actual CSV must no longer reproduce the false 49.74 kW peak');
+const uniqueReadings = [...new Map(actualConsumption.rows.map(([time,state])=>[+new Date(time),Number(state)])).entries()].sort((a,b)=>a[0]-b[0]);
+const counterAt = time => {
+  const i = uniqueReadings.findIndex(([t]) => t>=time);
+  if (uniqueReadings[i][0]===time) return uniqueReadings[i][1];
+  const [a,va] = uniqueReadings[i-1], [b,vb] = uniqueReadings[i];
+  return va+(vb-va)*(time-a)/(b-a);
+};
+const calculatedEnergy = actualQuarters.reduce((sum,q)=>sum+q.power*q.duration/3600000,0);
+assert.ok(Math.abs(calculatedEnergy-(counterAt(actualEnd)-counterAt(actualStart)))<1e-8, 'displayed energy must equal the independently interpolated start/end counter difference');
+const duplicateStart = +new Date('2026-10-01T16:30:00Z'), duplicateEnd = duplicateStart+900000;
+const duplicatePower = mini.recordedPower(actualConsumption.entity_id,new Date(duplicateStart),new Date(duplicateEnd));
+assert.ok(Math.abs(duplicatePower/4-(counterAt(duplicateEnd)-counterAt(duplicateStart)))<1e-8, 'same-timestamp corrections in the actual CSV must not create thousands of kWh');
 const nordpoolFixture = require('./fixtures/nspanel_nordpool_2026_10_02.json');
 mini.config.price_entity = nordpoolFixture.entity_id;
 mini._hass.states[nordpoolFixture.entity_id] = {attributes:{raw_today:nordpoolFixture.raw_today}};
