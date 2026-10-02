@@ -93,6 +93,13 @@ geverifieerd is. Lees ook de open punten onderaan.
   vanzelfsprekend toegestaan uitgangspunt.
 - `accu_uit` tijdens een noodzakelijke pauze is niet hetzelfde als de cyclus
   omkeren. Houd de cyclusstatus vast over herberekeningen en herstarts.
+- Uitzondering, expliciet akkoord 2 oktober: een onvermijdelijk restant mag
+  een rendabel nieuw laadvenster niet blokkeren. Probeer eerst te ontladen via
+  huisverbruik of rendabele export. Kan de accu tijdens het laadvenster niet
+  verder nuttig ontladen, vul dan alleen de werkelijk vrije capaciteit aan.
+- De gebruiker heeft op 2 oktober bevestigd dat export de minimumwinst ten
+  opzichte van de oude inkoopprijs moet blijven halen. Een goedkopere volgende
+  lading is geen reden om die grens te versoepelen; laat het restant dan zitten.
 - Een ontbrekende SOC tijdens opstarten betekent niet dat de accu leeg is.
   Initialiseer of wijzig geen cyclus totdat een geldige SOC beschikbaar is;
   overschrijf daarbij ook geen opgeslagen status of tijdstempel. Herstel de
@@ -353,6 +360,36 @@ geverifieerd is. Lees ook de open punten onderaan.
   met eerder aangeleverde data, geen nieuwe live meting.
 - De gebruiker heeft op 25 september 2026 de grafiek goedgekeurd en opdracht
   gegeven deze wijzigingen naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+### Lokale correctie 2 oktober: laadvenster bij onvermijdelijk restant
+
+- De 26%-meting is gereproduceerd met een aangenomen historische inkoopprijs
+  van EUR 0,30/kWh. Die prijs ontbreekt in de sensorinformatie; vanaf EUR 0,29
+  ontstaat dezelfde ochtendplanning zonder laadvenster. Dit bevestigt een
+  mogelijke oorzaak, niet de exacte opgeslagen inkoopprijs in Home Assistant.
+- De zon dekt vanaf 09:00 het huisverbruik. Ongeveer 0,49 kWh boven de veilige
+  grens kan daardoor vóór het zonneladen niet worden benut; export haalt de
+  oude winstgrens niet. De volledige-cyclusblokkering schrapte het laadvenster.
+- De geïmplementeerde uitzondering controleert de hele geselecteerde laadfase:
+  geen verdere huisafname en geen bekende rendabele export. Dan mag de accu
+  het restant behouden en de vrije capaciteit aanvullen. Bij mogelijke verdere
+  ontlading blijft de cyclusbescherming actief. De prognose wijzigt geen
+  huidige cyclusstatus vóór de daadwerkelijke laadstart.
+- Een theoretische ontlaadwachttijd wordt niet telkens opnieuw vooruit gezet
+  als er gedurende die wachttijd geen bruikbare afname is. Opeenvolgende
+  herberekeningen behouden zo de laadstart.
+- Reconstructie: huisontlading tot 09:00, circa 24,9% over, zonneladen
+  11:45–15:59 tot 100%. Aannames: 10 kWh, 20% veilige grens, laden 2,5 kW,
+  ontladen 3 kW, aangeleverde prognoses zonder aanvullende marges. De meting
+  gebruikt EUR 0,12 verschil tussen import en export; de replay volgt dit.
+- Lokaal geslaagd: volledige suite van 187 tests; daarna de vijf gerichte
+  restanttests inclusief een aanvullende hersteltest (188 unieke tests).
+  Kaarttest, diffcontrole en browsercontrole op desktop en mobiel geslaagd.
+  De oude 75%-regressie is expliciet aangepast aan de nieuwe uitzondering:
+  ook daar mag een onvermijdelijk restant de zonnecyclus niet meer blokkeren.
+- De gebruiker heeft deze concrete grafiek op 2 oktober goedgekeurd en opdracht
+  gegeven de correctie naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.
 
 ### Lokale correctie 27 september: rendement bij werkelijk gekozen laadstart

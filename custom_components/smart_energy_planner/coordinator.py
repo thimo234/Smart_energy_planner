@@ -2597,6 +2597,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             first_charge_not_before = now + timedelta(
                 hours=current_usable_kwh / max_discharge_kw, minutes=30,
             )
+            if not self._can_discharge_in_interval(
+                slots=future_slots, start=now, end=first_charge_not_before,
+                cost=getattr(self, "_battery_grid_charge_price", None),
+                minimum_profit=battery_min_profit,
+            ):
+                # Do not repeatedly postpone a refill by a theoretical
+                # discharge duration when no useful discharge is possible.
+                first_charge_not_before = now
 
         min_discharge_gap = (
             timedelta(hours=usable_capacity_kwh / max_discharge_kw)
@@ -3438,6 +3446,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return None
         return now + timedelta(hours=initial_usable_energy_kwh / max_discharge_kw)
 
+    def _can_discharge_in_interval(self, *, slots, start, end, cost, minimum_profit):
+        """Whether forecast demand or profitable export can use stored energy."""
+        return any(
+            slot["end"] > start and slot["start"] < end and (
+                float(slot["net_solar_kwh"]) < -1e-9
+                or (self._cycle_export_enabled and slot.get("price_known", True)
+                    and float(slot["export_price"]) > 0
+                    and (cost is None or float(slot["export_price"]) + 1e-9 >= cost + minimum_profit))
+            ) for slot in slots
+        )
+
     def _estimate_battery_depletion_time(
         self,
         *,
@@ -3664,6 +3683,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 blocked = [w for w in charge_windows
                            if slot_end > cast(datetime, w["start"])
                            and slot_start < cast(datetime, w["end"])]
+                if blocked:
+                    # Keep an economically useful refill when the old cycle
+                    # cannot discharge any further during this charge phase.
+                    # Do not force an unprofitable export just to reach empty.
+                    # The charge integrator below uses the actual remaining
+                    # capacity, rather than assuming an empty battery.
+                    phase_end = max((cluster["end"] for cluster in charge_phase_clusters
+                        if cluster["start"] < slot_end and cluster["end"] > slot_start),
+                        default=max(cast(datetime, w["end"]) for w in blocked))
+                    can_continue_discharge = self._can_discharge_in_interval(
+                        slots=slots, start=slot_start, end=phase_end,
+                        cost=grid_cost_floor, minimum_profit=battery_min_profit,
+                    )
+                    if self._cycle_export_enabled and not can_continue_discharge:
+                        simulated_discharge_session_started = False
+                        blocked = []
                 if blocked:
                     blocked_starts = {cast(datetime, w["start"]) for w in blocked}
                     charge_windows = [w for w in charge_windows if w not in blocked]
