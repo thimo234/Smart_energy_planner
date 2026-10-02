@@ -336,6 +336,23 @@ geverifieerd is. Lees ook de open punten onderaan.
   browsercontroles slagen, inclusief energiebehoud met de aangeleverde CSV.
   De gebruiker heeft deze grafiek op 2 oktober goedgekeurd en opdracht gegeven
   naar main te pushen. Live controle na installatie staat nog open.
+- Nieuw verzoek: geschiedenis en voorspelling vloeiend aan elkaar blenden.
+  Lokaal aangepast: één doorlopende kubische lijn door de gemeten en voorspelde
+  uurpunten, met ongewijzigde bronwaarden en detailwaarden. Gaten in ontbrekende
+  gegevens blijven onderbrekingen. Vanaf Nu vervaagt de lijn geleidelijk over
+  30 minuten naar de bestaande 60% dekking. Geen animatie of extra verversingen.
+  De interpolatie rond Nu is een visuele verbinding tussen de twee bronnen;
+  ze verandert de gemeten/voorspelde uurgemiddelden niet. Het laatste gemeten
+  gemiddelde vormt het anker op Nu, waarna de lijn vloeiend naar het eerste
+  bruikbare voorspelde uurpunt loopt. Een voorspeld punt binnen 15 minuten van
+  Nu wordt voor de visuele verbinding overgeslagen; vlak vóór een uurgrens mag
+  een paar seconden resterende voorspelling geen bijna verticale sprong veroorzaken.
+  Detailwaarden en energie blijven ongewijzigd. De aangeleverde NSPanel-screenshot
+  laat de oude verticale sprong in de gele lijn zien. Browsercontrole met bewust
+  afwijkende synthetische zon en echte verbruikshistorie slaagt, ook voor het anker
+  op Nu. Frontendtests slagen. De gebruiker heeft deze voorbeeldgrafiek op
+  2 oktober goedgekeurd en opdracht gegeven naar main te pushen. Live controle
+  na installatie staat nog open.
 
 
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil

@@ -54,6 +54,13 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       card.render();
     },actual);
   }
+  if (process.argv.includes('--blend-mismatch')) {
+    await page.evaluate(() => {
+      const card = document.querySelector('smart-energy-planner-mini-card');
+      card._history['sensor.sun'] = card._history['sensor.sun'].map(row => ({...row,state:String(Number(row.state)*1.6)}));
+      card.render();
+    });
+  }
   if (process.argv.includes('--total-corrections') || process.argv.includes('--real-history')) {
     if (!process.argv.includes('--real-history')) {
     await page.evaluate(() => {
@@ -96,6 +103,24 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   }
   const svg=page.locator('svg');
   if((await svg.boundingBox()).height>150) throw Error('Chart exceeds 150 px');
+  const anchored = await page.evaluate(() => {
+    const card = document.querySelector('smart-energy-planner-mini-card'), now = new Date();
+    const {start,end} = card.miniSlots(card._hass.states[card.config.planner_entity],now);
+    const points = card.miniHourlyPower(card._hass.states[card.config.planner_entity],now,start,end);
+    const last = points.filter(p => !p.future).at(-1);
+    const max = Math.max(1,...points.flatMap(p => [p.demand,p.solar]).filter(Number.isFinite));
+    const x = 8 + (+now-+start)/(+end-+start)*462;
+    for (const [key,color] of [['solar','#ffda37'],['demand','#c25bc9']]) {
+      if (!Number.isFinite(last?.[key])) continue;
+      const path = card.querySelector(`path[stroke="${color}"]`);
+      let a=0,b=path.getTotalLength();
+      for(let i=0;i<40;i++) { const middle=(a+b)/2; if(path.getPointAtLength(middle).x < x) a=middle; else b=middle; }
+      const actual = path.getPointAtLength((a+b)/2).y;
+      if (Math.abs(actual-(126-last[key]/max*114))>.02) return false;
+    }
+    return true;
+  });
+  if (!anchored) throw Error('History/forecast seam must anchor to the last measured hourly value');
   await page.locator('[data-slot="6"]').dispatchEvent('pointerdown');
   await page.screenshot({path:path.join(output,'mini-left.png')});
   const firstX=await page.locator('[data-tooltip] rect').getAttribute('x');
@@ -126,9 +151,11 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const colors = await page.locator('svg').evaluate(svg => {
     const past = [...svg.querySelectorAll('[clip-path]')].filter(el => el.getAttribute('clip-path').includes('-past'));
     const future = [...svg.querySelectorAll('[clip-path]')].filter(el => el.getAttribute('clip-path').includes('-future'));
-    return past.every((el,i) => el.getAttribute('fill') === future[i].getAttribute('fill') && el.getAttribute('stroke') === future[i].getAttribute('stroke') && +el.getAttribute('opacity') > +future[i].getAttribute('opacity'));
+    return past.every((el,i) => el.getAttribute('fill') === future[i].getAttribute('fill') && el.getAttribute('stroke') === future[i].getAttribute('stroke') && (+el.getAttribute('opacity') > +future[i].getAttribute('opacity') || future[i].getAttribute('mask')?.includes('-blend')));
   });
   if(!colors) throw Error('Forecast must preserve colors with lower opacity');
+  const continuous = await page.locator('path[stroke="#c25bc9"]').first().getAttribute('d');
+  if ((continuous.match(/M /g) || []).length !== 1) throw Error('Available history/forecast should join as one smooth curve');
   const html=await page.content();
   fs.writeFileSync(path.join(output,'preview.html'),html);
   await page.setViewportSize({width:320,height:210});

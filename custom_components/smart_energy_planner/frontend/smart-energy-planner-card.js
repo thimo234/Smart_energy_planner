@@ -1830,14 +1830,22 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     const curve = key => {
       const runs = []; let run = [], previous;
       const finish = () => {
-        if (run.length) { run.push({time:previous.end,value:previous[key]}); runs.push(run); }
+        if (run.length) { run.push({time:previous.end,value:run.at(-1).value}); runs.push(run); }
         run = []; previous = undefined;
       };
       hourlyPower.forEach(s => {
         if (!Number.isFinite(s[key])) { finish(); return; }
-        if (previous && (+previous.end !== +s.start || previous.future !== s.future)) finish();
+        // One continuous interpolation joins measured and forecast hour points.
+        // The underlying averages and missing-data gaps remain unchanged.
+        if (previous && +previous.end !== +s.start) finish();
         if (!run.length) run.push({time:s.start,value:s[key]});
-        run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
+        // Anchor the transition at the last measured average. Forecast styling
+        // starts at now, then the curve approaches its first forecast hour knot.
+        if (previous && !previous.future && s.future) run.push({time:s.start,value:previous[key]});
+        const midpoint = new Date((+s.start + +s.end)/2);
+        // A nearly finished hour can place its forecast knot seconds after
+        // now. Blend towards the next hour instead of recreating a steep step.
+        if (!(s.future && +midpoint < +now+900000 && run.length)) run.push({time:midpoint,value:s[key]});
         previous = s;
       });
       finish();
@@ -1853,11 +1861,13 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     });
     const curvePaths = {demand:curve('demand'),solar:curve('solar')};
     this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
-      <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath></defs>
+      <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath>
+      <linearGradient id="${clipId}-fade" gradientUnits="userSpaceOnUse" x1="${splitX}" x2="${x(new Date(+now+1800000))}"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity=".6"/></linearGradient>
+      <mask id="${clipId}-blend" maskUnits="userSpaceOnUse" x="0" y="0" width="480" height="150"><rect width="480" height="150" fill="url(#${clipId}-fade)"/></mask></defs>
       ${backgrounds.map(s => `<rect data-mode-band rx="3" x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
       <path d="M${left} ${yp(0)}H${right}" stroke="var(--primary-text-color,#222)" opacity=".3"/>
       ${columns.map(s => s.price === undefined ? '' : ['past','future'].map(part => `<rect clip-path="url(#${clipId}-${part})" x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}" fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('')).join('')}
-      ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
+      ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="1" ${part === 'future' ? `mask="url(#${clipId}-blend)"` : ''}/>`).join('')).join('')}
       <path d="M${x(now)} 12V126" stroke="var(--primary-text-color,#222)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
       <g fill="var(--primary-text-color,#222)" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
       <text x="${left}" y="145">00:00</text><text x="${x(new Date(+start+(+end-+start)/2))}" y="145" text-anchor="middle">12:00</text><text x="${right}" y="145" text-anchor="end">23:59</text></g>
