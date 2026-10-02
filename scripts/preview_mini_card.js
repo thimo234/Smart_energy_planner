@@ -7,9 +7,10 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   fs.mkdirSync(output, {recursive:true});
   const browser = await chromium.launch({headless:true, executablePath:process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe'});
   const page = await browser.newPage({viewport:{width:480,height:210}});
-  await page.setContent('<body style="margin:0;background:#fafafa;font-family:Arial"><div style="padding:8px;font-size:12px">NSPanel Pro · synthetisch voorbeeld · nu 14:07</div><smart-energy-planner-mini-card></smart-energy-planner-mini-card></body>');
+  await page.setContent('<body style="margin:0;background:#fafafa;font-family:Arial"><div style="padding:8px;font-size:11px">Nord Pool-prijzen · verbruik/zon synthetisch · nu 14:07</div><smart-energy-planner-mini-card></smart-energy-planner-mini-card></body>');
   await page.addScriptTag({path:path.resolve(__dirname,'../custom_components/smart_energy_planner/frontend/smart-energy-planner-card.js')});
-  await page.evaluate(() => {
+  const priceFixture = JSON.parse(fs.readFileSync(path.resolve(__dirname,'../tests/fixtures/nspanel_nordpool_2026_10_02.json'),'utf8'));
+  await page.evaluate((priceFixture) => {
     const NativeDate = Date;
     window.Date = class extends NativeDate {
       constructor(...args) { super(...(args.length ? args : ['2026-10-02T14:07:00+02:00'])); }
@@ -34,13 +35,17 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     card.setConfig({planner_entity:'sensor.planner',consumption_entity:'sensor.house',solar_entity:'sensor.sun'});
     card._hass={states:{'sensor.planner':{attributes:{upcoming_energy_price_windows:prices,estimated_hourly_home_demand:demand,estimated_hourly_solar_forecast:solar,planned_battery_mode_schedule:[{at:start.toISOString(),mode:'accu_uit'},{at:new Date(+start+11*3600000).toISOString(),mode:'laden_met_zonne_energie'},{at:new Date(+start+16*3600000).toISOString(),mode:'accu_uit'},{at:new Date(+start+18*3600000).toISOString(),mode:'ontladen'}]}}}};
     card._history={'sensor.house':house,'sensor.sun':sun,'sensor.planner':modes};
+    card.config.price_entity = priceFixture.entity_id;
+    card._hass.states[priceFixture.entity_id] = {attributes:{raw_today:priceFixture.raw_today}};
     card.render();
-  });
+  },priceFixture);
   const svg=page.locator('svg');
   if((await svg.boundingBox()).height>150) throw Error('Chart exceeds 150 px');
   await page.locator('[data-slot="6"]').dispatchEvent('pointerdown');
   await page.screenshot({path:path.join(output,'mini-left.png')});
   const firstX=await page.locator('[data-tooltip] rect').getAttribute('x');
+  await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
+  if(await page.locator('[data-tooltip] rect').count()) throw Error('Any column tap must dismiss open details');
   await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
   await page.screenshot({path:path.join(output,'mini-right.png')});
   const secondX=await page.locator('[data-tooltip] rect').getAttribute('x');
@@ -48,7 +53,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   if(await page.locator('[data-slot]').count() !== 24) throw Error('Expected hourly columns');
   if(!((await page.locator('[data-tooltip]').textContent()).includes('19:00–20:00'))) throw Error('Expected hourly selection');
   await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
-  if(!await page.locator('[data-tooltip] rect').count()) throw Error('Column tap must keep values visible');
+  if(await page.locator('[data-tooltip] rect').count()) throw Error('Column tap must dismiss values');
+  await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
   await page.locator('[data-tooltip] rect').click();
   if(await page.locator('[data-tooltip] rect').count()) throw Error('Popup tap must hide values');
   await page.evaluate(() => document.querySelector('smart-energy-planner-mini-card').render());
@@ -56,6 +62,12 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   await page.screenshot({path:path.join(output,'mini-hidden.png')});
   await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
   if(!await page.locator('[data-tooltip] rect').count()) throw Error('Column tap must show values again');
+  await page.locator('svg').click({position:{x:10,y:10}});
+  if(await page.locator('[data-tooltip] rect').count()) throw Error('Axis tap must dismiss values');
+  await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
+  if ((await page.locator('ha-card').evaluate(el => getComputedStyle(el).borderTopWidth)) !== '0px') throw Error('Card border must be absent');
+  if(await page.locator('[data-mode-band]:not([rx="3"])').count()) throw Error('Mode backgrounds must have small rounded corners');
+  if(!((await page.locator('path[stroke="#ffda37"]').first().getAttribute('d')).includes('C '))) throw Error('Power curves must use cubic interpolation');
   const colors = await page.locator('svg').evaluate(svg => {
     const past = [...svg.querySelectorAll('[clip-path]')].filter(el => el.getAttribute('clip-path').includes('-past'));
     const future = [...svg.querySelectorAll('[clip-path]')].filter(el => el.getAttribute('clip-path').includes('-future'));

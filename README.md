@@ -213,7 +213,7 @@ Assistant and refresh the browser or reopen the app if an old placeholder remain
 
 Kies **Smart Energy Planner Mini** bij het toevoegen van een dashboardkaart.
 In de visuele configuratie kies je de planner, werkelijk huisverbruik en werkelijk
-zonnevermogen (sensoren in W of kW met Recorder-geschiedenis). Een aparte prijssensor
+zonnevermogen (sensoren in W/kW of oplopende Wh/kWh-tellers met Recorder-geschiedenis). Een aparte prijssensor
 is optioneel. De bestaande frontendresource bevat ook deze kaart.
 
 ```yaml
@@ -233,4 +233,6 @@ zonneladen, groen voor ontladen en paars voor export. Ontbrekende meetgegevens
 blijven leeg. De kaart en meetgeschiedenis verversen maximaal eens per vijf minuten,
 en pauzeren als het dashboard verborgen is. Nu en gegevens kunnen daardoor vijf
 minuten achterlopen; selectie reageert direct. De kaartachtergrond is transparant.
-Tik op de transparante pop-up om het waardenvak en de selectierand te verbergen.
+Als het detailvenster open is, sluit een tik ergens op de kaart het venster.
+Wh/kWh-tellers worden via hun stijging en meetduur omgerekend naar gemiddeld kW;
+het laatste interval verschijnt zodra de volgende tellerstand beschikbaar is.

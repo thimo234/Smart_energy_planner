@@ -40,6 +40,21 @@ assert.ok(miniDay.slots.some(s => +s.end === +splitNow && !s.future));
 assert.ok(miniDay.slots.some(s => +s.start === +splitNow && s.future));
 assert.ok(miniDay.slots.every(s => s.demand === undefined), 'missing measurements and forecasts must remain missing');
 assert.ok(registered.get('smart-energy-planner-mini-card-editor'));
+mini._hass.states['sensor.energy'] = {attributes:{unit_of_measurement:'kWh',state_class:'total_increasing'}};
+mini._history['sensor.energy'] = [
+  {state:'100',last_changed:'2026-08-07T10:00:00Z'},
+  {state:'101',last_changed:'2026-08-07T10:30:00Z'},
+  {state:'0.5',last_changed:'2026-08-07T11:00:00Z'},
+];
+assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T10:00:00Z'),new Date('2026-08-07T10:30:00Z')),2);
+assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T10:30:00Z'),new Date('2026-08-07T11:00:00Z')),1, 'counter reset accounts only for the new reading');
+assert.equal(mini.recordedPower('sensor.energy',new Date('2026-08-07T11:00:00Z'),new Date('2026-08-07T11:15:00Z')),undefined, 'energy counter must not extrapolate after its last reading');
+const nordpoolFixture = require('./fixtures/nspanel_nordpool_2026_10_02.json');
+mini.config.price_entity = nordpoolFixture.entity_id;
+mini._hass.states[nordpoolFixture.entity_id] = {attributes:{raw_today:nordpoolFixture.raw_today}};
+const priceDay = mini.miniSlots({attributes:{upcoming_energy_price_windows:[]}},new Date('2026-10-02T14:07:00+02:00'));
+assert.equal(priceDay.slots.find(s => +s.start === +new Date('2026-10-02T00:00:00+02:00')).price,.356);
+assert.equal(mini.weightedAveragePrice(new Date('2026-10-02T00:00:00+02:00'),new Date('2026-10-02T01:00:00+02:00'),mini.extractAllPriceWindows(undefined,mini._hass.states[nordpoolFixture.entity_id])),(.356+.348+.338+.335)/4);
 assert.ok(Card, "card custom element should be registered");
 
 const card = new Card();

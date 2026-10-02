@@ -1455,7 +1455,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             include_known_prices=True, preview_start=cutoff,
         ) if inputs["battery_soc_percent"] is not None else []
         result.upcoming_energy_price_windows = self._serialize_price_windows(
-            inputs["all_windows"], horizon_start=now-timedelta(hours=1), horizon_end=horizon_end,
+            inputs["all_windows"], horizon_start=now.replace(hour=0, minute=0, second=0, microsecond=0), horizon_end=horizon_end,
         )
         result.upcoming_export_price_windows = self._serialize_price_windows(
             exports, horizon_start=now-timedelta(hours=1), horizon_end=horizon_end,

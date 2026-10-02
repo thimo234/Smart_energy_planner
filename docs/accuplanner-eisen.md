@@ -245,8 +245,8 @@ geverifieerd is. Lees ook de open punten onderaan.
   groen/geel/rood volgens dezelfde prijsquantielen, gele zonlijn, paarse
   stippellijn voor verbruik, dubbele schaal, Nu-lijn en witte selectierand.
   Toekomst behoudt de kleuren met lagere dekking; batterijmodus blijft een subtiele achtergrond.
-- Tikken op de pop-up verbergt waarden en selectierand (vervangt het verzoek
-  om dezelfde kolom opnieuw aan te tikken). Tikken op een kolom toont de waarden.
+- Gewijzigd 2 oktober: als details open zijn, sluit iedere tik op de kaart het
+  venster en de selectierand. Bij gesloten details opent een tik op een kolom de waarden.
   Een update houdt een verborgen selectie verborgen. Pop-up behoudt de oorspronkelijke
   donkere kleur en wordt alleen transparanter; dit vervangt het verzoek om lichter.
 - Lokaal geïmplementeerd als `custom:smart-energy-planner-mini-card` in de bestaande
@@ -277,6 +277,32 @@ geverifieerd is. Lees ook de open punten onderaan.
   loskoppelen gecontroleerd. De echte HA-kiezer en NSPanel blijven live te testen.
 - De gebruiker heeft de gecorrigeerde grafiek en lichte verversing op 2 oktober
   goedgekeurd en opdracht gegeven deze correcties naar main te pushen.
+- Nieuw verzoek na installatie: geen kaartrand, kleine afgeronde modusbanden en
+  vloeiende lijnen. Geïmplementeerd met rand/schaduw uit, radius 3 en kubische
+  interpolatie met behoud van vlakke stukken en gaten in ontbrekende meetgegevens.
+- Aangeleverde configuratie gebruikt `sensor.planner_score`,
+  `sensor.zonnepanelen_pvenergytotal` en `sensor.totaal_zelf_gebruikte_energie`.
+  De gebruiker bevestigde kWh: huisverbruik heeft state_class total en zon
+  total_increasing. Recorder-meetreeksen zijn niet aangeleverd.
+  De kaart ondersteunt nu ook Wh/kWh: tellerdelta gedeeld door meetduur levert
+  gemiddeld kW; total_increasing-reset telt de nieuwe stand. Geen extrapolatie
+  na de laatste tellerstand of vervanging door prognoses. Eén uur vóór middernacht
+  wordt mee opgehaald om het eerste meetinterval te kunnen berekenen.
+- Voor verstreken prijskolommen publiceert de planner de bekende prijzen vanaf
+  middernacht in plaats van slechts het afgelopen uur. De planning zelf verandert niet.
+  Live controle van deze correcties staat nog open.
+- Nord Pool `sensor.nordpool_kwh_nl_eur_3_10_0` is aangeleverd. Een expliciet
+  gekozen prijssensor krijgt in de minikaart voorrang voor de volledige dagprijzen;
+  zonder bruikbare sensorprijzen blijft de plannerreeks de bron. Uurgemiddelden blijven.
+- Lokaal geslaagd voor deze correcties: 188 Python-tests, frontendtests voor
+  kWh-delta/reset/geen extrapolatie en aangeleverde Nord Pool-uurgemiddelden,
+  browsercontrole voor sluiten op kolom/pop-up/as, randloze kaart, ronde modusbanden,
+  kubische lijnen, lichte verversing en stabiele editor. Voorbeeldgrafiek bevat
+  aangeleverde prijzen; zon en verbruik blijven synthetisch wegens ontbrekende historie.
+- De gebruiker heeft op 2 oktober deze correcties goedgekeurd en gevraagd de titel
+  weg te halen en daarna te pushen. Na uitleg dat alleen het testvoorbeeld een
+  uitlegtekst heeft, heeft de gebruiker bevestigd dat verwijderen niet nodig is.
+  De minikaart heeft geen titel. Publicatie naar main is goedgekeurd.
 
 
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil

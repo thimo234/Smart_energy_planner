@@ -1659,7 +1659,9 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     this._loading = true;
     const generation = this._historyGeneration;
     try {
-      const result = await this._hass.callApi('GET', `history/period/${encodeURIComponent(start.toISOString())}?filter_entity_id=${encodeURIComponent(ids.join(','))}&end_time=${encodeURIComponent(new Date().toISOString())}&minimal_response`);
+      // Energy counters need a preceding reading to calculate the first interval.
+      const historyStart = new Date(+start - 3600000);
+      const result = await this._hass.callApi('GET', `history/period/${encodeURIComponent(historyStart.toISOString())}?filter_entity_id=${encodeURIComponent(ids.join(','))}&end_time=${encodeURIComponent(new Date().toISOString())}&minimal_response`);
       if (generation === this._historyGeneration) {
         this._history = Object.fromEntries(result.filter(rows => rows.length).map(rows => [rows[0].entity_id, rows]));
         this._historyKey = key;
@@ -1674,12 +1676,21 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     this._powerCache ||= new Map();
     let cache = this._powerCache.get(entity);
     const fallbackUnit = this._hass.states[entity]?.attributes?.unit_of_measurement;
-    if (!cache || cache.rows !== rows || cache.unit !== fallbackUnit) {
-      cache = {rows,unit:fallbackUnit,intervals:rows.map((row,i) => {
+    const stateClass = this._hass.states[entity]?.attributes?.state_class;
+    if (!cache || cache.rows !== rows || cache.unit !== fallbackUnit || cache.stateClass !== stateClass) {
+      cache = {rows,unit:fallbackUnit,stateClass,intervals:rows.map((row,i) => {
         const value = this.parseNumber(row.state), unit = row.attributes?.unit_of_measurement || fallbackUnit;
-        return {start:+new Date(row.last_changed || row.last_updated),
-          end:i + 1 < rows.length ? +new Date(rows[i+1].last_changed || rows[i+1].last_updated) : Infinity,
-          value:value !== undefined && ['W','kW'].includes(unit) ? value * (unit === 'W' ? .001 : 1) : undefined};
+        const start = +new Date(row.last_changed || row.last_updated);
+        const end = i + 1 < rows.length ? +new Date(rows[i+1].last_changed || rows[i+1].last_updated) : Infinity;
+        let power = value !== undefined && ['W','kW'].includes(unit) ? value * (unit === 'W' ? .001 : 1) : undefined;
+        if (['Wh','kWh'].includes(unit) && Number.isFinite(end) && end > start && value !== undefined) {
+          const next = this.parseNumber(rows[i+1].state);
+          if (next !== undefined) {
+            const delta = next >= value ? next-value : (row.attributes?.state_class || stateClass) === 'total_increasing' ? Math.max(0,next) : undefined;
+            if (delta !== undefined) power = delta * (unit === 'Wh' ? .001 : 1) * 3600000 / (end-start);
+          }
+        }
+        return {start,end,value:power};
       })};
       this._powerCache.set(entity,cache);
     }
@@ -1707,10 +1718,33 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     return covered ? total / covered : undefined;
   }
 
+  smoothMiniPath(points, x, y) {
+    const coords = points.map(p => ({x:x(p.time),y:y(p.value)})).filter((p,i,all) => !i || p.x > all[i-1].x);
+    if (!coords.length) return '';
+    const slopes = coords.slice(1).map((p,i) => (p.y-coords[i].y)/(p.x-coords[i].x));
+    const tangents = coords.map((_p,i) => {
+      if (!i) return slopes[0] || 0;
+      if (i === coords.length-1) return slopes.at(-1) || 0;
+      const a = slopes[i-1], b = slopes[i];
+      if (a*b <= 0) return 0;
+      const before = coords[i].x-coords[i-1].x, after = coords[i+1].x-coords[i].x;
+      const w1 = 2*after+before, w2 = after+2*before;
+      return (w1+w2)/(w1/a+w2/b);
+    });
+    let d = `M ${coords[0].x.toFixed(2)} ${coords[0].y.toFixed(2)}`;
+    for (let i=1;i<coords.length;i++) {
+      const a = coords[i-1], b = coords[i], dx = (b.x-a.x)/3;
+      d += ` C ${(a.x+dx).toFixed(2)} ${(a.y+tangents[i-1]*dx).toFixed(2)}, ${(b.x-dx).toFixed(2)} ${(b.y-tangents[i]*dx).toFixed(2)}, ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+    }
+    return d;
+  }
+
   miniSlots(state, now) {
     const start = new Date(now); start.setHours(0, 0, 0, 0);
     const end = new Date(start); end.setDate(end.getDate() + 1);
-    const prices = this.extractAllPriceWindows(state, this._hass.states[this.config.price_entity]);
+    const priceState = this._hass.states[this.config.price_entity];
+    const sensorPrices = priceState ? this.extractAllPriceWindows(undefined, priceState) : [];
+    const prices = sensorPrices.length ? sensorPrices : this.extractAllPriceWindows(state);
     const schedule = this.modeBands(this.extractModeSchedule(state, start, end), start, end);
     const slots = [];
     for (let t = +start; t < +end; t += 900000) {
@@ -1773,12 +1807,14 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       slots.forEach(s => {
         if (!Number.isFinite(s[key])) { if (run.length) runs.push(run); run = []; previous = undefined; return; }
         if (previous && +previous.end !== +s.start) { runs.push(run); run = []; }
+        // Keep the edges of flat spans while interpolating changes with cubics.
         if (!run.length) run.push({time:s.start,value:s[key]});
-        run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
+        if (previous && previous[key] !== s[key]) run.push({time:new Date((+previous.start + +previous.end)/2),value:previous[key]});
+        if (!previous || previous[key] !== s[key]) run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
         previous = s;
       });
       if (run.length) { run.push({time:previous.end,value:previous[key]}); runs.push(run); }
-      return runs.map(points => this.linePath(points,x,ye)).join(' ');
+      return runs.map(points => this.smoothMiniPath(points,x,ye)).join(' ');
     };
     const splitX = Math.max(left,Math.min(right,x(now)));
     const clipId = this._miniClipId || (this._miniClipId = `mini-${Math.random().toString(36).slice(2)}`);
@@ -1789,9 +1825,9 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       else backgrounds.push({start:slot.start,end:slot.end,mode:slot.mode});
     });
     const curvePaths = {demand:curve('demand'),solar:curve('solar')};
-    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;color:var(--primary-text-color,#222)"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
+    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
       <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath></defs>
-      ${backgrounds.map(s => `<rect x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
+      ${backgrounds.map(s => `<rect data-mode-band rx="3" x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
       <path d="M${left} ${yp(0)}H${right}" stroke="var(--primary-text-color,#222)" opacity=".3"/>
       ${columns.map(s => s.price === undefined ? '' : ['past','future'].map(part => `<rect clip-path="url(#${clipId}-${part})" x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}" fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('')).join('')}
       ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
@@ -1816,14 +1852,15 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       this.querySelector('[data-selected-column]').innerHTML = column.price === undefined ? '' : `<rect x="${columnX+1.5}" y="${Math.min(yp(0),yp(column.price))}" width="${Math.max(1,columnEndX-columnX-3)}" height="${Math.max(2,Math.abs(yp(0)-yp(column.price)))}" rx="5" fill="none" stroke="#fff" stroke-width="2"/>`;
       this.querySelector('[data-tooltip]').innerHTML = `<rect x="${bx}" y="24" width="${boxWidth}" height="90" rx="5" fill="#15294a" fill-opacity=".72" stroke="#8fa9c4" stroke-opacity=".4"/>${lines.map((line,i) => `<text x="${bx+7}" y="${39+i*16}" font-size="10" fill="${i === 2 ? '#dc8be1' : i === 3 ? '#ffda37' : '#e8eef8'}">${this.escape(line)}</text>`).join('')}`;
     };
-    this.querySelectorAll('[data-slot]').forEach(el => {
-      el.addEventListener('pointerdown', () => select(Number(el.dataset.slot)));
-    });
-    this.querySelector('[data-tooltip]').addEventListener('pointerdown', event => {
-      event.stopPropagation();
-      this._miniSelected = undefined;
-      this.querySelector('[data-tooltip]').innerHTML = '';
-      this.querySelector('[data-selected-column]').innerHTML = '';
+    this.querySelector('ha-card').addEventListener('pointerdown', event => {
+      if (this._miniSelected !== undefined) {
+        this._miniSelected = undefined;
+        this.querySelector('[data-tooltip]').innerHTML = '';
+        this.querySelector('[data-selected-column]').innerHTML = '';
+        return;
+      }
+      const target = event.target.closest('[data-slot]');
+      if (target) select(Number(target.dataset.slot));
     });
     if (this._miniSelected !== undefined && columns[this._miniSelected]) select(this._miniSelected);
   }
@@ -1832,11 +1869,11 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
 class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
   render() {
     if (!this._hass || !this.config) return;
-    const fields = [['planner_entity','Planner'], ['consumption_entity','Werkelijk huisverbruik (W of kW)'], ['solar_entity','Werkelijk zonnevermogen (W of kW)'], ['price_entity','Stroomprijzen (optioneel)']];
+    const fields = [['planner_entity','Planner'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['price_entity','Stroomprijzen (optioneel)']];
     // Home Assistant replaces hass frequently, also while a picker is open.
     // Keep the elements mounted so updates preserve the search and focus.
     if (!this.querySelector('ha-entity-picker')) {
-      this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) => `<ha-entity-picker data-key="${key}" label="${label}" allow-custom-entity></ha-entity-picker>`).join('')}<p>De grafiek toont vandaag van 00:00 tot 23:59, maximaal 150 px hoog. De vermogenssensoren moeten geschiedenis in Recorder hebben.</p></div>`;
+      this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) => `<ha-entity-picker data-key="${key}" label="${label}" allow-custom-entity></ha-entity-picker>`).join('')}<p>De grafiek toont vandaag van 00:00 tot 23:59, maximaal 150 px hoog. Gebruik vermogenssensoren of oplopende energietellers met Recorder-geschiedenis.</p></div>`;
       this.querySelectorAll('ha-entity-picker').forEach(picker => {
         picker.includeDomains = ['sensor'];
         picker.allowCustomEntity = true;
