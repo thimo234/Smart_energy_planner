@@ -18,6 +18,28 @@ require(path.resolve(
 ));
 
 const Card = registered.get("smart-energy-planner-card");
+const Mini = registered.get('smart-energy-planner-mini-card');
+assert.ok(Mini);
+const mini = new Mini();
+mini.setConfig({planner_entity:'sensor.planner', consumption_entity:'sensor.house', solar_entity:'sensor.sun'});
+mini._hass = {states:{'sensor.house':{attributes:{unit_of_measurement:'W'}}}};
+mini._history = {'sensor.house':[
+  {state:'1000', last_changed:'2026-08-07T10:00:00Z', attributes:{unit_of_measurement:'W'}},
+  {state:'3000', last_changed:'2026-08-07T10:15:00Z', attributes:{unit_of_measurement:'W'}},
+  {state:'unavailable', last_changed:'2026-08-07T10:30:00Z'}
+]};
+assert.equal(mini.recordedPower('sensor.house',new Date('2026-08-07T10:00:00Z'),new Date('2026-08-07T10:30:00Z')),2);
+assert.equal(mini.recordedPower('sensor.house',new Date('2026-08-07T10:30:00Z'),new Date('2026-08-07T11:00:00Z')),undefined);
+assert.equal(mini.forecastPower([{start:'2026-08-07T10:00:00Z',end:'2026-08-07T10:30:00Z',estimated_kwh:1}],new Date('2026-08-07T10:00:00Z'),new Date('2026-08-07T10:30:00Z')),2);
+const splitNow = new Date('2026-08-07T12:07:00');
+mini._history = {};
+const miniDay = mini.miniSlots({attributes:{}},splitNow);
+assert.equal(miniDay.start.getHours(),0);
+assert.equal(miniDay.end.getDate(),miniDay.start.getDate()+1);
+assert.ok(miniDay.slots.some(s => +s.end === +splitNow && !s.future));
+assert.ok(miniDay.slots.some(s => +s.start === +splitNow && s.future));
+assert.ok(miniDay.slots.every(s => s.demand === undefined), 'missing measurements and forecasts must remain missing');
+assert.ok(registered.get('smart-energy-planner-mini-card-editor'));
 assert.ok(Card, "card custom element should be registered");
 
 const card = new Card();

@@ -1597,10 +1597,217 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
   }
 }
 
+// Compact full-day view. Recorded power is averaged over the elapsed part of
+// each slot; forecasts never substitute for unavailable measurements.
+class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
+  static getConfigElement() { return document.createElement('smart-energy-planner-mini-card-editor'); }
+  formatTime(date) { return `${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`; }
+  setConfig(config) {
+    super.setConfig(config);
+    this._history = {};
+    this._historyKey = undefined;
+    this._historyGeneration = (this._historyGeneration || 0) + 1;
+    this._miniSelected = undefined;
+  }
+
+  connectedCallback() {
+    this._timer = setInterval(() => { this.loadHistory(); this.render(); }, 60000);
+    this.loadHistory();
+  }
+
+  disconnectedCallback() { clearInterval(this._timer); }
+
+  set hass(hass) { this._hass = hass; this.loadHistory(); this.render(); }
+
+  getCardSize() { return 2; }
+
+  async loadHistory() {
+    if (!this._hass || !this.config || this._loading) return;
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const ids = [this.config.consumption_entity, this.config.solar_entity, this.config.planner_entity].filter(Boolean);
+    const key = `${start.toISOString()}:${ids.join(',')}:${Math.floor(Date.now() / 60000)}`;
+    if (key === this._historyKey) return;
+    this._loading = true;
+    const generation = this._historyGeneration;
+    try {
+      const result = await this._hass.callApi('GET', `history/period/${encodeURIComponent(start.toISOString())}?filter_entity_id=${encodeURIComponent(ids.join(','))}&end_time=${encodeURIComponent(new Date().toISOString())}`);
+      if (generation === this._historyGeneration) {
+        this._history = Object.fromEntries(result.filter(rows => rows.length).map(rows => [rows[0].entity_id, rows]));
+        this._historyKey = key;
+        this._historyError = false;
+      }
+    } catch (_) { if (generation === this._historyGeneration) this._historyError = true; }
+    finally { this._loading = false; this.render(); }
+  }
+
+  recordedPower(entity, start, end) {
+    const rows = this._history[entity] || [];
+    let total = 0, covered = 0;
+    rows.forEach((row, i) => {
+      const a = Math.max(+start, +new Date(row.last_changed || row.last_updated));
+      const b = Math.min(+end, i + 1 < rows.length ? +new Date(rows[i + 1].last_changed || rows[i + 1].last_updated) : Date.now());
+      const value = this.parseNumber(row.state);
+      const unit = row.attributes?.unit_of_measurement || this._hass.states[entity]?.attributes?.unit_of_measurement;
+      if (b > a && value !== undefined && ['W', 'kW'].includes(unit)) {
+        total += value * (unit === 'W' ? 0.001 : 1) * (b - a); covered += b - a;
+      }
+    });
+    return covered ? total / covered : undefined;
+  }
+
+  forecastPower(raw, start, end, solar = false) {
+    let total = 0, covered = 0;
+    (raw || []).forEach(row => {
+      const a = +new Date(row.start), b = +new Date(row.end);
+      const overlap = Math.max(0, Math.min(+end, b) - Math.max(+start, a));
+      const kw = this.parseNumber(solar ? row.estimated_kw : undefined);
+      const kwh = this.parseNumber(row.estimated_kwh ?? row.forecast_kwh);
+      const value = kw ?? (b > a && kwh !== undefined ? kwh * 3600000 / (b - a) : undefined);
+      if (overlap && value !== undefined) { total += value * overlap; covered += overlap; }
+    });
+    return covered ? total / covered : undefined;
+  }
+
+  miniSlots(state, now) {
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 1);
+    const prices = this.extractAllPriceWindows(state, this._hass.states[this.config.price_entity]);
+    const schedule = this.modeBands(this.extractModeSchedule(state, start, end), start, end);
+    const slots = [];
+    for (let t = +start; t < +end; t += 900000) {
+      // Split the current column exactly at now, keeping history and forecast separate.
+      const boundaries = [t, Math.min(t + 900000, +end)];
+      if (+now > t && +now < boundaries[1]) boundaries.splice(1, 0, +now);
+      for (let i = 0; i < boundaries.length - 1; i++) {
+        const a = new Date(boundaries[i]), b = new Date(boundaries[i + 1]);
+        const future = +a >= +now;
+        const history = (this._history[this.config.planner_entity] || []).filter(r => +new Date(r.last_changed || r.last_updated) <= +a).at(-1);
+        const demand = state.attributes.estimated_hourly_home_demand || this._hass.states[this.config.demand_entity]?.attributes?.estimated_hourly_home_demand;
+        slots.push({start: a, end: b, future,
+          price: this.weightedAveragePrice(a, b, prices),
+          demand: future ? this.forecastPower(demand, a, b) : this.recordedPower(this.config.consumption_entity, a, b),
+          solar: future ? this.forecastPower(state.attributes.estimated_hourly_solar_forecast, a, b, true) : this.recordedPower(this.config.solar_entity, a, b),
+          mode: future ? schedule.find(s => s.start <= a && s.end > a)?.mode : history?.state});
+      }
+    }
+    return {start, end, slots};
+  }
+
+  render() {
+    if (!this._hass || !this.config) return;
+    const state = this._hass.states[this.config.planner_entity];
+    if (!state) { this.innerHTML = this.renderError('Planner niet gevonden'); return; }
+    const now = new Date(), {start, end, slots} = this.miniSlots(state, now);
+    const width = 480, left = 66, right = 470, top = 12, bottom = 126;
+    const x = t => left + (+t - +start) / (+end - +start) * (right - left);
+    const values = slots.map(s => s.price).filter(v => Number.isFinite(v));
+    let min = Math.min(0, ...values), max = Math.max(0.01, ...values);
+    const yp = v => bottom - (v - min) / (max - min) * (bottom - top) * .78;
+    const powerMax = Math.max(1, ...slots.flatMap(s => [s.demand, s.solar]).filter(Number.isFinite));
+    const ye = v => bottom - v / powerMax * (bottom - top);
+    const colors = {laden_van_net:'#448aff', laden_met_zonne_energie:'#ffc107', ontladen:'#43a047', ontladen_naar_net:'#ab47bc'};
+    // Hourly rounded price columns like the reference; the power curves retain
+    // their quarter-hour samples, and now still splits measured/forecast data.
+    const columns = [];
+    for (let t = +start; t < +end; t += 3600000) {
+      const a = new Date(t), b = new Date(Math.min(t + 3600000,+end));
+      const parts = slots.filter(s => s.start >= a && s.start < b);
+      const average = key => {
+        const valid = parts.filter(s => Number.isFinite(s[key]));
+        const duration = valid.reduce((sum,s) => sum + (+s.end - +s.start),0);
+        return duration ? valid.reduce((sum,s) => sum + s[key] * (+s.end - +s.start),0) / duration : undefined;
+      };
+      columns.push({start:a,end:b,price:average('price'),demand:average('demand'),solar:average('solar'),
+        future:a >= now, mixed:a < now && b > now,
+        mode:parts.find(s => s.start <= now && s.end > now)?.mode || parts[0]?.mode});
+    }
+    const hourlyPrices = columns.map(c => c.price).filter(Number.isFinite).sort((a,b) => a-b);
+    min = Math.min(0,...hourlyPrices); max = Math.max(.01,...hourlyPrices);
+    const lowThreshold = this.quantileThreshold(hourlyPrices,1/3,min);
+    const highThreshold = this.quantileThreshold(hourlyPrices,2/3,max);
+    const priceColor = price => {
+      const category = this.priceClass(price,lowThreshold,highThreshold);
+      return category === 'price-low' ? '#369858' : category === 'price-high' ? '#ae454c' : '#c5a52b';
+    };
+    const curve = key => {
+      const runs = []; let run = [], previous;
+      slots.forEach(s => {
+        if (!Number.isFinite(s[key])) { if (run.length) runs.push(run); run = []; previous = undefined; return; }
+        if (previous && +previous.end !== +s.start) { runs.push(run); run = []; }
+        if (!run.length) run.push({time:s.start,value:s[key]});
+        run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
+        previous = s;
+      });
+      if (run.length) { run.push({time:previous.end,value:previous[key]}); runs.push(run); }
+      return runs.map(points => this.linePath(points,x,ye)).join(' ');
+    };
+    const splitX = Math.max(left,Math.min(right,x(now)));
+    const clipId = this._miniClipId || (this._miniClipId = `mini-${Math.random().toString(36).slice(2)}`);
+    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:radial-gradient(ellipse at 90% 15%,#285b74 0%,transparent 55%),radial-gradient(ellipse at 12% 0%,#285787 0%,transparent 65%),#111d43;color:#e8eef8"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
+      <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath></defs>
+      ${slots.map(s => `<rect x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
+      <path d="M${left} ${yp(0)}H${right}" stroke="#bdd0e5" opacity=".3"/>
+      ${columns.map(s => s.price === undefined ? '' : ['past','future'].map(part => `<rect clip-path="url(#${clipId}-${part})" x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}" fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('')).join('')}
+      ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curve(key)}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
+      <path d="M${x(now)} 12V126" stroke="#e8eef8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+      <g fill="#e8eef8" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
+      ${this.valueTicks(min,max,4).map(v => `<text x="28" y="${yp(v)+3}" text-anchor="end">${this.formatNumber(v)}</text>`).join('')}
+      ${this.valueTicks(0,powerMax,4).map(v => `<text x="59" y="${ye(v)+3}" text-anchor="end" opacity=".75">${this.formatNumber(v)}</text>`).join('')}
+      <text x="28" y="9" text-anchor="end" font-size="7">€/kWh</text><text x="59" y="9" text-anchor="end" font-size="7">kW</text>
+      <text x="${left}" y="145">00:00</text><text x="${x(new Date(+start+(+end-+start)/2))}" y="145" text-anchor="middle">12:00</text><text x="${right}" y="145" text-anchor="end">23:59</text></g>
+      <g data-selected-column></g>
+      ${columns.map((s,i) => `<rect data-slot="${i}" x="${x(s.start)}" y="0" width="${x(s.end)-x(s.start)}" height="132" fill="transparent"/>`).join('')}
+      <g data-tooltip style="cursor:pointer"></g>
+      </svg>${this._historyError ? '<div style="font-size:10px;color:var(--secondary-text-color)">Meetgeschiedenis niet beschikbaar</div>' : ''}</ha-card>`;
+    const select = index => {
+      this._miniSelected = index;
+      const s = columns[index], pos = x(s.start), boxWidth = 172;
+      const column = s;
+      const columnX = x(column.start), columnEndX = x(column.end);
+      const bx = pos > (left+right)/2 ? Math.max(left,columnX-boxWidth-5) : Math.min(right-boxWidth,columnEndX+5);
+      const lines = [`${this.formatTime(s.start)}–${this.formatTime(s.end)} · ${s.mixed ? 'gemeten/verwacht' : s.future ? 'verwacht' : 'gemeten'}`,
+        `Prijs: ${this.formatSelectedValue(s.price)} €/kWh`, `Verbruik: ${this.formatSelectedValue(s.demand)} kW`, `Zon: ${this.formatSelectedValue(s.solar)} kW`, this.modeLabel(s.mode || 'onbekend')];
+      this.querySelector('[data-selected-column]').innerHTML = column.price === undefined ? '' : `<rect x="${columnX+1.5}" y="${Math.min(yp(0),yp(column.price))}" width="${Math.max(1,columnEndX-columnX-3)}" height="${Math.max(2,Math.abs(yp(0)-yp(column.price)))}" rx="5" fill="none" stroke="#fff" stroke-width="2"/>`;
+      this.querySelector('[data-tooltip]').innerHTML = `<rect x="${bx}" y="24" width="${boxWidth}" height="90" rx="5" fill="#15294a" fill-opacity=".72" stroke="#8fa9c4" stroke-opacity=".4"/>${lines.map((line,i) => `<text x="${bx+7}" y="${39+i*16}" font-size="10" fill="${i === 2 ? '#dc8be1' : i === 3 ? '#ffda37' : '#e8eef8'}">${this.escape(line)}</text>`).join('')}`;
+    };
+    this.querySelectorAll('[data-slot]').forEach(el => {
+      el.addEventListener('pointerdown', () => select(Number(el.dataset.slot)));
+    });
+    this.querySelector('[data-tooltip]').addEventListener('pointerdown', event => {
+      event.stopPropagation();
+      this._miniSelected = undefined;
+      this.querySelector('[data-tooltip]').innerHTML = '';
+      this.querySelector('[data-selected-column]').innerHTML = '';
+    });
+    if (this._miniSelected !== undefined && columns[this._miniSelected]) select(this._miniSelected);
+  }
+}
+
+class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
+  render() {
+    if (!this._hass || !this.config) return;
+    const fields = [['planner_entity','Planner'], ['consumption_entity','Werkelijk huisverbruik (W of kW)'], ['solar_entity','Werkelijk zonnevermogen (W of kW)'], ['price_entity','Stroomprijzen (optioneel)']];
+    this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) => `<ha-entity-picker data-key="${key}" label="${label}" allow-custom-entity></ha-entity-picker>`).join('')}<p>De grafiek toont vandaag van 00:00 tot 23:59, maximaal 150 px hoog. De vermogenssensoren moeten geschiedenis in Recorder hebben.</p></div>`;
+    this.querySelectorAll('ha-entity-picker').forEach(picker => {
+      picker.hass = this._hass;
+      picker.includeDomains = ['sensor'];
+      picker.value = this.config[picker.dataset.key] || '';
+      picker.addEventListener('value-changed', event => this.updateConfig({[picker.dataset.key]: event.detail.value}));
+    });
+  }
+  updateConfig(changes) {
+    this.config = {...this.config, ...changes};
+    this.dispatchEvent(new CustomEvent('config-changed', {bubbles:true, composed:true, detail:{config:this.config}}));
+  }
+}
+
+customElements.define('smart-energy-planner-mini-card-editor', SmartEnergyPlannerMiniCardEditor);
+customElements.define("smart-energy-planner-mini-card", SmartEnergyPlannerMiniCard);
 customElements.define("smart-energy-planner-card", SmartEnergyPlannerCard);
 customElements.define("smart-energy-planner-card-editor", SmartEnergyPlannerCardEditor);
 
 window.customCards = window.customCards || [];
+window.customCards.push({type: 'smart-energy-planner-mini-card', name: 'Smart Energy Planner Mini', description: 'Compacte daggrafiek voor NSPanel Pro (150 px).'});
 window.customCards.push({
   type: "smart-energy-planner-card",
   name: "Smart Energy Planner Card",

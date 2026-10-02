@@ -230,6 +230,37 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Gewenste minikaart NSPanel Pro — 2 oktober
+
+- Aparte compacte Lovelace-kaart, grafiek maximaal 150 px hoog; altijd vandaag
+  van 00:00 tot 23:59. Alleen stroomprijs, huisverbruik en zonneopbrengst.
+- Vóór nu uitsluitend gemeten verbruik en zon; na nu voorspellingen in dezelfde
+  kleuren, licht vervaagd (aanpassing op expliciet verzoek van 2 oktober).
+  Het lopende kwartier wordt bij nu gesplitst. Ontbrekende metingen blijven leeg.
+- Batterijmodus zichtbaar als achtergrondkleur. Selectie toont prijs, verbruik,
+  zon en modus naast de kolom, rechts in de linkerhelft en links in de rechterhelft.
+- Verbruiks- en zonnesensor selecteerbaar in de visuele kaartconfiguratie.
+- Aanvulling 2 oktober: uiterlijk volgens het aangeleverde voorbeeld en de
+  bestaande kaart: afgeronde prijskolommen met tijdgewogen uurgemiddelden,
+  groen/geel/rood volgens dezelfde prijsquantielen, gele zonlijn, paarse
+  stippellijn voor verbruik, dubbele schaal, Nu-lijn en witte selectierand.
+  Toekomst behoudt de kleuren met lagere dekking; batterijmodus blijft een subtiele achtergrond.
+- Tikken op de pop-up verbergt waarden en selectierand (vervangt het verzoek
+  om dezelfde kolom opnieuw aan te tikken). Tikken op een kolom toont de waarden.
+  Een update houdt een verborgen selectie verborgen. Pop-up behoudt de oorspronkelijke
+  donkere kleur en wordt alleen transparanter; dit vervangt het verzoek om lichter.
+- Lokaal geïmplementeerd als `custom:smart-energy-planner-mini-card` in de bestaande
+  frontendresource. Meetreeksen uit Recorder voor W/kW-sensoren, kwartiergemiddelden;
+  prognose-energie wordt naar gemiddeld kW omgerekend. Geen plannerwijziging.
+- Nog te controleren: weergave en aanraken op het echte NSPanel, beschikbare
+  meetgeschiedenis in Home Assistant. Voorbeeldgegevens zijn synthetisch.
+- Lokaal geslaagd: frontendtests en browsercontrole op 320 en 480 px, maximaal
+  150 px hoog, selectie links/rechts, sluiten via pop-up en behoud na updates.
+  Voorspellingen behouden dezelfde kleuren met lagere dekking.
+- De gebruiker heeft de laatste voorbeeldgrafiek op 2 oktober goedgekeurd en
+  expliciet opdracht gegeven deze minikaart naar main te committen en pushen.
+
+
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil
 
 - De aangeleverde 53%-meting is exact gereproduceerd, inclusief de pauzes

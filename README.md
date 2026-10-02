@@ -208,3 +208,27 @@ The integration includes its icon and logo in
 `custom_components/smart_energy_planner/brand/`. Home Assistant 2026.3 or newer
 loads these local brand images automatically. After updating, restart Home
 Assistant and refresh the browser or reopen the app if an old placeholder remains.
+
+## Compacte kaart voor NSPanel Pro
+
+Kies **Smart Energy Planner Mini** bij het toevoegen van een dashboardkaart.
+In de visuele configuratie kies je de planner, werkelijk huisverbruik en werkelijk
+zonnevermogen (sensoren in W of kW met Recorder-geschiedenis). Een aparte prijssensor
+is optioneel. De bestaande frontendresource bevat ook deze kaart.
+
+```yaml
+type: custom:smart-energy-planner-mini-card
+planner_entity: sensor.smart_energy_planner_battery_strategy
+consumption_entity: sensor.huisvermogen
+solar_entity: sensor.zonnevermogen
+```
+
+De grafiek is 150 px hoog en toont de lokale kalenderdag van 00:00 tot 23:59.
+Prijs staat in afgeronde kolommen met tijdgewogen uurgemiddelden en dezelfde
+groen/geel/rode prijsindeling als de gewone kaart. Verbruik is een paarse
+stippellijn en zon een gele lijn. Toekomstige waarden behouden dezelfde kleuren,
+maar zijn licht vervaagd. Tik op een kolom om de prijs (€/kWh), verbruik en zon (gemiddeld kW)
+te zien. De achtergrond toont de batterijmodus: blauw voor netladen, geel voor
+zonneladen, groen voor ontladen en paars voor export. Ontbrekende meetgegevens
+blijven leeg. De meetgeschiedenis wordt iedere minuut opgehaald.
+Tik op de transparante pop-up om het waardenvak en de selectierand te verbergen.
