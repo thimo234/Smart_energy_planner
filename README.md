@@ -226,8 +226,10 @@ solar_entity: sensor.zonnevermogen
 De grafiek is 150 px hoog en toont de lokale kalenderdag van 00:00 tot 23:59.
 Prijs staat in afgeronde kolommen met tijdgewogen uurgemiddelden en dezelfde
 groen/geel/rode prijsindeling als de gewone kaart. Verbruik is een paarse
-stippellijn en zon een gele lijn. Toekomstige waarden behouden dezelfde kleuren,
-maar zijn licht vervaagd. Tik op een kolom om de prijs (€/kWh), verbruik en zon (gemiddeld kW)
+stippellijn en zon een gele lijn. Verbruik en zon gebruiken uurgemiddelden met
+vloeiende lijnen. De linker schalen zijn weggelaten; eenheden en waarden staan
+in het detailvenster. Toekomstige waarden behouden dezelfde kleuren, maar zijn
+licht vervaagd. Tik op een kolom om de prijs (€/kWh), verbruik en zon (gemiddeld kW)
 te zien. De achtergrond toont de batterijmodus: blauw voor netladen, geel voor
 zonneladen, groen voor ontladen en paars voor export. Ontbrekende meetgegevens
 blijven leeg. De kaart en meetgeschiedenis verversen maximaal eens per vijf minuten,

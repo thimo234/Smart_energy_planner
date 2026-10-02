@@ -1774,31 +1774,48 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     return {start, end, slots};
   }
 
+  miniHourlyPower(state, now, start, end) {
+    const points = [];
+    const demand = state.attributes.estimated_hourly_home_demand || this._hass.states[this.config.demand_entity]?.attributes?.estimated_hourly_home_demand;
+    for (let t=+start;t<+end;t+=3600000) {
+      const boundaries = [t,Math.min(t+3600000,+end)];
+      if (+now>t && +now<boundaries[1]) boundaries.splice(1,0,+now);
+      for (let i=0;i<boundaries.length-1;i++) {
+        const a = new Date(boundaries[i]), b = new Date(boundaries[i+1]), future = a>=now;
+        points.push({start:a,end:b,future,
+          demand:future ? this.forecastPower(demand,a,b) : this.recordedPower(this.config.consumption_entity,a,b),
+          solar:future ? this.forecastPower(state.attributes.estimated_hourly_solar_forecast,a,b,true) : this.recordedPower(this.config.solar_entity,a,b)});
+      }
+    }
+    return points;
+  }
+
   render() {
     if (!this._hass || !this.config) return;
     const state = this._hass.states[this.config.planner_entity];
     if (!state) { this.innerHTML = this.renderError('Planner niet gevonden'); return; }
     const now = new Date(), {start, end, slots} = this.miniSlots(state, now);
-    const width = 480, left = 66, right = 470, top = 24, bottom = 126;
+    const left = 8, right = 470, top = 12, bottom = 126;
     const x = t => left + (+t - +start) / (+end - +start) * (right - left);
     const values = slots.map(s => s.price).filter(v => Number.isFinite(v));
     let min = Math.min(0, ...values), max = Math.max(0.01, ...values);
     const yp = v => bottom - (v - min) / (max - min) * (bottom - top) * .78;
-    const powerMax = Math.max(1, ...slots.flatMap(s => [s.demand, s.solar]).filter(Number.isFinite));
+    const hourlyPower = this.miniHourlyPower(state,now,start,end);
+    const powerMax = Math.max(1, ...hourlyPower.flatMap(s => [s.demand,s.solar]).filter(Number.isFinite));
     const ye = v => bottom - v / powerMax * (bottom - top);
     const colors = {laden_van_net:'#448aff', laden_met_zonne_energie:'#ffc107', ontladen:'#43a047', ontladen_naar_net:'#ab47bc'};
-    // Hourly rounded price columns like the reference; the power curves retain
-    // their quarter-hour samples, and now still splits measured/forecast data.
+    // All three series use hourly averages; the current hour is split at now.
     const columns = [];
     for (let t = +start; t < +end; t += 3600000) {
       const a = new Date(t), b = new Date(Math.min(t + 3600000,+end));
       const parts = slots.filter(s => s.start >= a && s.start < b);
-      const average = key => {
-        const valid = parts.filter(s => Number.isFinite(s[key]));
+      const energy = hourlyPower.filter(s => s.start>=a && s.start<b);
+      const average = (key,items=parts) => {
+        const valid = items.filter(s => Number.isFinite(s[key]));
         const duration = valid.reduce((sum,s) => sum + (+s.end - +s.start),0);
         return duration ? valid.reduce((sum,s) => sum + s[key] * (+s.end - +s.start),0) / duration : undefined;
       };
-      columns.push({start:a,end:b,price:average('price'),demand:average('demand'),solar:average('solar'),
+      columns.push({start:a,end:b,price:average('price'),demand:average('demand',energy),solar:average('solar',energy),
         future:a >= now, mixed:a < now && b > now,
         mode:parts.find(s => s.start <= now && s.end > now)?.mode || parts[0]?.mode});
     }
@@ -1812,16 +1829,18 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     };
     const curve = key => {
       const runs = []; let run = [], previous;
-      slots.forEach(s => {
-        if (!Number.isFinite(s[key])) { if (run.length) runs.push(run); run = []; previous = undefined; return; }
-        if (previous && +previous.end !== +s.start) { runs.push(run); run = []; }
-        // Keep the edges of flat spans while interpolating changes with cubics.
+      const finish = () => {
+        if (run.length) { run.push({time:previous.end,value:previous[key]}); runs.push(run); }
+        run = []; previous = undefined;
+      };
+      hourlyPower.forEach(s => {
+        if (!Number.isFinite(s[key])) { finish(); return; }
+        if (previous && (+previous.end !== +s.start || previous.future !== s.future)) finish();
         if (!run.length) run.push({time:s.start,value:s[key]});
-        if (previous && previous[key] !== s[key]) run.push({time:new Date((+previous.start + +previous.end)/2),value:previous[key]});
-        if (!previous || previous[key] !== s[key]) run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
+        run.push({time:new Date((+s.start + +s.end)/2),value:s[key]});
         previous = s;
       });
-      if (run.length) { run.push({time:previous.end,value:previous[key]}); runs.push(run); }
+      finish();
       return runs.map(points => this.smoothMiniPath(points,x,ye)).join(' ');
     };
     const splitX = Math.max(left,Math.min(right,x(now)));
@@ -1841,9 +1860,6 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
       <path d="M${x(now)} 12V126" stroke="var(--primary-text-color,#222)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
       <g fill="var(--primary-text-color,#222)" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
-      ${this.valueTicks(min,max,4).map(v => `<text x="28" y="${yp(v)+3}" text-anchor="end">${Number(v).toFixed(1)}</text>`).join('')}
-      ${this.valueTicks(0,powerMax,4).map(v => `<text x="59" y="${ye(v)+3}" text-anchor="end" opacity=".75">${Number(v).toFixed(1)}</text>`).join('')}
-      <text x="28" y="9" text-anchor="end" font-size="7">€/kWh</text><text x="59" y="9" text-anchor="end" font-size="7">kW</text>
       <text x="${left}" y="145">00:00</text><text x="${x(new Date(+start+(+end-+start)/2))}" y="145" text-anchor="middle">12:00</text><text x="${right}" y="145" text-anchor="end">23:59</text></g>
       <g data-selected-column></g>
       ${columns.map((s,i) => `<rect data-slot="${i}" x="${x(s.start)}" y="0" width="${x(s.end)-x(s.start)}" height="132" fill="transparent"/>`).join('')}

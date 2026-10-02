@@ -328,6 +328,14 @@ geverifieerd is. Lees ook de open punten onderaan.
 - De gebruiker heeft de grafiek met echte verbruikshistorie goedgekeurd en
   opdracht gegeven te pushen, na afronden van beide schalen links op één decimaal.
   De detailwaarden blijven op twee decimalen; alleen schaaltekst verandert.
+- Nieuw verzoek: beide schalen links volledig verwijderen. Verbruik en zon als
+  uurgemiddelden tonen, met vloeiende kubische interpolatie tussen uurpunten.
+  Het huidige uur behoudt aparte gemeten en voorspelde delen op de Nu-grens.
+  Detailwaarden gebruiken dezelfde uurgemiddelden. Ontbrekende data blijft leeg;
+  energie-inhoud en vijfminutenverversing blijven behouden. Frontend- en
+  browsercontroles slagen, inclusief energiebehoud met de aangeleverde CSV.
+  De gebruiker heeft deze grafiek op 2 oktober goedgekeurd en opdracht gegeven
+  naar main te pushen. Live controle na installatie staat nog open.
 
 
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil

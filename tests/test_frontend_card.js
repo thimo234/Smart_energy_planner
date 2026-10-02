@@ -77,6 +77,12 @@ const counterAt = time => {
 };
 const calculatedEnergy = actualQuarters.reduce((sum,q)=>sum+q.power*q.duration/3600000,0);
 assert.ok(Math.abs(calculatedEnergy-(counterAt(actualEnd)-counterAt(actualStart)))<1e-8, 'displayed energy must equal the independently interpolated start/end counter difference');
+mini.config.consumption_entity = actualConsumption.entity_id;
+const hourlyActual = mini.miniHourlyPower({attributes:{}},new Date(actualEnd),new Date(actualStart),new Date(actualStart+86400000));
+assert.equal(hourlyActual.length,25, 'current hour must retain separate measured and forecast parts');
+assert.ok(hourlyActual.every(p => p.future ? p.demand === undefined : Number.isFinite(p.demand)), 'missing forecasts must not substitute for recorded values');
+const hourlyEnergy = hourlyActual.filter(p => !p.future).reduce((sum,p)=>sum+p.demand*(+p.end-+p.start)/3600000,0);
+assert.ok(Math.abs(hourlyEnergy-calculatedEnergy)<1e-8, 'hourly aggregation must conserve the actual CSV energy');
 const duplicateStart = +new Date('2026-10-01T16:30:00Z'), duplicateEnd = duplicateStart+900000;
 const duplicatePower = mini.recordedPower(actualConsumption.entity_id,new Date(duplicateStart),new Date(duplicateEnd));
 assert.ok(Math.abs(duplicatePower/4-(counterAt(duplicateEnd)-counterAt(duplicateStart)))<1e-8, 'same-timestamp corrections in the actual CSV must not create thousands of kWh');

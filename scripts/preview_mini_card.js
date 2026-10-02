@@ -104,7 +104,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
   await page.screenshot({path:path.join(output,'mini-right.png')});
   const secondX=await page.locator('[data-tooltip] rect').getAttribute('x');
-  if(+firstX<=167 || +secondX>=385) throw Error('Tooltip side selection failed');
+  if(+firstX<=123 || +secondX>=373) throw Error('Tooltip side selection failed');
   if(await page.locator('[data-slot]').count() !== 24) throw Error('Expected hourly columns');
   if(!((await page.locator('[data-tooltip]').textContent()).includes('19:00–20:00'))) throw Error('Expected hourly selection');
   await page.locator('[data-slot="19"]').dispatchEvent('pointerdown');
@@ -133,11 +133,8 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   fs.writeFileSync(path.join(output,'preview.html'),html);
   await page.setViewportSize({width:320,height:210});
   await page.screenshot({path:path.join(output,'mini-320.png')});
-  const layout = await page.locator('svg').evaluate(svg => {
-    const label = [...svg.querySelectorAll('text')].find(el => el.textContent === 'kW').getBoundingClientRect();
-    return [...svg.querySelectorAll('text')].filter(el => el.getAttribute('x') === '59' && el.textContent !== 'kW').every(el => el.getBoundingClientRect().top > label.bottom);
-  });
-  if (!layout) throw Error('kW label overlaps power scale');
+  const layout = await page.locator('svg').evaluate(svg => ![...svg.querySelectorAll('text')].some(el => ['kW','€/kWh'].includes(el.textContent)));
+  if (!layout) throw Error('Left scales must be absent');
   const editorCheck = await page.evaluate(() => {
     // A focused picker stub reproduces the editor lifecycle during HA updates.
     // Actual HA picker behavior still needs installation verification.
