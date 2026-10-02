@@ -1607,17 +1607,44 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     this._history = {};
     this._historyKey = undefined;
     this._historyGeneration = (this._historyGeneration || 0) + 1;
+    this._powerCache = new Map();
     this._miniSelected = undefined;
+    if (this._miniConnected) this.refreshMini();
   }
 
   connectedCallback() {
-    this._timer = setInterval(() => { this.loadHistory(); this.render(); }, 60000);
-    this.loadHistory();
+    this._miniConnected = true;
+    clearInterval(this._timer);
+    this._timer = setInterval(() => this.refreshMini(), 300000);
+    this._visibilityHandler = () => { if (!document.hidden) this.refreshMini(); };
+    document.addEventListener('visibilitychange', this._visibilityHandler);
+    this.refreshMini();
   }
 
-  disconnectedCallback() { clearInterval(this._timer); }
+  disconnectedCallback() {
+    this._miniConnected = false;
+    clearInterval(this._timer);
+    document.removeEventListener('visibilitychange', this._visibilityHandler);
+  }
 
-  set hass(hass) { this._hass = hass; this.loadHistory(); this.render(); }
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    if (first && this._miniConnected) this.refreshMini();
+  }
+
+  async refreshMini() {
+    if (!this._miniConnected || document.hidden || !this._hass || !this.config || this._refreshing) return;
+    if (this._lastMiniRender && Date.now() - this._lastMiniRender < 300000 && this._historyKey) return;
+    this._refreshing = true;
+    try {
+      await this.loadHistory();
+      if (this._miniConnected && !document.hidden) {
+        this.render();
+        this._lastMiniRender = Date.now();
+      }
+    } finally { this._refreshing = false; }
+  }
 
   getCardSize() { return 2; }
 
@@ -1625,33 +1652,45 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     if (!this._hass || !this.config || this._loading) return;
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const ids = [this.config.consumption_entity, this.config.solar_entity, this.config.planner_entity].filter(Boolean);
-    const key = `${start.toISOString()}:${ids.join(',')}:${Math.floor(Date.now() / 60000)}`;
-    if (key === this._historyKey) return;
+    const key = `${start.toISOString()}:${ids.join(',')}`;
+    if (key === this._historyKey && Date.now() - this._lastHistoryRequest < 300000) return;
+    this._historyKey = key;
+    this._lastHistoryRequest = Date.now();
     this._loading = true;
     const generation = this._historyGeneration;
     try {
-      const result = await this._hass.callApi('GET', `history/period/${encodeURIComponent(start.toISOString())}?filter_entity_id=${encodeURIComponent(ids.join(','))}&end_time=${encodeURIComponent(new Date().toISOString())}`);
+      const result = await this._hass.callApi('GET', `history/period/${encodeURIComponent(start.toISOString())}?filter_entity_id=${encodeURIComponent(ids.join(','))}&end_time=${encodeURIComponent(new Date().toISOString())}&minimal_response`);
       if (generation === this._historyGeneration) {
         this._history = Object.fromEntries(result.filter(rows => rows.length).map(rows => [rows[0].entity_id, rows]));
         this._historyKey = key;
         this._historyError = false;
       }
     } catch (_) { if (generation === this._historyGeneration) this._historyError = true; }
-    finally { this._loading = false; this.render(); }
+    finally { this._loading = false; }
   }
 
   recordedPower(entity, start, end) {
     const rows = this._history[entity] || [];
+    this._powerCache ||= new Map();
+    let cache = this._powerCache.get(entity);
+    const fallbackUnit = this._hass.states[entity]?.attributes?.unit_of_measurement;
+    if (!cache || cache.rows !== rows || cache.unit !== fallbackUnit) {
+      cache = {rows,unit:fallbackUnit,intervals:rows.map((row,i) => {
+        const value = this.parseNumber(row.state), unit = row.attributes?.unit_of_measurement || fallbackUnit;
+        return {start:+new Date(row.last_changed || row.last_updated),
+          end:i + 1 < rows.length ? +new Date(rows[i+1].last_changed || rows[i+1].last_updated) : Infinity,
+          value:value !== undefined && ['W','kW'].includes(unit) ? value * (unit === 'W' ? .001 : 1) : undefined};
+      })};
+      this._powerCache.set(entity,cache);
+    }
     let total = 0, covered = 0;
-    rows.forEach((row, i) => {
-      const a = Math.max(+start, +new Date(row.last_changed || row.last_updated));
-      const b = Math.min(+end, i + 1 < rows.length ? +new Date(rows[i + 1].last_changed || rows[i + 1].last_updated) : Date.now());
-      const value = this.parseNumber(row.state);
-      const unit = row.attributes?.unit_of_measurement || this._hass.states[entity]?.attributes?.unit_of_measurement;
-      if (b > a && value !== undefined && ['W', 'kW'].includes(unit)) {
-        total += value * (unit === 'W' ? 0.001 : 1) * (b - a); covered += b - a;
+    for (const row of cache.intervals) {
+      if (row.start >= +end) break;
+      const a = Math.max(+start,row.start), b = Math.min(+end,row.end,Date.now());
+      if (b > a && row.value !== undefined) {
+        total += row.value * (b - a); covered += b - a;
       }
-    });
+    }
     return covered ? total / covered : undefined;
   }
 
@@ -1698,7 +1737,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     const state = this._hass.states[this.config.planner_entity];
     if (!state) { this.innerHTML = this.renderError('Planner niet gevonden'); return; }
     const now = new Date(), {start, end, slots} = this.miniSlots(state, now);
-    const width = 480, left = 66, right = 470, top = 12, bottom = 126;
+    const width = 480, left = 66, right = 470, top = 24, bottom = 126;
     const x = t => left + (+t - +start) / (+end - +start) * (right - left);
     const values = slots.map(s => s.price).filter(v => Number.isFinite(v));
     let min = Math.min(0, ...values), max = Math.max(0.01, ...values);
@@ -1743,14 +1782,21 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
     };
     const splitX = Math.max(left,Math.min(right,x(now)));
     const clipId = this._miniClipId || (this._miniClipId = `mini-${Math.random().toString(36).slice(2)}`);
-    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:radial-gradient(ellipse at 90% 15%,#285b74 0%,transparent 55%),radial-gradient(ellipse at 12% 0%,#285787 0%,transparent 65%),#111d43;color:#e8eef8"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
+    const backgrounds = [];
+    slots.forEach(slot => {
+      const last = backgrounds.at(-1);
+      if (last && last.mode === slot.mode && +last.end === +slot.start) last.end = slot.end;
+      else backgrounds.push({start:slot.start,end:slot.end,mode:slot.mode});
+    });
+    const curvePaths = {demand:curve('demand'),solar:curve('solar')};
+    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;color:var(--primary-text-color,#222)"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
       <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath></defs>
-      ${slots.map(s => `<rect x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
-      <path d="M${left} ${yp(0)}H${right}" stroke="#bdd0e5" opacity=".3"/>
+      ${backgrounds.map(s => `<rect x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
+      <path d="M${left} ${yp(0)}H${right}" stroke="var(--primary-text-color,#222)" opacity=".3"/>
       ${columns.map(s => s.price === undefined ? '' : ['past','future'].map(part => `<rect clip-path="url(#${clipId}-${part})" x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}" fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('')).join('')}
-      ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curve(key)}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
-      <path d="M${x(now)} 12V126" stroke="#e8eef8" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
-      <g fill="#e8eef8" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
+      ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="${part === 'future' ? '.6' : '1'}"/>`).join('')).join('')}
+      <path d="M${x(now)} 12V126" stroke="var(--primary-text-color,#222)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+      <g fill="var(--primary-text-color,#222)" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
       ${this.valueTicks(min,max,4).map(v => `<text x="28" y="${yp(v)+3}" text-anchor="end">${this.formatNumber(v)}</text>`).join('')}
       ${this.valueTicks(0,powerMax,4).map(v => `<text x="59" y="${ye(v)+3}" text-anchor="end" opacity=".75">${this.formatNumber(v)}</text>`).join('')}
       <text x="28" y="9" text-anchor="end" font-size="7">€/kWh</text><text x="59" y="9" text-anchor="end" font-size="7">kW</text>
@@ -1787,12 +1833,23 @@ class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
   render() {
     if (!this._hass || !this.config) return;
     const fields = [['planner_entity','Planner'], ['consumption_entity','Werkelijk huisverbruik (W of kW)'], ['solar_entity','Werkelijk zonnevermogen (W of kW)'], ['price_entity','Stroomprijzen (optioneel)']];
-    this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) => `<ha-entity-picker data-key="${key}" label="${label}" allow-custom-entity></ha-entity-picker>`).join('')}<p>De grafiek toont vandaag van 00:00 tot 23:59, maximaal 150 px hoog. De vermogenssensoren moeten geschiedenis in Recorder hebben.</p></div>`;
+    // Home Assistant replaces hass frequently, also while a picker is open.
+    // Keep the elements mounted so updates preserve the search and focus.
+    if (!this.querySelector('ha-entity-picker')) {
+      this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) => `<ha-entity-picker data-key="${key}" label="${label}" allow-custom-entity></ha-entity-picker>`).join('')}<p>De grafiek toont vandaag van 00:00 tot 23:59, maximaal 150 px hoog. De vermogenssensoren moeten geschiedenis in Recorder hebben.</p></div>`;
+      this.querySelectorAll('ha-entity-picker').forEach(picker => {
+        picker.includeDomains = ['sensor'];
+        picker.allowCustomEntity = true;
+        picker.addEventListener('value-changed', event => {
+          event.stopPropagation();
+          this.updateConfig({[picker.dataset.key]: event.detail.value});
+        });
+      });
+    }
     this.querySelectorAll('ha-entity-picker').forEach(picker => {
       picker.hass = this._hass;
-      picker.includeDomains = ['sensor'];
-      picker.value = this.config[picker.dataset.key] || '';
-      picker.addEventListener('value-changed', event => this.updateConfig({[picker.dataset.key]: event.detail.value}));
+      const value = this.config[picker.dataset.key] || '';
+      if (picker.value !== value) picker.value = value;
     });
   }
   updateConfig(changes) {

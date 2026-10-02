@@ -66,6 +66,65 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   fs.writeFileSync(path.join(output,'preview.html'),html);
   await page.setViewportSize({width:320,height:210});
   await page.screenshot({path:path.join(output,'mini-320.png')});
-  console.log('Preview and left/right selection passed at 480 and 320 px');
+  const layout = await page.locator('svg').evaluate(svg => {
+    const label = [...svg.querySelectorAll('text')].find(el => el.textContent === 'kW').getBoundingClientRect();
+    return [...svg.querySelectorAll('text')].filter(el => el.getAttribute('x') === '59' && el.textContent !== 'kW').every(el => el.getBoundingClientRect().top > label.bottom);
+  });
+  if (!layout) throw Error('kW label overlaps power scale');
+  const editorCheck = await page.evaluate(() => {
+    // A focused picker stub reproduces the editor lifecycle during HA updates.
+    // Actual HA picker behavior still needs installation verification.
+    customElements.define('ha-entity-picker', class extends HTMLElement {
+      connectedCallback() {
+        if (!this.shadowRoot) this.attachShadow({mode:'open'}).innerHTML = '<input aria-label="Zoeken">';
+      }
+    });
+    const editor = document.createElement('smart-energy-planner-mini-card-editor');
+    document.body.append(editor);
+    const config = {planner_entity:'sensor.planner'};
+    editor.setConfig(config); editor.hass = {states:{}};
+    const picker = editor.querySelector('[data-key="consumption_entity"]');
+    const input = picker.shadowRoot.querySelector('input');
+    input.focus(); input.value = 'huis';
+    for (let i=0;i<5;i++) { editor.hass = {states:{}}; editor.setConfig({...config}); }
+    const stable = editor.querySelector('[data-key="consumption_entity"]') === picker && picker.shadowRoot.activeElement === input && input.value === 'huis';
+    let events = 0;
+    editor.addEventListener('config-changed', () => { events++; editor.setConfig({...editor.config}); });
+    picker.value = 'sensor.house';
+    picker.dispatchEvent(new CustomEvent('value-changed',{bubbles:true,detail:{value:'sensor.house'}}));
+    const solar = editor.querySelector('[data-key="solar_entity"]');
+    solar.value = 'sensor.sun';
+    solar.dispatchEvent(new CustomEvent('value-changed',{bubbles:true,detail:{value:'sensor.sun'}}));
+    const result = stable && events === 2 && editor.config.consumption_entity === 'sensor.house' && editor.config.solar_entity === 'sensor.sun';
+    editor.remove(); return result;
+  });
+  if (!editorCheck) throw Error('Editor failed focus/search/selection persistence');
+  const refreshCheck = await page.evaluate(async () => {
+    const originalNow = Date.now;
+    let clock = originalNow(), requests = 0, renders = 0;
+    Date.now = () => clock;
+    const card = document.createElement('smart-energy-planner-mini-card');
+    card.setConfig({planner_entity:'sensor.planner'});
+    card.render = () => { renders++; };
+    const hass = {states:{},callApi:async (_method,url) => {
+      if (!url.includes('minimal_response')) throw Error('History payload is not compact');
+      requests++; return [];
+    }};
+    card._hass = hass; document.body.append(card);
+    await new Promise(resolve => setTimeout(resolve,0));
+    for (let i=0;i<500;i++) card.hass = {...hass};
+    await card.refreshMini();
+    const quiet = requests === 1 && renders === 1;
+    clock += 299999; await card.refreshMini();
+    const throttled = requests === 1 && renders === 1;
+    clock++; await card.refreshMini();
+    const periodic = requests === 2 && renders === 2;
+    card.remove(); clock += 300000; await card.refreshMini();
+    const stopped = requests === 2 && renders === 2;
+    Date.now = originalNow;
+    return quiet && throttled && periodic && stopped;
+  });
+  if (!refreshCheck) throw Error('Mini refresh throttling failed');
+  console.log('Preview, selection, scale spacing and persistent editor checks passed');
   await browser.close();
 })().catch(error=>{console.error(error);process.exitCode=1;});

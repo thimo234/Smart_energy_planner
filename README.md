@@ -230,5 +230,7 @@ stippellijn en zon een gele lijn. Toekomstige waarden behouden dezelfde kleuren,
 maar zijn licht vervaagd. Tik op een kolom om de prijs (€/kWh), verbruik en zon (gemiddeld kW)
 te zien. De achtergrond toont de batterijmodus: blauw voor netladen, geel voor
 zonneladen, groen voor ontladen en paars voor export. Ontbrekende meetgegevens
-blijven leeg. De meetgeschiedenis wordt iedere minuut opgehaald.
+blijven leeg. De kaart en meetgeschiedenis verversen maximaal eens per vijf minuten,
+en pauzeren als het dashboard verborgen is. Nu en gegevens kunnen daardoor vijf
+minuten achterlopen; selectie reageert direct. De kaartachtergrond is transparant.
 Tik op de transparante pop-up om het waardenvak en de selectierand te verbergen.

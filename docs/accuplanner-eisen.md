@@ -259,6 +259,24 @@ geverifieerd is. Lees ook de open punten onderaan.
   Voorspellingen behouden dezelfde kleuren met lagere dekking.
 - De gebruiker heeft de laatste voorbeeldgrafiek op 2 oktober goedgekeurd en
   expliciet opdracht gegeven deze minikaart naar main te committen en pushen.
+- Nieuwe correcties gevraagd na installatie: geen decoratieve kaartachtergrond;
+  transparant met behoud van modusbanden. Schaaltekst volgt het dashboardthema.
+  Eenheden mogen niet door de schaalwaarden staan. De entiteitskiezer moet bij
+  Home Assistant-updates open blijven en de ingevoerde zoektekst behouden.
+- Lokaal aangepast: blijvende picker-elementen in de mini-editor en extra ruimte
+  boven de schalen. Live controle staat open.
+- Nieuwe eis: lichte kaart voor het trage NSPanel; niet vaak verversen.
+  Lokaal geïmplementeerd: maximaal één automatische verversing per vijf minuten,
+  geen hertekenen bij losse hass-updates, pauze bij verborgen/losgekoppeld dashboard.
+  Selectie reageert direct. Hierdoor kunnen Nu en gegevens maximaal vijf minuten
+  achterlopen. Meetgeschiedenis gebruikt minimal_response en geparste meetwaarden
+  worden gecachet. Aaneengesloten modusbanden delen één SVG-element.
+- Lokaal gecontroleerd: frontendtests en browsercontrole van schaalruimte,
+  behoud van picker-focus/zoektekst met een testpicker, en 500 hass-updates zonder
+  extra hertekenen of geschiedenisaanvragen. Vijfminutenverversing en stoppen bij
+  loskoppelen gecontroleerd. De echte HA-kiezer en NSPanel blijven live te testen.
+- De gebruiker heeft de gecorrigeerde grafiek en lichte verversing op 2 oktober
+  goedgekeurd en opdracht gegeven deze correcties naar main te pushen.
 
 
 ### Goedgekeurde correctie 27 september: doorladen binnen 0,5 cent prijsverschil
