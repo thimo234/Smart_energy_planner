@@ -230,6 +230,28 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Minikaart: zichtbare moduskleuren en historisch SOC — 5 oktober
+
+- Nieuwe wens: achtergrondkleuren van de accuplanning beter onderscheidbaar;
+  historische details moeten het accupercentage tonen in plaats van planner score.
+- Lokaal aangepast: gekleurde modusbanden 28% dekking (was 12%), neutrale
+  achtergrond 8%. Afgeronde hoeken en transparante kaart blijven behouden.
+- Verduidelijking: moduskleuren horen uitsluitend in de achtergrond; prijsstaafjes
+  mogen niet mee verkleuren. Elke prijsstaaf heeft nu een ondoorzichtige basis in
+  dashboard-kaartkleur, met daarboven de eigen prijskleur en bestaande dekking
+  voor historie/voorspelling. Dit voorkomt kleurmenging met de accuplanning en
+  behoudt de vervaagde toekomstkleuren, zonder nieuwe CSS-browservereisten.
+- Visuele configuratie heeft `soc_entity` (Accupercentage %). Recorder-geschiedenis
+  van die sensor wordt in dezelfde vijfminutenaanvraag meegenomen. Historische
+  details tonen de laatste geregistreerde stand op of vóór het begin van het uur,
+  met expliciet tijdstip. Geen historisch SOC beschikbaar betekent een streepje;
+  niet de huidige stand, planner score of een geschat percentage.
+- Frontend- en browsercontroles slagen: historisch SOC, ontbrekende/ongeldige
+  standen, kleurweergave op licht/donker thema en behoud van vijfminutenverversing.
+  Voorbeeld gebruikt echte verbruikshistorie/prijzen, synthetische zon/prognose/SOC.
+  De gebruiker heeft de gecorrigeerde grafiek op 5 oktober goedgekeurd en
+  opdracht gegeven naar main te pushen. Live controle na installatie staat open.
+
 ### Gewenste minikaart NSPanel Pro — 2 oktober
 
 - Aparte compacte Lovelace-kaart, grafiek maximaal 150 px hoog; altijd vandaag

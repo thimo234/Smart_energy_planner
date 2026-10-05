@@ -22,6 +22,16 @@ const Mini = registered.get('smart-energy-planner-mini-card');
 assert.ok(Mini);
 const mini = new Mini();
 mini.setConfig({planner_entity:'sensor.planner', consumption_entity:'sensor.house', solar_entity:'sensor.sun'});
+mini.config.soc_entity = 'sensor.soc';
+mini._history['sensor.soc'] = [
+  {last_changed:'2026-08-07T10:00:00Z',state:'63'},
+  {last_changed:'2026-08-07T11:00:00Z',state:'52'},
+  {last_changed:'2026-08-07T12:00:00Z',state:'unavailable'},
+];
+assert.equal(mini.historicalSoc(new Date('2026-08-07T09:00:00Z')),undefined);
+assert.equal(mini.historicalSoc(new Date('2026-08-07T10:30:00Z')),63);
+assert.equal(mini.historicalSoc(new Date('2026-08-07T11:00:00Z')),52);
+assert.equal(mini.historicalSoc(new Date('2026-08-07T12:30:00Z')),undefined, 'unavailable SOC must not be replaced by a current or older valid value');
 mini._hass = {states:{'sensor.house':{attributes:{unit_of_measurement:'W'}}}};
 mini._history = {'sensor.house':[
   {state:'1000', last_changed:'2026-08-07T10:00:00Z', attributes:{unit_of_measurement:'W'}},

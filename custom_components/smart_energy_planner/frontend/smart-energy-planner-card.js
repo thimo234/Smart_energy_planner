@@ -1651,7 +1651,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
   async loadHistory() {
     if (!this._hass || !this.config || this._loading) return;
     const start = new Date(); start.setHours(0, 0, 0, 0);
-    const ids = [this.config.consumption_entity, this.config.solar_entity, this.config.planner_entity].filter(Boolean);
+    const ids = [this.config.consumption_entity, this.config.solar_entity, this.config.planner_entity, this.config.soc_entity].filter(Boolean);
     const key = `${start.toISOString()}:${ids.join(',')}`;
     if (key === this._historyKey && Date.now() - this._lastHistoryRequest < 300000) return;
     this._historyKey = key;
@@ -1669,6 +1669,18 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       }
     } catch (_) { if (generation === this._historyGeneration) this._historyError = true; }
     finally { this._loading = false; }
+  }
+
+  historicalSoc(time) {
+    if (!this.config.soc_entity) return undefined;
+    const rows = this._history[this.config.soc_entity] || [];
+    let latest;
+    for (const row of rows) {
+      const at = +new Date(row.last_changed || row.last_updated);
+      if (at <= +time && (!latest || at >= latest.at)) latest = {at,row};
+    }
+    const value = this.parseNumber(latest?.row.state);
+    return value !== undefined && value >= 0 && value <= 100 ? value : undefined;
   }
 
   recordedPower(entity, start, end) {
@@ -1864,9 +1876,15 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath>
       <linearGradient id="${clipId}-fade" gradientUnits="userSpaceOnUse" x1="${splitX}" x2="${x(new Date(+now+1800000))}"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity=".6"/></linearGradient>
       <mask id="${clipId}-blend" maskUnits="userSpaceOnUse" x="0" y="0" width="480" height="150"><rect width="480" height="150" fill="url(#${clipId}-fade)"/></mask></defs>
-      ${backgrounds.map(s => `<rect data-mode-band rx="3" x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity=".12"/>`).join('')}
+      ${backgrounds.map(s => `<rect data-mode-band rx="3" x="${x(s.start)}" y="${top}" width="${x(s.end)-x(s.start)}" height="${bottom-top}" fill="${colors[s.mode] || '#888'}" opacity="${colors[s.mode] ? '.28' : '.08'}"/>`).join('')}
       <path d="M${left} ${yp(0)}H${right}" stroke="var(--primary-text-color,#222)" opacity=".3"/>
-      ${columns.map(s => s.price === undefined ? '' : ['past','future'].map(part => `<rect clip-path="url(#${clipId}-${part})" x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}" fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('')).join('')}
+      ${columns.map(s => {
+        if (s.price === undefined) return '';
+        const shape = `x="${x(s.start)+1.5}" y="${Math.min(yp(0),yp(s.price))}" rx="5" width="${Math.max(1,x(s.end)-x(s.start)-3)}" height="${Math.max(.5,Math.abs(yp(0)-yp(s.price)))}"`;
+        // An opaque dashboard-colored base keeps mode colors behind the bars.
+        // The original price opacity still distinguishes history and forecast.
+        return `<rect data-price-base ${shape} fill="var(--card-background-color, #fff)"/>` + ['past','future'].map(part => `<rect data-price-bar="${part}" clip-path="url(#${clipId}-${part})" ${shape} fill="${priceColor(s.price)}" opacity="${part === 'past' ? '.8' : '.38'}"/>`).join('');
+      }).join('')}
       ${['demand','solar'].map(key => ['past','future'].map(part => `<path d="${curvePaths[key]}" clip-path="url(#${clipId}-${part})" fill="none" stroke="${key === 'solar' ? '#ffda37' : '#c25bc9'}" stroke-width="${key === 'solar' ? 3 : 2.8}" stroke-linecap="round" stroke-linejoin="round" ${key === 'demand' ? 'stroke-dasharray="4 4"' : ''} opacity="1" ${part === 'future' ? `mask="url(#${clipId}-blend)"` : ''}/>`).join('')).join('')}
       <path d="M${x(now)} 12V126" stroke="var(--primary-text-color,#222)" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
       <g fill="var(--primary-text-color,#222)" font-size="9"><text x="${Math.min(right-18,x(now)+4)}" y="20">Nu</text>
@@ -1882,7 +1900,8 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       const columnX = x(column.start), columnEndX = x(column.end);
       const bx = pos > (left+right)/2 ? Math.max(left,columnX-boxWidth-5) : Math.min(right-boxWidth,columnEndX+5);
       const lines = [`${this.formatTime(s.start)}–${this.formatTime(s.end)} · ${s.mixed ? 'gemeten/verwacht' : s.future ? 'verwacht' : 'gemeten'}`,
-        `Prijs: ${this.formatSelectedValue(s.price)} €/kWh`, `Verbruik: ${this.formatSelectedValue(s.demand)} kW`, `Zon: ${this.formatSelectedValue(s.solar)} kW`, this.modeLabel(s.mode || 'onbekend')];
+        `Prijs: ${this.formatSelectedValue(s.price)} €/kWh`, `Verbruik: ${this.formatSelectedValue(s.demand)} kW`, `Zon: ${this.formatSelectedValue(s.solar)} kW`,
+        s.future ? this.modeLabel(s.mode || 'onbekend') : `Accu om ${this.formatTime(s.start)}: ${this.historicalSoc(s.start) === undefined ? '—' : `${Math.round(this.historicalSoc(s.start))}%`}`];
       this.querySelector('[data-selected-column]').innerHTML = column.price === undefined ? '' : `<rect x="${columnX+1.5}" y="${Math.min(yp(0),yp(column.price))}" width="${Math.max(1,columnEndX-columnX-3)}" height="${Math.max(2,Math.abs(yp(0)-yp(column.price)))}" rx="5" fill="none" stroke="#fff" stroke-width="2"/>`;
       this.querySelector('[data-tooltip]').innerHTML = `<rect x="${bx}" y="24" width="${boxWidth}" height="90" rx="5" fill="#15294a" fill-opacity=".72" stroke="#8fa9c4" stroke-opacity=".4"/>${lines.map((line,i) => `<text x="${bx+7}" y="${39+i*16}" font-size="10" fill="${i === 2 ? '#dc8be1' : i === 3 ? '#ffda37' : '#e8eef8'}">${this.escape(line)}</text>`).join('')}`;
     };
@@ -1903,7 +1922,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
 class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
   render() {
     if (!this._hass || !this.config) return;
-    const fields = [['planner_entity','Planner'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['price_entity','Stroomprijzen (optioneel)']];
+    const fields = [['planner_entity','Planner'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['soc_entity','Accupercentage (%)'], ['price_entity','Stroomprijzen (optioneel)']];
     // Home Assistant replaces hass frequently, also while a picker is open.
     // Keep the elements mounted so updates preserve the search and focus.
     if (!this.querySelector('ha-entity-picker')) {

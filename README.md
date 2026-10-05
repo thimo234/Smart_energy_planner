@@ -221,6 +221,7 @@ type: custom:smart-energy-planner-mini-card
 planner_entity: sensor.smart_energy_planner_battery_strategy
 consumption_entity: sensor.huisvermogen
 solar_entity: sensor.zonnevermogen
+soc_entity: sensor.accupercentage
 ```
 
 De grafiek is 150 px hoog en toont de lokale kalenderdag van 00:00 tot 23:59.
@@ -236,5 +237,8 @@ blijven leeg. De kaart en meetgeschiedenis verversen maximaal eens per vijf minu
 en pauzeren als het dashboard verborgen is. Nu en gegevens kunnen daardoor vijf
 minuten achterlopen; selectie reageert direct. De kaartachtergrond is transparant.
 Als het detailvenster open is, sluit een tik ergens op de kaart het venster.
+Kies bij **Accupercentage (%)** de SOC-sensor met Recorder-geschiedenis.
+Historische details tonen de geregistreerde accustand aan het begin van het uur;
+ontbrekende historie wordt als een streepje weergegeven.
 Wh/kWh-tellers worden via hun stijging en meetduur omgerekend naar gemiddeld kW;
 het laatste interval verschijnt zodra de volgende tellerstand beschikbaar is.
