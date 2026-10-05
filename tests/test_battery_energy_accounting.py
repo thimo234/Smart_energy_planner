@@ -59,7 +59,8 @@ def replay():
 
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
-                     solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False):
+                     solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False,
+                     snapshot_exports=False):
     """Exercise final sensor scheduling with the already computed demand input."""
     now, slots = feedback_slots(snapshot, timestamp)
     data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
@@ -72,6 +73,9 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                   if datetime.fromisoformat(w['start']) < midnight]
         prices = extend_price_window_tail(windows=prices, horizon_end=midnight+timedelta(days=1), fallback_price=None)
     exports = [PlannerWindow(w.start, w.end, w.price-tax_deduction, w.price_known) for w in prices]
+    if snapshot_exports:
+        exports = [PlannerWindow(datetime.fromisoformat(w['start']), datetime.fromisoformat(w['end']),
+                                 w['price'], w['price_known']) for w in data['upcoming_export_price_windows']]
     solar = [SolarWindow(datetime.fromisoformat(w["start"]), datetime.fromisoformat(w["end"]),
                          w["estimated_kwh"], None, None) for w in data["estimated_hourly_solar_forecast"]]
     if estimate_tomorrow:

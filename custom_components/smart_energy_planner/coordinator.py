@@ -2853,6 +2853,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 profitable_primary_candidates = [item for item in profitable_primary_candidates if item["end"] <= bridge[1]]
                 best_candidate = min(bridge[2], key=lambda item: (item["cost"], item["start"]))
 
+            # A daytime solar fill must finish within that day's charging
+            # opportunity. Tomorrow's sunshine belongs to a later cycle:
+            # otherwise it displaces today's grid supplement, then disappears
+            # when the mode simulation starts the intervening discharge.
+            # Grid-led overnight cycles may still cross midnight, and the
+            # full horizon remains available for their economic justification.
+            charge_deadline = horizon_end
+            if best_candidate["kind"] == "solar":
+                charge_deadline = min(horizon_end, best_candidate["start"].replace(
+                    hour=0, minute=0, second=0, microsecond=0,
+                ) + timedelta(days=1))
+                cycle_candidates = [item for item in cycle_candidates if item["end"] <= charge_deadline]
+                profitable_primary_candidates = [item for item in profitable_primary_candidates
+                                                 if item["end"] <= charge_deadline]
+
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
             for candidate in cycle_candidates:
                 candidates_by_start.setdefault(cast(datetime, candidate["start"]), []).append(candidate)
@@ -2860,6 +2875,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             valley_slots = [
                 slot for slot in future_slots
                 if cast(datetime, slot["end"]) > cursor
+                and cast(datetime, slot["end"]) <= charge_deadline
             ]
             best_index = next(
                 (
@@ -2881,8 +2897,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # While still full after a charge, skipping a candidate does
                 # not create a new empty-battery cycle later that afternoon.
                 target_kwh = max(0.0, usable_capacity_kwh - projected_usable_at_charge_kwh)
-                if best_candidate["kind"] == "grid" and first_grid_charge_start == now:
-                    # Do not assume discharge while waiting in the cheap band.
+                if (getattr(self, "_charge_session_started", False)
+                        or (best_candidate["kind"] == "grid" and first_grid_charge_start == now)):
+                    # An active charge cycle holds its energy during pauses;
+                    # do not invent household discharge before a solar anchor.
                     target_kwh = min(target_kwh, current_remaining_capacity_kwh)
             elif previous_charge_end is not None:
                 # Carry unfilled capacity forward when the previous cycle
@@ -3079,8 +3097,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     charge_end, cheaper_refill or horizon_end, minimum_sale_price - battery_min_profit))
                 grid_budget = max(0.0, profitable_demand - existing_energy)
                 continuing_grid_cycle = (
-                    active_grid_cycle
-                    and any(item["start"] <= now < item["end"] for item in grid_selected)
+                    (active_grid_cycle or (
+                        getattr(self, "_charge_session_started", False)
+                        and historical_cost is not None and cursor <= now
+                    ))
                     and profitable_demand > 1e-9
                 )
                 # Energy bought by this running cycle is not pre-existing
@@ -3257,7 +3277,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if slot_charge_kwh > 0:
                 active_start = max(slot_start, now)
                 usable_hours = min((slot_end - active_start).total_seconds() / 3600, slot_charge_kwh / max_charge_kw)
-                if slot_end in selected_grid_charge_by_start:
+                if slot_start > now and slot_end in selected_grid_charge_by_start:
+                    # Align future fragments with the next slot. In the live
+                    # slot execute immediately; rounded SOC must not shift a
+                    # running charge a fraction of a second into the future.
                     active_start = max(active_start, slot_end - timedelta(hours=usable_hours))
                     if abs((active_start - now).total_seconds()) < 0.001:
                         active_start = now

@@ -230,6 +230,36 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: onvolledige daglading — 5 oktober
+
+- Gewenste werking bevestigd: het resterende kleine zonneoverschot mag de
+  benodigde rendabele netaanvulling voor de lopende laadcyclus niet blokkeren.
+- De aangeleverde meting van 14:32, 83% SOC, is gereproduceerd met de echte
+  import- en exportprijzen en prognoses. De selectie gebruikte zonnelading van
+  6 oktober voor de lopende daglading; de uitvoerbare planning hield daarvan
+  alleen 0,064 kWh op 5 oktober over, zonder netaanvulling.
+- Lokaal aangepast: een door zon bepaald daglaadvenster selecteert energie
+  binnen die dag. Latere tarieven blijven beschikbaar voor de winsttoets;
+  door netprijzen bepaalde nachtcycli kunnen nog over middernacht lopen.
+- Tijdens een lopende laadcyclus wordt geen fictieve huisontlading tijdens
+  laadpauzes bij de benodigde capaciteit opgeteld. Een lopende netlaadcyclus
+  blijft ook tijdens pauzes/herstart herkenbaar via de bewaarde cyclusstatus
+  en inkoopprijs; minimumwinst wordt opnieuw getoetst.
+- Een geselecteerde netlaadopdracht in het lopende kwartier begint direct,
+  zodat afronding van SOC de strategie niet een fractie na nu op uit laat staan.
+- Nieuwe regressies: vandaag vol vóór avondontlading, vermogen en onafhankelijke
+  energiegrenzen, behouden volgende cyclus in de vooruitblik, opeenvolgende
+  vijfminutenupdates en herstart tijdens een tariefpauze.
+- Grafiek gebruikt de aangeleverde prognoses zonder nogmaals marges toe te
+  passen. Aannames: 2,5 kW laden en 3 kW ontladen; 10 kWh capaciteit, veilige
+  grens 20%, extra reserve 60% en minimumwinst EUR 0,08 komen uit de meting.
+- Lokaal geslaagd: volledige reeks van 190 Python-tests, plus de aanvullende
+  test voor netladen over middernacht, frontendtest en grafiekcontrole. De
+  correctie bereikt met deze aannames 100% rond 16:45 en ontlaadt vanaf 17:00.
+- De gebruiker heeft de concrete vergelijkingsgrafiek op 5 oktober goedgekeurd
+  en opdracht gegeven deze correctie naar main te committen en pushen.
+- Nog open: installatie en live werking in Home Assistant.
+
 ### Minikaart: zichtbare moduskleuren en historisch SOC — 5 oktober
 
 - Nieuwe wens: achtergrondkleuren van de accuplanning beter onderscheidbaar;
