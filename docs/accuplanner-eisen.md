@@ -230,6 +230,42 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde vervolcorrectie: netlading bij weggevallen zonneoverschot — 5 oktober
+
+- De nieuwe meting van 15:39, 92% SOC, heeft geen resterend zonneoverschot.
+  De eerdere correctie in 1e176e6 begrensde uitsluitend door zon bepaalde
+  laadvensters. Een door netladen bepaald venster selecteerde nog steeds
+  goedkopere zon van morgen voor de ontbrekende 0,8 kWh van vandaag.
+- Lokaal aangepast: ook netladen stopt zijn selectie vóór de volgende
+  zonnedag. Dit begrenst zowel zonneladen als gemengde zon/netaanvulling.
+  Zuiver nachtelijk netladen kan over middernacht lopen tot die volgende
+  zonnegelegenheid. Latere tarieven blijven beschikbaar voor de winsttoets
+  en een afzonderlijke volgende cyclus.
+- Regressies met de echte import-/exportprijzen en prognoses: vandaag vol
+  bij ontbrekende én bekende oude inkoopprijs, behoud van minimumwinst,
+  overgang van de eerdere naar de verlaagde zonneprognose, vijfminutenupdates,
+  werkelijke energie-inhoud en herstart tijdens een pauze.
+- Synthetisch gecontroleerd: volledige netlading van 22:00 tot 01:00 blijft
+  mogelijk, ook wanneer daarna een goedkopere zonnedag volgt.
+- Voorbeeld met de aangeleverde 92%-meting: netladen 15:39–15:44 en
+  16:00–16:15, tot 100%; daarna ontladen. Aannames blijven 2,5 kW laden en
+  3 kW ontladen, zonder extra marges boven op de aangeleverde prognoses.
+- Lokaal geslaagd: volledige reeks van 195 Python-tests, frontendtest,
+  diffcontrole en browsercontrole van beide plannen op desktop en mobiel.
+- De aanvullende 15:52-meting toont dezelfde fout in morgen: slechts 0,8 kWh
+  zonnelading in de uitvoerbare cyclus, vervolgens veel late netlading in de
+  vooruitblik. De sensor bevat geen ontladen_naar_net-opdracht; zonneoverschot
+  tijdens accu_uit kan wel direct worden teruggeleverd.
+- Dezelfde lokale correctie geeft met die nieuwe meting morgen zonneladen
+  vanaf 09:00 en alleen netaanvulling van 13:30 tot 14:00. De vooruitblik
+  begint na de ontlading met de werkelijk gesimuleerde resterende energie.
+- Nieuwe regressie controleert dit complete plan, inclusief beide volle
+  ladingen, energiegrenzen en geen overlappende opdrachten. De acht gerichte
+  tests slagen na deze toevoeging (196 unieke geslaagde Python-tests).
+- De gebruiker heeft de concrete vergelijkingsgrafiek voor vandaag en morgen
+  op 5 oktober goedgekeurd en opdracht gegeven naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
 ### Goedgekeurde correctie: onvolledige daglading — 5 oktober
 
 - Gewenste werking bevestigd: het resterende kleine zonneoverschot mag de

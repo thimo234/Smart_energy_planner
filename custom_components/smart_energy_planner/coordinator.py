@@ -2864,9 +2864,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 charge_deadline = min(horizon_end, best_candidate["start"].replace(
                     hour=0, minute=0, second=0, microsecond=0,
                 ) + timedelta(days=1))
-                cycle_candidates = [item for item in cycle_candidates if item["end"] <= charge_deadline]
-                profitable_primary_candidates = [item for item in profitable_primary_candidates
-                                                 if item["end"] <= charge_deadline]
+            else:
+                # Overnight grid charging may cross midnight, but the next
+                # solar day is a separate opportunity. Limit both solar-only
+                # and mixed grid/solar candidates: their cheap solar share
+                # otherwise displaces today's unfinished grid fill as well.
+                charge_deadline = min((slot["start"] for slot in future_slots
+                    if slot["start"].date() > best_candidate["start"].date()
+                    and float(slot.get("solar_kwh", 0.0)) > 1e-9), default=horizon_end)
+            cycle_candidates = [item for item in cycle_candidates if item["end"] <= charge_deadline]
+            profitable_primary_candidates = [item for item in profitable_primary_candidates
+                                             if item["end"] <= charge_deadline]
 
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
             for candidate in cycle_candidates:
