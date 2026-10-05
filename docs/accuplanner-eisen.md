@@ -230,6 +230,34 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: lopende netlading blokkeert avondontlading — 5 oktober
+
+- Gewenste werking opnieuw bevestigd: eerst de dure avond en het verbruik
+  tot de volgende ochtend uit de accu leveren, daarna een nieuwe daglading
+  met zon en rendabele netaanvulling. Geen kleine nachtelijke bijlaadcycli.
+- De meting van 16:02, 93% SOC, is gereproduceerd met een actieve netlaadfase.
+  De uitzondering voor het afmaken van die fase werd ook toegepast op latere
+  laadcycli. Onvoldoende rendabele nachtcycli hielden daardoor ontladen tegen;
+  die laadopdrachten zelf vielen vervolgens weg doordat de accu nog vol zat.
+- Lokaal beperkt tot de lopende cyclus. Daarnaast worden bewaarde fasegrenzen
+  opnieuw bepaald uit de actuele opdrachten; een oude eindtijd wordt niet
+  meer als fictieve laadopdracht toegevoegd. De cyclusvergrendeling blijft
+  echte laadpauzes beschermen, ook bij herberekeningen en herstart.
+- Dezelfde meting geeft nu netladen tot 16:19, ontladen vanaf 16:30 tot morgen
+  09:00 en circa 23,54% SOC. Het voorspelde huisverbruik gebruikt 7,646 kWh;
+  het restant hoeft niet onrendabel geëxporteerd te worden om 20% te halen.
+  Daarna zonneladen, netaanvulling 13:30–14:00 en zon tot circa 16:15, weer vol.
+- Grafiek gebruikt echte tarieven en prognoses, 10 kWh, veilige grens 20%,
+  laden 2,5 kW, ontladen 3 kW, zonder extra prognosemarge. De niet-aangeleverde
+  historische inkoopprijs is voor deze reconstructie aangenomen als EUR 0,211.
+- Nieuwe regressies controleren avondontlading, geen nachtelijke bijlading,
+  onafhankelijke energiegrenzen en updates met gemeten SOC en opslag/herstart.
+  De volledige reeks van 198 Python-tests, frontendtest en browsercontrole
+  van de vergelijking op desktop en mobiel slagen.
+- De gebruiker heeft de concrete vergelijkingsgrafiek op 5 oktober goedgekeurd
+  en opdracht gegeven deze correctie naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
 ### Goedgekeurde vervolcorrectie: netlading bij weggevallen zonneoverschot — 5 oktober
 
 - De nieuwe meting van 15:39, 92% SOC, heeft geen resterend zonneoverschot.

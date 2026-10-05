@@ -3088,7 +3088,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if cheaper_refill is not None and not mixed_fill:
                     capacity = _profitable_discharge_capacity(charge_end, cheaper_refill,
                                                              minimum_sale_price - battery_min_profit)
-                    if capacity + 1e-6 < usable_capacity_kwh and not active_grid_cycle:
+                    if capacity + 1e-6 < usable_capacity_kwh and not (active_grid_cycle and cursor <= now):
                         cursor = cheaper_refill
                         continue
                     self._full_arbitrage_intervals.append((charge_end, cheaper_refill,
@@ -3105,7 +3105,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     charge_end, cheaper_refill or horizon_end, minimum_sale_price - battery_min_profit))
                 grid_budget = max(0.0, profitable_demand - existing_energy)
                 continuing_grid_cycle = (
-                    (active_grid_cycle or (
+                    ((active_grid_cycle and cursor <= now) or (
                         getattr(self, "_charge_session_started", False)
                         and historical_cost is not None and cursor <= now
                     ))
@@ -3351,27 +3351,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             active_charge_phase_mode = "accu_uit"
             self._active_charge_phase_end = None
             self._active_charge_phase_mode = "accu_uit"
-        if active_charge_phase_end is not None and active_charge_phase_end > now:
-            # The charge phase is still running (or was running when the plan was
-            # last evaluated).  Re-inject it as a cluster anchored at *now* so that
-            # the current slot stays in charge mode even when the new planning run
-            # does not (re-)select that slot â€” e.g. because the battery is nearly
-            # full and the solar window is skipped by the capacity gate.
-            # Safety: _active_charge_phase_end is only written while we are inside
-            # an active charge window, so it can never carry a stale value from a
-            # different day/cycle (it is cleared by _update_active_charge_phase_state
-            # the moment active_charge_phase becomes None).
-            normalized_windows.append({"start": now, "end": active_charge_phase_end})
-            normalized_windows.sort(key=lambda window: window["start"])
-        else:
-            active_charge_phase_mode = "accu_uit"
-
         clusters: list[dict[str, datetime]] = []
         for window in normalized_windows:
             if not clusters or window["start"] >= clusters[-1]["end"] + cluster_gap:
                 clusters.append(dict(window))
                 continue
             clusters[-1]["end"] = max(clusters[-1]["end"], window["end"])
+
+        # Recomputed commands determine the phase bounds. Re-injecting the old
+        # end as a fictitious charge window perpetuates it on every update, even
+        # after a shorter fill has reached full. The separate cycle latch still
+        # protects real pauses between the selected charging commands.
+        active_cluster = next((cluster for cluster in clusters
+                               if cluster["start"] <= now < cluster["end"]), None)
+        if active_charge_phase_end is not None:
+            self._active_charge_phase_end = active_cluster["end"] if active_cluster else None
+            if active_cluster is None:
+                self._active_charge_phase_mode = "accu_uit"
+                active_charge_phase_mode = "accu_uit"
 
         return clusters, active_charge_phase_mode
 

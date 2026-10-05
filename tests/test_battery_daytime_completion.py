@@ -8,6 +8,77 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 
 
 class DaytimeCompletionTest(unittest.TestCase):
+    def evening_coordinator(self):
+        c = coordinator()
+        c._battery_grid_charge_price = .211  # Explicit historical-cost assumption.
+        c._active_charge_phase_mode = 'laden_van_net'
+        c._active_charge_phase_end = datetime.fromisoformat('2026-10-06T01:45:00+02:00')
+        return c
+
+    def test_running_fill_does_not_authorize_partial_future_night_cycles(self):
+        c = self.evening_coordinator()
+        now, slots, result = self.replay('2026-10-05T16:02:41.391142+02:00', 93, c,
+                                       snapshot='2026_10_05_evening_discharge')
+        commands = result.planned_battery_mode_windows
+        self.assertEqual(commands[0]['mode'], 'laden_van_net')
+        self.assertEqual(c._active_charge_phase_end.isoformat(), commands[0]['end'])
+        self.assertEqual(commands[-1]['mode'], 'ontladen')
+        self.assertLessEqual(commands[-1]['start'], '2026-10-05T17:00:00+02:00')
+        self.assertTrue(all(w['end'] <= commands[0]['end'] for w in commands
+                            if w['mode'].startswith('laden_')))
+        trace = energy_trace(now, slots, commands, initial=9.3, max_charge=2.5)
+        self.assertAlmostEqual(trace[-1][1], 2.354, delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
+        self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
+        preview = result.estimated_battery_mode_windows
+        self.assertEqual(preview[0]['start'], '2026-10-06T09:00:00+02:00')
+        self.assertEqual(preview[0]['mode'], 'laden_met_zonne_energie')
+        self.assertEqual([w['start'] for w in preview if w['mode'] == 'laden_van_net'],
+                         ['2026-10-06T13:30:00+02:00'])
+
+    def test_evening_discharge_survives_updates_and_restart_without_night_topup(self):
+        c = self.evening_coordinator()
+        now = datetime.fromisoformat('2026-10-05T16:02:41.391142+02:00')
+        end = datetime.fromisoformat('2026-10-06T09:00:00+02:00')
+        energy = 9.3
+        discharged = False
+        for index in range(44):
+            _, slots, result = self.replay(now.isoformat(), energy*10, c,
+                                          snapshot='2026_10_05_evening_discharge')
+            if index == 9:
+                c.hass = SimpleNamespace(data={})
+                c.config_entry.entry_id = 'battery'
+                c._store_battery_cycle_state_snapshot(now)
+                restarted = coordinator()
+                restarted.hass, restarted.config_entry = c.hass, c.config_entry
+                with patch.object(c._restore_recent_battery_cycle_state.__globals__['dt_util'],
+                                  'now', return_value=now):
+                    restarted._restore_recent_battery_cycle_state()
+                c = restarted
+                del c.hass
+                _, _, result = self.replay(now.isoformat(), energy*10, c,
+                                           snapshot='2026_10_05_evening_discharge')
+            if discharged:
+                self.assertFalse(result.battery_strategy.startswith('laden_'))
+            discharged |= result.battery_strategy.startswith('ontladen')
+            until = min(end, now + timedelta(minutes=5 if index < 8 else 30))
+            commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
+                        for w in result.planned_battery_mode_windows
+                        if datetime.fromisoformat(w['start']) < until]
+            for before, after in zip(commands, commands[1:]):
+                self.assertLessEqual(before['end'], after['start'])
+            trace = energy_trace(now, slots, commands, initial=energy, max_charge=2.5)
+            self.assertTrue(trace)
+            self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
+            self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
+            energy = trace[-1][1]
+            now = until
+            if now == end:
+                break
+        self.assertTrue(discharged)
+        self.assertEqual(now, end)
+        self.assertLess(energy, 2.5)
+
     def test_grid_led_cycle_can_cross_midnight(self):
         now = datetime.fromisoformat('2026-10-05T22:00:00+02:00')
         slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1),
