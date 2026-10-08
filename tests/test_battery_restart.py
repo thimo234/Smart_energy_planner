@@ -37,11 +37,12 @@ class RestartTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(c._battery_cycle_state_initialized)
             self.assertFalse(c._charge_session_started)
         now, slots, result = replay(c, 39)
-        self.assertEqual(result.battery_strategy, "ontladen")
-        first_charge = next(w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_'))
-        trace = energy_trace(now, slots, [w for w in result.planned_battery_mode_windows
-                             if w['end'] <= first_charge['start']], initial=3.9, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        # 8 October: no full profitable refill in this forecast, and the
+        # measured 39% is already below the 60% no-charge reserve.
+        self.assertEqual(result.battery_strategy, "accu_uit")
+        self.assertFalse(result.planned_grid_charge_windows)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=3.9, max_charge=2.5)
+        self.assertAlmostEqual(trace[-1][1], 3.9, delta=.005)
 
     def test_unknown_soc_preserves_both_existing_directions(self):
         for charging in (False, True):

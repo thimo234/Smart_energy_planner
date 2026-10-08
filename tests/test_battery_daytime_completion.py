@@ -71,13 +71,17 @@ class DaytimeCompletionTest(unittest.TestCase):
             self.assertTrue(trace)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
+            if result.battery_no_charge_reserve_active:
+                # 8 October: if the next refill becomes physically unavailable
+                # on an update, stop at the reserve (or hold an existing lower SOC).
+                self.assertGreaterEqual(min(e for _, e, _ in trace), min(energy, 6)-.005)
             energy = trace[-1][1]
             now = until
             if now == end:
                 break
         self.assertTrue(discharged)
         self.assertEqual(now, end)
-        self.assertLess(energy, 2.5)
+        self.assertLess(energy, 6.)
 
     def test_grid_led_cycle_can_cross_midnight(self):
         now = datetime.fromisoformat('2026-10-05T22:00:00+02:00')

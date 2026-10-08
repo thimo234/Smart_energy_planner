@@ -14,26 +14,17 @@ class RefillPriceAnchorTest(unittest.TestCase):
             isolated_cycles=True, instance=instance,
         )
 
-    def test_actual_refill_uses_midday_prices_and_safe_energy(self):
+    def test_actual_refill_is_rejected_without_profit_for_the_full_purchase(self):
+        # 8 October: the recorded midday advantage covers too little energy
+        # for a full new grid cycle; the no-charge reserve must stay in place.
         now, slots, result = self.replay()
-        windows = result.planned_battery_mode_windows
-        charge = [w for w in windows if w['mode'].startswith('laden_')]
-        self.assertEqual(charge[0]['start'], '2026-09-28T11:30:00+02:00')
-        # One-cent continuity now fills the former half-hour pause rather
-        # than waiting until 15:00 for a marginally cheaper final fraction.
-        self.assertEqual(charge[-1]['end'], '2026-09-28T14:42:00+02:00')
-        for window in charge:
-            for slot in slots:
-                if slot['start'] < datetime.fromisoformat(window['end']) and slot['end'] > datetime.fromisoformat(window['start']):
-                    self.assertLessEqual(slot['import_price'], .315 + .01)
-        trace = energy_trace(now, slots, windows, initial=10, max_charge=2.5)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
-        self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
-        before = [e for t, e, _ in trace if t <= charge[0]['start']]
-        self.assertAlmostEqual(before[-1], 2, delta=.005)
+        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertTrue(result.battery_no_charge_reserve_active)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=10, max_charge=2.5)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
+        self.assertAlmostEqual(trace[-1][1], 6, delta=.005)
 
-    def test_repeated_updates_keep_refill_in_cheap_hours(self):
+    def test_repeated_updates_keep_reserve_without_a_full_profitable_refill(self):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = True
@@ -41,14 +32,14 @@ class RefillPriceAnchorTest(unittest.TestCase):
         energy = 10.
         for _ in range(12):
             _, slots, result = self.replay(now.isoformat(), energy*10, c)
-            self.assertLess(datetime.fromisoformat(result.next_charge_window_start),
-                            datetime.fromisoformat('2026-09-28T13:00:00+02:00'))
+            self.assertIsNone(result.next_charge_window_start)
+            self.assertTrue(result.battery_no_charge_reserve_active)
             until = now + timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                         for w in result.planned_battery_mode_windows
                         if datetime.fromisoformat(w['start']) < until]
             trace = energy_trace(now, slots, commands, initial=energy, max_charge=2.5)
-            self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
+            self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
             energy = trace[-1][1]
             now = until

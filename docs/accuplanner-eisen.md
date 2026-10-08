@@ -74,9 +74,14 @@ geverifieerd is. Lees ook de open punten onderaan.
   energie bij een herberekening als al aanwezige voorraad wordt afgetrokken.
 - Ga niet bij ieder toekomstig laadvenster opnieuw uit van een lege accu:
   simuleer resterende energie en respecteer de werkelijke beschikbare ruimte.
-- Er is eerder besproken dat volledig bijladen ook energie kan achterlaten
-  waarvan de latere winst nog niet binnen de horizon bewezen is. Presenteer
-  dus geen garantie dat iedere geladen kWh de minimumwinst oplevert.
+- Gewijzigd op 8 oktober: start een nieuwe netlaadcyclus alleen wanneer de
+  verwachte rendabele afname de volledige benodigde netaanvulling kan dragen.
+  Een kleine hoeveelheid rendabele afname rechtvaardigt geen volle lading
+  of kleine losse bijlaadcyclus. Dit vervangt de eerdere toestemming om het
+  restant van een nieuwe netlading zonder onderbouwde winst mee te kopen.
+- Een werkelijk lopende netlaadcyclus mag nog worden afgemaakt; reeds geladen
+  energie mag de eigen laadbeslissing niet bij iedere update terugdraaien.
+  De opbrengst blijft een prognose, geen garantie voor iedere geladen kWh.
 - Het huidige rekenmodel gebruikt tariefverschillen. Omzettingsverliezen en
   slijtage zijn niet daarin verwerkt; verander die definitie niet ongemerkt.
 
@@ -124,6 +129,9 @@ geverifieerd is. Lees ook de open punten onderaan.
   dat toelaten. Maak geen onrendabele export noodzakelijk om de accu leeg te krijgen.
 - Is er geen geschikte aanvulling, houd dan een **instelbaar extra percentage**
   vast. In recente metingen is dit 60%.
+- Bevestigd op 8 oktober: ook tijdens een bestaande ontlaadcyclus moet deze
+  reserve terugkomen wanneer de rendabele aanvulling vervalt, bijvoorbeeld
+  na verhoging van de minimumwinst naar EUR 0,10/kWh via de UI.
 - Alleen aanwezig zonlicht is bij de nieuwste prijsgerichte eis onvoldoende:
   een daadwerkelijk geselecteerd geschikt laadvenster moet de aanvulling dragen.
 - De extra reserve voorkomt verdere ontlading; zij verplicht niet tot duur
@@ -174,8 +182,11 @@ geverifieerd is. Lees ook de open punten onderaan.
   geen prijzen heeft gepubliceerd, met het gemiddelde van de laatst bekende dag.
 - Gebruik het tijdgewogen gemiddelde van de laatste bekende 24 uur; bij een
   onvolledige reeks alleen de beschikbare waarnemingen. Behoud negatieve prijzen.
-- Markeer tarieven en planning duidelijk als schatting. De voorlopige planning
-  mag geen zekere winst suggereren of vandaag alvast de extra reserve vrijgeven.
+- Markeer tarieven en planning duidelijk als schatting. Gewijzigd op 8 oktober:
+  het daggemiddelde mag ontbrekende latere tarieven vervangen in de verwachte
+  rendementsberekening. Daarmee berekende winst blijft een schatting.
+  Een laadopdracht met uitsluitend geschatte inkoopprijzen blijft vooruitblik
+  en mag op zichzelf geen reserve vrijgeven.
 - Bereken de schatting vanuit de energie die de echte planning overlaat, met
   dezelfde cyclusvergrendeling, veilige ondergrens en minimumwinst.
 - Nieuwste afspraak van 25 september: plan **twee opeenvolgende cycli** als
@@ -229,6 +240,51 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: volledige winsttoets en herstel van reserve — 8 oktober
+
+- De gebruiker bevestigt de strengere toets voor een volledige nieuwe
+  netaanvulling en heeft de minimumwinst in de UI op EUR 0,10/kWh gezet.
+  Zonder rendabele aanvulling moet ook een lopende ontlading op 60% stoppen.
+- Gereconstrueerd met de aangeleverde 90%-meting van 8 oktober 19:30 en
+  minimumwinst 0,10: de oude code houdt nog een klein netlaadblok over en
+  geeft de reserve vrij. De gebruiker meldt met nieuwere invoer geen laadblok;
+  die nieuwere sensoruitvoer is niet aangeleverd.
+- Lokaal geïmplementeerd: vereis voldoende rendabele afname voor de volledige
+  nieuwe netaanvulling; tel de gelijktijdige zonnebijdrage niet als netinkoop.
+  Controleer dit ook na het bundelen van laaduren. Een werkelijk lopende
+  laadcyclus en de afgesproken negatieve-prijsuitzondering blijven beschermd.
+- Latere geschatte tarieven mogen de economische toets ondersteunen binnen
+  de bestaande horizon. De bestaande tijdgewogen daggemiddelden blijven
+  ongewijzigd. Geschatte inkoopuren blijven uitsluitend vooruitblik; extra
+  arbitragecycli houden hun toets op bekende tarieven. Er is geen extra dag
+  aan de horizon toegevoegd; de vraag over zo'n uitbreiding staat nog open.
+- Daarnaast wordt bij volledig weggevallen uitvoerbare laadopdrachten opnieuw
+  met de reserve gerekend. Afgewezen kandidaten mogen geen diepere ontlading
+  achterlaten en ook de sensorattributen moeten de herstelde reserve tonen.
+- Nieuwe regressies: werkelijke meting bij 8 en 10 cent, updates rond 60%,
+  herstart, instelbare reserve, geen duur bijladen onder de reserve, afgewezen
+  laadkandidaten en wel/niet voldoende rendabele afname met geschatte tarieven.
+  Een volledig rendabele synthetische cyclus blijft de reserve vrijgeven.
+- Oudere regressies die een volle nieuwe netlading op basis van een beperkte
+  winstkans eisten zijn expliciet aangepast aan de nieuwe eis. Hun werkelijke
+  bronmetingen zijn niet gewijzigd. De synthetische continuïteitstest krijgt
+  drie rendabele afname-uren voor zijn 3 kWh-cyclus; fysieke grenzen blijven
+  apart gecontroleerd. Tests onderscheiden bestaande lading van nieuwe inkoop.
+- Vergelijkingsgrafiek: dezelfde aangeleverde tarieven en prognoses, 90% SOC,
+  10 kWh, veilige ondergrens 20%, extra reserve 60%, minimumwinst EUR 0,10,
+  2,5 kW laden en 3 kW ontladen, zonder aanvullende prognosemarges. De nieuwe
+  planning houdt 6 kWh over en bevat geen nieuwe lading op 9 oktober.
+- Lokaal gecontroleerd: 203 unieke Python-tests. De volledige eindrun gaf
+  één verouderde verwachting: altijd bijna leeg in de 5-oktoberreplay, ook als
+  een update geen uitvoerbare aanvulling meer heeft. Deze verwachting is
+  vervangen door controle van de herstelde reserve bij iedere update;
+  daarna slagen alle tien gerichte dagcyclusregressies. De overige 202 tests
+  slaagden in de volledige eindrun. Frontendtest, diffcontrole en grafiekcontrole
+  op desktop/mobiel slagen; de grafiek is met de definitieve uitvoer vergeleken.
+- De gebruiker heeft de concrete vergelijkingsgrafiek op 8 oktober goedgekeurd
+  en opdracht gegeven deze wijziging naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
 
 ### Goedgekeurde correctie: lopende netlading blokkeert avondontlading — 5 oktober
 

@@ -48,7 +48,7 @@ class IdleBundlingTest(unittest.TestCase):
                                           max_discharge_kw=1)
         self.assertEqual(list(plan), [slots[2]['start']])
 
-    def test_real_snapshot_sequential_energy_bounds(self):
+    def test_real_snapshot_below_reserve_does_not_buy_an_unprofitable_full_cycle(self):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = True
@@ -68,4 +68,4 @@ class IdleBundlingTest(unittest.TestCase):
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
             energy = trace[-1][1]
             now = until
-        self.assertGreaterEqual(energy, 9.95)
+        self.assertAlmostEqual(energy, 3.9, delta=.005)  # 8 October: no profitable full refill.

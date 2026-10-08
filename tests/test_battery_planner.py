@@ -173,7 +173,7 @@ class BatteryPlannerTest(unittest.TestCase):
                 )
                 self.assertEqual(grid, [])
 
-    def test_september_feedback_existing_energy_already_covers_profitable_demand(self):
+    def test_estimated_tail_can_support_full_topup_beyond_existing_energy(self):
         data = json.loads((Path(__file__).parent / "fixtures" / "battery_2026_09_17.json").read_text())
         now = datetime.fromisoformat("2026-09-17T12:33:32+02:00")
         slots = []
@@ -201,7 +201,7 @@ class BatteryPlannerTest(unittest.TestCase):
                 coordinator = SmartEnergyPlannerCoordinator.__new__(SmartEnergyPlannerCoordinator)
                 coordinator._active_charge_phase_end = None
                 coordinator._active_charge_phase_mode = BATTERY_MODE_OFF
-                coordinator._charge_session_started = True
+                coordinator._charge_session_started = False  # Assess a new purchase, not a running fill.
                 coordinator._discharge_session_started = False
                 coordinator._battery_cycle_state_initialized = True
                 solar_windows, grid_windows = coordinator._plan_charge_windows_for_horizon(
@@ -210,7 +210,11 @@ class BatteryPlannerTest(unittest.TestCase):
                     max_discharge_kw=3.0, battery_min_profit=0.08,
                 )
                 today_grid = [w for w in grid_windows if datetime.fromisoformat(w["start"]).date() == now.date()]
-                self.assertEqual(today_grid, [])
+                # 8 October: estimated future demand is now allowed to
+                # support the known-price purchase beyond existing energy.
+                self.assertEqual(bool(today_grid), tomorrow_solar)
+                if tomorrow_solar:
+                    self.assertAlmostEqual(sum(w["charge_kwh"] for w in today_grid), 3.2)
                 _, mode = coordinator._build_mode_windows_from_hourly_plan(
                     slots=selected_slots, now=now, planned_solar_charge_windows=solar_windows,
                     planned_grid_charge_windows=grid_windows, initial_usable_energy_kwh=4.8,
@@ -218,7 +222,7 @@ class BatteryPlannerTest(unittest.TestCase):
                     average_price=0.30, average_export_price=0.20,
                     max_charge_kw=3.0, max_discharge_kw=3.0,
                 )
-                self.assertEqual(mode, BATTERY_MODE_OFF)
+                self.assertEqual(mode, "laden_van_net" if tomorrow_solar else BATTERY_MODE_OFF)
 
     def test_today_demand_adjustment_uses_partial_current_hour(self):
         now = datetime(2026, 6, 30, 11, 30)
@@ -575,11 +579,12 @@ class BatteryPlannerTest(unittest.TestCase):
         # an earlier solar window is cheaper.
         from test_battery_energy_accounting import energy_trace
         charge_start = cycle_summary["next_charge_window_start"]
-        self.assertIsNotNone(charge_start)
-        before = [w for w in mode_windows if w["end"] <= charge_start]
-        trace = energy_trace(now, slots, before, initial=9.8, max_charge=3)
+        # 8 October: insufficient profitable demand rejects the next full
+        # grid cycle. With no extra reserve in this unit scenario, discharge
+        # can still use all existing energy down to the absolute floor.
+        self.assertIsNone(charge_start)
+        trace = energy_trace(now, slots, mode_windows, initial=9.8, max_charge=3)
         self.assertAlmostEqual(trace[-1][1], 2, delta=.05)
-        self.assertGreaterEqual(charge_start, "2026-06-26T18:00:00")
 
     def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
         now = datetime(2026, 6, 25, 18, 30)
@@ -636,11 +641,12 @@ class BatteryPlannerTest(unittest.TestCase):
         # an earlier solar window is cheaper.
         from test_battery_energy_accounting import energy_trace
         charge_start = cycle_summary["next_charge_window_start"]
-        self.assertIsNotNone(charge_start)
-        before = [w for w in mode_windows if w["end"] <= charge_start]
-        trace = energy_trace(now, slots, before, initial=9.6, max_charge=3)
+        # 8 October: insufficient profitable demand rejects the next full
+        # grid cycle. With no extra reserve in this unit scenario, discharge
+        # can still use all existing energy down to the absolute floor.
+        self.assertIsNone(charge_start)
+        trace = energy_trace(now, slots, mode_windows, initial=9.6, max_charge=3)
         self.assertAlmostEqual(trace[-1][1], 2, delta=.05)
-        self.assertGreaterEqual(charge_start, "2026-06-26T18:00:00")
 
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
@@ -1430,7 +1436,10 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertTrue(solar_windows)
+        # A running solar cycle may finish with mixed charging, which also
+        # absorbs the 2 kWh of simultaneous PV in these slots.
+        self.assertEqual(solar_windows, [])
+        self.assertAlmostEqual(sum(w["charge_kwh"] for w in grid_windows), 6.)
         self.assertTrue(grid_windows)
         self.assertTrue(all(w["price"] == .16 for w in grid_windows))
 
@@ -1499,12 +1508,10 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        self.assertEqual(solar_windows, [])  # Full cheap grid beats weak solar plus expensive topup.
-        self.assertTrue(grid_windows)
-        self.assertGreater(sum(float(window["charge_kwh"]) for window in grid_windows), 1.0)
-        self.assertTrue(
-            all(datetime.fromisoformat(str(window["start"])).date() == tomorrow.date() for window in grid_windows)
-        )
+        # 8 October: a small evening demand cannot justify buying the full
+        # grid target; independently profitable solar remains available.
+        self.assertEqual(grid_windows, [])
+        self.assertAlmostEqual(sum(float(w["charge_kwh"]) for w in solar_windows), 1.2)
 
     def test_solar_charge_window_ends_when_selected_energy_is_loaded(self):
         now = datetime(2026, 6, 26, 7, 30)

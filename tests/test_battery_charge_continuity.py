@@ -50,7 +50,9 @@ class ChargeContinuityTest(unittest.TestCase):
         for kind in ('solar', 'grid'):
             for expensive, peak in ((.104, .4), (.11, .4), (.111, .4), (.109, .181)):
                 with self.subTest(kind=kind, expensive=expensive, peak=peak):
-                    prices = [.1, expensive, .1, .1, peak, peak]
+                    # 8 October: a new 3 kWh fill requires 3 kWh of profitable
+                    # demand; keep this test focused on price-band continuity.
+                    prices = [.1, expensive, .1, .1, peak, peak, peak]
                     slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1),
                                   hours=1., price_known=True,
                                   import_price=p if kind == 'grid' else p+.11,
