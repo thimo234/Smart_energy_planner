@@ -37,6 +37,7 @@ from .battery_forecast import (
     update_expected_hourly_demand_stats,
 )
 from .battery_models import SolarWindow
+from .battery_profit import grid_supplement_profit
 from .battery_planner import (
     PRICE_CONTINUITY_BAND,
     build_battery_mode_schedule,
@@ -2713,7 +2714,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             return (
                 peak_price is not None
-                and peak_price - profit_cost >= battery_min_profit
+                # Imports earn the configured margin as a complete weighted
+                # supplement, not separately in every purchase quarter.
+                and (candidate["kind"] == "grid" or peak_price - profit_cost >= battery_min_profit)
             )
 
         def _profitable_discharge_capacity(after: datetime, before: datetime, cost: float,
@@ -3102,6 +3105,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 selected_charge_start = min(cast(datetime, item["start"]) for item in selected_for_cycle)
                 existing_energy = (current_usable_kwh if first_grid_charge_start == now and cycle_index == 0
                                    else _project_usable_energy_until(selected_charge_start, include_export=True))
+                if (cursor <= now and getattr(self, "_charge_session_started", False)
+                        and self._active_charge_phase_mode in ("laden_met_zonne_energie", "laden_van_net")):
+                    # Energy already stored by this fill is not older stock
+                    # competing with its own remaining import supplement.
+                    # Solar-first updates must still test that supplement's
+                    # average profit, without cancelling it as SOC rises.
+                    existing_energy = 0.0
                 historical_cost = getattr(self, "_battery_grid_charge_price", None)
                 if existing_energy > 0.01 and historical_cost is not None:
                     minimum_sale_price = max(minimum_sale_price, historical_cost + battery_min_profit)
@@ -3127,7 +3137,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 profitable_demand = _profitable_discharge_capacity(
                     charge_end, cheaper_refill or horizon_end, minimum_sale_price - battery_min_profit,
                     include_estimated=True)
-                grid_budget = max(0.0, profitable_demand - existing_energy)
                 continuing_grid_cycle = (
                     ((active_grid_cycle and cursor <= now) or (
                         getattr(self, "_charge_session_started", False)
@@ -3147,16 +3156,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ))
                 # A grid command includes simultaneous PV. Only its import
                 # supplement has to earn the import-price margin.
-                mixed_solar_kwh = sum(
-                    float(item["charge_kwh"]) * min(1.0, max(0.0, float(slot["net_solar_kwh"]))
-                        / max(max_charge_kw * float(slot["hours"]), 1e-9))
-                    for item in grid_selected for slot in future_slots
-                    if slot["start"] == item["start"]
+                profit = grid_supplement_profit(
+                    selected=selected_for_cycle, slots=future_slots, after=charge_end,
+                    before=cheaper_refill or horizon_end, max_charge_kw=max_charge_kw,
+                    max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
+                    existing_energy=existing_energy, allow_export=self._cycle_export_enabled,
+                    historical_cost=historical_cost,
                 )
                 # A small profitable peak cannot justify buying a full cycle.
                 # The daily-mean forecast may support the economic estimate;
                 # starting a new charge still requires known purchase prices.
-                if (grid_budget + 1e-6 >= required_grid_kwh - mixed_solar_kwh or continuing_grid_cycle
+                if (profit["profitable"] or continuing_grid_cycle
                         or all(float(item["profit_cost"]) < 0 for item in grid_selected)):
                     grid_budget = required_grid_kwh
                 else:
@@ -3270,13 +3280,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
             if bundled_grid and not continuing_grid_cycle and not all(
                     float(item["profit_cost"]) < 0 for item in bundled_grid):
-                bundled_cost = max(float(item["profit_cost"]) for item in bundled_grid)
-                if existing_energy > .01 and historical_cost is not None:
-                    bundled_cost = max(bundled_cost, historical_cost)
                 bundled_end = max(item["end"] for item in selected_for_cycle)
-                bundled_demand = _profitable_discharge_capacity(
-                    bundled_end, cheaper_refill or horizon_end, bundled_cost, include_estimated=True)
-                if bundled_demand - existing_energy + 1e-6 < required_grid_kwh - mixed_solar_kwh:
+                bundled_profit = grid_supplement_profit(
+                    selected=selected_for_cycle, slots=future_slots, after=bundled_end,
+                    before=cheaper_refill or horizon_end, max_charge_kw=max_charge_kw,
+                    max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
+                    existing_energy=existing_energy, allow_export=self._cycle_export_enabled,
+                    historical_cost=historical_cost,
+                )
+                if not bundled_profit["profitable"]:
                     selected_for_cycle = selection_before_bundling
                     bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
             if grid_selected and bundled_grid and cheaper_refill is not None and not mixed_fill:

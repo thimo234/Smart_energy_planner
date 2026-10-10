@@ -8,7 +8,9 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 class SolarPreviewTest(unittest.TestCase):
     def replay(self, timestamp, soc, instance=None):
         return replay_full_plan('2026_10_10_short_cycles', timestamp, soc=soc,
-            reserve=60, profit=.10, max_charge=2.5, snapshot_exports=True,
+            # At 10 ct this snapshot now passes the agreed average-margin
+            # test. Use 15 ct to keep exercising rejection and reserve safety.
+            reserve=60, profit=.15, max_charge=2.5, snapshot_exports=True,
             isolated_cycles=True, instance=instance)
 
     def test_preview_does_not_reintroduce_rejected_grid_supplement(self):

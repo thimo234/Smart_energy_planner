@@ -1434,10 +1434,11 @@ class BatteryPlannerTest(unittest.TestCase):
             current_remaining_capacity_kwh=6.0,
             max_charge_kw=2.0,
             max_discharge_kw=3.0,
-            battery_min_profit=0.08,
+            battery_min_profit=0.15,
         )
 
-        # Solar already running may continue, but it is not an existing grid
+        # At 8 ct the average-margin rule now permits completion. At 15 ct
+        # solar already running may continue, but it is not an existing grid
         # purchase that can bypass the full import-profit check.
         self.assertAlmostEqual(sum(w["charge_kwh"] for w in solar_windows), 2.)
         self.assertEqual(grid_windows, [])
@@ -1507,10 +1508,20 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        # October 10: if the full new supplement fails its profit check,
-        # skip the solar portion too instead of starting a partial cycle.
-        self.assertEqual(grid_windows, [])
-        self.assertEqual(solar_windows, [])
+        # The later average-margin rule admits this full supplement. Check
+        # actual storage after projected household discharge, not today's SOC.
+        self.assertTrue(grid_windows)
+        self.assertGreaterEqual(datetime.fromisoformat(grid_windows[0]['start']), tomorrow)
+        modes, _ = coordinator._build_mode_windows_from_hourly_plan(
+            slots=slots, now=now, planned_solar_charge_windows=solar_windows,
+            planned_grid_charge_windows=grid_windows, initial_usable_energy_kwh=7.9,
+            usable_capacity_kwh=8., battery_soc_percent=99., average_price=.35,
+            average_export_price=.25, max_charge_kw=2.5, max_discharge_kw=2.5,
+            battery_min_profit=.08)
+        from test_battery_energy_accounting import energy_trace
+        trace = energy_trace(now, slots, modes, initial=9.9, max_charge=2.5)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
 
     def test_solar_charge_window_ends_when_selected_energy_is_loaded(self):
         now = datetime(2026, 6, 26, 7, 30)

@@ -82,6 +82,18 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Een werkelijk lopende netlaadcyclus mag nog worden afgemaakt; reeds geladen
   energie mag de eigen laadbeslissing niet bij iedere update terugdraaien.
   De opbrengst blijft een prognose, geen garantie voor iedere geladen kWh.
+- Nader afgesproken op 10 oktober: toets de ingestelde minimumwinst als
+  energiegewogen gemiddeld voordeel over de volledige netaanvulling. Een
+  individueel inkoop- of afnamekwartier hoeft die marge niet afzonderlijk te
+  halen. Gebruik de werkelijk gekozen importhoeveelheden en hun tarieven,
+  niet het duurste laadkwartier als prijs voor de hele aanvulling.
+  Ken beschikbare latere afname toe op waarde, trek bestaande voorraad af
+  en tel iedere kWh slechts eenmaal. Eigen verbruik gebruikt importtarieven;
+  export behoudt de bestaande afzonderlijke winstbescherming en deelt het
+  ontlaadvermogen met eigen verbruik. Gelijktijdige zon telt niet als netinkoop
+  en mag de netwinst niet subsidiëren. Geschatte latere tarieven mogen de
+  prognose ondersteunen. De extra arbitragecyclus houdt de bestaande strengere
+  toets op volledige afname binnen het volgende venster met bekende prijzen.
 - Gewijzigd op 10 oktober: als een nieuwe cyclus niet volledig kan laden met
   de rendabele geselecteerde zon- en netenergie, sla dan de hele cyclus over,
   inclusief gedeeltelijke zonnelading. Dit geldt ook in de vooruitblik.
@@ -258,6 +270,51 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: gemiddelde winst over de netaanvulling — 10 oktober
+
+- De gebruiker heeft bevestigd dat de minimumwinst gemiddeld over de volledige
+  netaanvulling moet worden getoetst. Het overslaan van een niet rendabel vol
+  te laden nieuwe cyclus blijft gelden, nu met deze gewijzigde winstdefinitie.
+- Geïmplementeerd: gewogen importkosten met aftrek van gelijktijdige PV,
+  toewijzing van beschikbare latere afname op waarde en toetsing van het totale
+  voordeel. Na het bundelen van laaduren wordt dezelfde toets herhaald.
+  De afzonderlijke kandidaatselectie eist niet meer in elk netlaadkwartier
+  de hele minimumwinst; de volledige aanvulling moet gezamenlijk voldoen.
+- Replay van dezelfde 20%-meting: vandaag circa 100% bereiken, met netladen
+  vooral 12:00–13:00 en 13:45–15:00, en een laatste klein restant om 17:00.
+  Daarna ontladen tot circa 60%; morgen geen volledige rendabele cyclus.
+  De oorspronkelijke prognose geeft circa 4,54 kWh netinkoop tegen gemiddeld
+  12,88 cent. Toegerekende beschikbare afname geeft circa 12,65 cent gemiddeld
+  voordeel. Bij uitsluitend het getoonde ontladen tot 60%, zonder waarde voor
+  de resterende voorraad, resteert circa 10,34 cent voordeel per gekochte kWh.
+- Nieuwe controles: gemiddelde marge op/onder de grens, geen PV-subsidie,
+  geen dubbele afname/vermogen of hergebruik van bestaande voorraad en
+  onafhankelijke kosten-/energiecontrole van het uitgegeven plan. De eerdere
+  afwijzingsreplay gebruikt nu expliciet 15 cent minimumwinst in plaats van
+  10 cent; de aangeleverde bronmeting is ongewijzigd en de nieuwe 10-centreplay
+  controleert juist dat de volle lading wordt toegestaan.
+- Ook de oudere prijsankerreplay en de synthetische test voor vrije ruimte
+  na huisverbruik zijn aangepast aan hun nu positieve gemiddelde rendement:
+  zij controleren volledige lading en fysieke grenzen, inclusief herhaalde
+  updates. Een opdracht met nul werkelijke netinkoop kan de zonneladingstoets
+  niet omzeilen via een triviaal gemiddelde van nul kosten en nul opbrengst.
+- De SOC-feedbacktest vond en verholp een extra fout: energie die al binnen
+  de lopende laadfase is geladen, mag niet als oudere voorraad de eigen
+  resterende netaanvulling wegdrukken. Bij een actieve zonne-/netlaadfase
+  wordt die voorraad niet opnieuw van de afname voor de aanvulling afgetrokken;
+  de gemiddelde winsttoets voor de nieuwe netenergie blijft verplicht.
+- Eindcontrole: de brede ronde omvatte 212 tests; alleen de nieuwe
+  SOC-feedbacktest faalde. Na de correctie zijn 89 gerichte regressies
+  gecontroleerd, inclusief 34 opeenvolgende kwartierupdates tot vol, volledige
+  cycli, reserve en herstart. Eén oude synthetische afwijzingsverwachting is
+  expliciet naar 15 cent gezet omdat dezelfde cyclus bij gemiddeld 8 cent
+  terecht slaagt; de gerichte herhaling slaagt. De overige gerichte controles
+  slagen. Grafiekdata zijn met de definitieve uitvoer vergeleken; diffcontrole
+  slaagt. Alleen lokaal getest, geen wijzigingen aan de weergavecode.
+- De gebruiker heeft de concrete vergelijkingsgrafiek op 10 oktober
+  goedgekeurd en opdracht gegeven naar main te committen en pushen.
+- Nog open: installatie/live verificatie in Home Assistant.
 
 ### Goedgekeurde wijziging: onvolledige nieuwe cycli overslaan — 10 oktober
 
