@@ -82,6 +82,14 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Een werkelijk lopende netlaadcyclus mag nog worden afgemaakt; reeds geladen
   energie mag de eigen laadbeslissing niet bij iedere update terugdraaien.
   De opbrengst blijft een prognose, geen garantie voor iedere geladen kWh.
+- Gewijzigd op 10 oktober: als een nieuwe cyclus niet volledig kan laden met
+  de rendabele geselecteerde zon- en netenergie, sla dan de hele cyclus over,
+  inclusief gedeeltelijke zonnelading. Dit geldt ook in de vooruitblik.
+  Zoek daarna wel verder naar een volgende volledige geschikte cyclus.
+  De reserve blijft gelden zolang geen uitvoerbare aanvulling beschikbaar is.
+  Bestaande afspraken voor werkelijk lopende lading, tegenvallende zon en
+  negatieve netprijzen blijven gelden. Ontlading rekent met werkelijk gemeten
+  en gesimuleerde energie; neem 100% niet aan zonder bijbehorende lading.
 - Het huidige rekenmodel gebruikt tariefverschillen. Omzettingsverliezen en
   slijtage zijn niet daarin verwerkt; verander die definitie niet ongemerkt.
 
@@ -168,6 +176,16 @@ geverifieerd is. Lees ook de open punten onderaan.
   niet onder de veilige grens, niet boven vol, geen overlappende laadopdrachten.
 - Test onder andere geen zon, veel zon, weinig zon, negatieve prijzen,
   veranderend verbruik, tariefwijzigingen, dagovergangen en hervatten na herstart.
+- Werkwijze gewijzigd op 9 oktober: behoud deze regressiedekking, maar voer
+  per wijziging eerst alleen de relevante tests uit. De volledige suite is
+  nodig bij brede plannerwijzigingen of concrete twijfel over neveneffecten.
+  Herhaal geslaagde controles niet voor een push zonder relevante codewijziging.
+- Beperk tokengebruik: sla uitgebreide testuitvoer op en lees alleen de
+  samenvatting en eventuele fouten. Lees bronbestanden gericht. Gebruik het
+  bestaande visualisatiescript en de vaste template voor iedere controlegrafiek;
+  een standaard door code gegenereerde grafiek is voldoende. Geen nieuwe
+  grafiekcode of herhaalde browser-/mobiele controle per sensorreplay zolang de
+  weergavecode gelijk blijft en er geen concrete weergavefout is.
 - **Vóór iedere commit/push:** toon een grafiek in de opzet van de Lovelace-card,
   met prijzen, zonne- en verbruiksprognose, laad-/ontlaadvensters en berekende SOC.
   Benoem of het echte aangeleverde prognoses of synthetische testscenario's zijn.
@@ -240,6 +258,73 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: onvolledige nieuwe cycli overslaan — 10 oktober
+
+- De 20%-meting van 10 oktober 09:15 is gereproduceerd met aangeleverde
+  tarieven/prognoses, 10 kWh, 20% veilige grens, 60% reserve, 10 cent
+  minimumwinst, 2,5 kW laden en 3 kW ontladen, zonder extra prognosemarges.
+- De uitvoerbare zonnelading bereikt ongeveer 54,6%. De oude vooruitblik
+  behandelde deze zonnevoorraad als een lopende netcyclus en voegde om 17:00
+  alsnog een halfuur netladen toe, hoewel de volledige netaanvulling eerder
+  was afgewezen. Dit is lokaal gecorrigeerd: de vooruitblik bewaart de laadbron
+  en uitsluitend zonneladen activeert die uitzondering niet op basis van SOC.
+- De correctie maakt de accu niet kunstmatig vol: de ontlading wordt uit de
+  werkelijk gesimuleerde eindlading berekend. De netaanvulling van ongeveer
+  4,54 kWh voldoet in deze reconstructie niet aan de volledige winsttoets.
+  Morgen ontbreken bekende tarieven; ook dan is de zonnebijdrage onvoldoende
+  voor een volle accu vanaf 20%. De gebruiker koos vervolgens expliciet voor
+  het overslaan van de hele nieuwe cyclus als volledig rendabel laden niet
+  haalbaar is. Geen toestemming aangenomen om
+  onrendabel netladen toe te voegen of met niet-geladen energie te ontladen.
+- Lokaal slagen 17 gerichte tests: nieuwe meting en zonnefeedback, volledige
+  winst/reserve en dagcyclusregressies. Vaste vergelijkingsgrafiek gegenereerd;
+  ongewijzigde weergavecode, daarom geen herhaalde browsercontrole.
+- Aanvullend lokaal geïmplementeerd: controleer na de netwinsttoets of de
+  geselecteerde energie de volledige nieuwe lading dekt. Zo niet, sla die
+  gelegenheid over zonder fictieve cyclus of reservevrijgave. Een volgende
+  geschikte volledige zonnecyclus blijft mogelijk. Reeds lopende lading met
+  aanwezige energie wordt niet vanwege een tegenvallende prognose afgebroken.
+- De bestaande uitzondering voor onvermijdelijke restenergie blijft behouden:
+  die energie telt mee voor vol laden. Bij de winsttoets voor een volgende
+  lading wordt ook mogelijke rendabele export vóór die lading meegenomen;
+  reeds afgegeven energie mag de aanvulling niet blokkeren. Huis en export
+  delen daarbij hetzelfde vermogensbudget en de oude exportprijsgrens blijft.
+  Geschikte uren na een duurder onderbrekingsblok mogen samen een volledige
+  cyclus vormen. Vier oude synthetische testverwachtingen zijn expliciet
+  aangepast: geen onvolledige nieuwe zonnecyclus en geen netcyclusuitzondering
+  op basis van alleen lopend zonneladen. Bronmetingen zijn niet gewijzigd.
+- Met deze keuze blijft de aangeleverde 20%-meting op 20% voor de hele horizon;
+  zowel vandaag als morgen vervalt de nieuwe gedeeltelijke lading. De reserve
+  verplicht niet tot bijladen. Aanvullende regressie controleert behoud van
+  60% over herberekeningen en een volledige zonnecyclus na een overgeslagen dag.
+- De gebruiker heeft de gewijzigde vergelijkingsgrafiek op 10 oktober
+  goedgekeurd en opdracht gegeven naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+- Eindcontrole van deze volledige-cycluswijziging: alle 207 Python-tests
+  geslaagd. De vaste grafiek is opnieuw gegenereerd met de definitieve code
+  en houdt in deze meting overal 20% aan. Diffcontrole geslaagd. Alleen lokaal
+  getest; geen frontendwijziging of herhaalde browsercontrole.
+
+### Lokale werkwijze en beoordeling meting — 9 oktober
+
+- De compactere controleprocedure is vastgelegd in dit document en AGENTS.md.
+  Er is voor deze beoordeling geen plannercode gewijzigd.
+- De meting van 9 oktober 07:15 bevat geen uitvoerbare laadopdracht en houdt
+  de 60%-reserve vast. Het zonneladen op 10 oktober 10:00–17:00 staat uitsluitend
+  in de vooruitblik, met geschatte prijzen. Onafhankelijke integratie met het
+  bestaande visualisatiescript (laden 2,5 kW, ontladen 3 kW) geeft circa
+  4,17 kWh lading, van 20,05% naar 61,70%; de accu wordt dus niet vol.
+- De geschatte importprijs is EUR 0,24174/kWh en de exportprijs EUR 0,12174/kWh.
+  Dat geeft voor eigen verbruik 12 cent voordeel op zonnelading, tegenover
+  10 cent minimumwinst. Netinkoop tegen hetzelfde daggemiddelde geeft geen
+  voordeel. Dit is geen bewijs dat de volledige zonnelading later rendabel
+  wordt verbruikt; een controle op de volledige netaanvulling is niet hetzelfde
+  als een volledige afnametoets voor zonnelading. Nieuwe bekende tarieven en
+  prognoses kunnen de vooruitblik wijzigen.
+- Alleen de aangeleverde planning doorgerekend; geen nieuwe plannerreplay,
+  volledige testsuite of live Home Assistant-controle nodig voor deze
+  documentatiewijziging. Nog niet gecommit/gepusht.
 
 ### Goedgekeurde wijziging: volledige winsttoets en herstel van reserve — 8 oktober
 

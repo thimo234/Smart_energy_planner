@@ -2743,7 +2743,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ]
             return min(primary_costs, default=None)
 
-        def _project_usable_energy_until(until: datetime) -> float:
+        def _project_usable_energy_until(until: datetime, *, include_export: bool = False) -> float:
             projected_usable_kwh = current_usable_kwh
             for slot in future_slots:
                 slot_start = cast(datetime, slot["start"])
@@ -2761,6 +2761,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 active_fraction = min(1.0, active_hours / slot_hours)
                 net_battery_demand_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * active_fraction
                 discharge_kwh = min(max_discharge_kw * active_hours, net_battery_demand_kwh)
+                historical = getattr(self, "_battery_grid_charge_price", None)
+                if (include_export and self._cycle_export_enabled and slot.get("price_known", True)
+                        and float(slot["export_price"]) > 0
+                        and (historical is None or float(slot["export_price"]) + 1e-9 >= historical + battery_min_profit)):
+                    discharge_kwh = max_discharge_kw * active_hours
                 projected_usable_kwh = max(0.0, projected_usable_kwh - discharge_kwh)
             return projected_usable_kwh
 
@@ -3074,6 +3079,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     used_starts=used_grid_starts,
                 )
 
+            if charged_kwh < target_kwh:
+                # A costly gap can split a price valley without invalidating
+                # cheaper, profitable slots later in the same opportunity.
+                charged_kwh = _append_charge_candidates(
+                    selected_for_cycle, profitable_primary_candidates,
+                    target_kwh=target_kwh, charged_kwh=charged_kwh,
+                )
+
             if not selected_for_cycle:
                 break
 
@@ -3088,7 +3101,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # refill, after the intervening household consumption.
                 selected_charge_start = min(cast(datetime, item["start"]) for item in selected_for_cycle)
                 existing_energy = (current_usable_kwh if first_grid_charge_start == now and cycle_index == 0
-                                   else _project_usable_energy_until(selected_charge_start))
+                                   else _project_usable_energy_until(selected_charge_start, include_export=True))
                 historical_cost = getattr(self, "_battery_grid_charge_price", None)
                 if existing_energy > 0.01 and historical_cost is not None:
                     minimum_sale_price = max(minimum_sale_price, historical_cost + battery_min_profit)
@@ -3122,6 +3135,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and (historical_cost is not None or (
                             getattr(self, "_battery_cycle_state_initialized", False)
                             and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
+                            and self._active_charge_phase_mode != "laden_met_zonne_energie"
                         ))
                     ))
                     and profitable_demand > 1e-9
@@ -3174,6 +3188,32 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     cursor = charge_end
                     cycle_index += 1
                     continue
+
+            # A new cycle must reach full after the import-profit check too.
+            # Otherwise a rejected supplement leaves a small solar-only cycle
+            # behind and incorrectly releases the no-charge reserve.
+            running_charge = (
+                cursor <= now and getattr(self, "_charge_session_started", False)
+                and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
+            )
+            negative_grid_charge = selected_for_cycle and all(
+                item["kind"] == "grid" and float(item["profit_cost"]) < 0
+                for item in selected_for_cycle
+            )
+            completion_target = target_kwh
+            if previous_charge_end is None and selected_for_cycle:
+                start = min(item["start"] for item in selected_for_cycle)
+                remainder = _project_usable_energy_until(start, include_export=True)
+                # Retain the October 2 exception: an unavoidable existing
+                # remainder reduces the energy needed to reach full. Account
+                # for possible export as well as the projected house demand.
+                completion_target = min(target_kwh, usable_capacity_kwh - remainder)
+            if (sum(float(item["charge_kwh"]) for item in selected_for_cycle)
+                    + 1e-6 < completion_target and not running_charge and not negative_grid_charge):
+                # Advance past this opportunity, without inventing a completed
+                # cycle or letting tomorrow's sun finish today's partial fill.
+                cursor = refill_start if bridge is not None else charge_deadline
+                continue
 
             # Consolidate energy within chronological, profitable same-source
             # runs whose TOTAL price spread is at most one cent. Do not bridge
@@ -4281,6 +4321,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if rate > 0:
                     preview._charge_session_started = True
                     preview._discharge_session_started = False
+                    # Solar-only charging does not authorize the running-grid
+                    # exception when the preview starts halfway through a fill.
+                    preview._active_charge_phase_mode = mode
                     if mode == "laden_van_net":
                         preview._battery_grid_charge_price = max(
                             float(slot["import_price"]),

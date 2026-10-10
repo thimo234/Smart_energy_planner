@@ -946,7 +946,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
         self.assertNotEqual(current_mode, "laden_met_zonne_energie")
 
-    def test_full_battery_keeps_later_charge_after_expected_depletion(self):
+    def test_full_battery_skips_incomplete_later_charge_after_expected_depletion(self):
         now = datetime(2026, 6, 25, 15, 45)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1002,8 +1002,9 @@ class BatteryPlannerTest(unittest.TestCase):
             charge_safety_margin=0.0,
         )
 
-        self.assertTrue(solar_windows)
-        self.assertGreaterEqual(datetime.fromisoformat(solar_windows[0]["start"]), day + timedelta(days=1, hours=10))
+        # October 10: six solar hours cannot refill 8 kWh at 1 kW.
+        self.assertEqual(solar_windows, [])
+        self.assertEqual(grid_windows, [])
 
     def test_discharge_window_turns_off_cheap_hours_when_energy_is_short(self):
         now = datetime(2026, 6, 25, 18, 0)
@@ -1396,7 +1397,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertTrue(solar_windows)
         self.assertEqual(grid_windows, [])
 
-    def test_partial_solar_cycle_keeps_full_recharge_target_for_later_cheap_grid(self):
+    def test_running_solar_does_not_authorize_unprofitable_grid_completion(self):
         now = datetime(2026, 6, 26, 11, 30)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1436,12 +1437,10 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        # A running solar cycle may finish with mixed charging, which also
-        # absorbs the 2 kWh of simultaneous PV in these slots.
-        self.assertEqual(solar_windows, [])
-        self.assertAlmostEqual(sum(w["charge_kwh"] for w in grid_windows), 6.)
-        self.assertTrue(grid_windows)
-        self.assertTrue(all(w["price"] == .16 for w in grid_windows))
+        # Solar already running may continue, but it is not an existing grid
+        # purchase that can bypass the full import-profit check.
+        self.assertAlmostEqual(sum(w["charge_kwh"] for w in solar_windows), 2.)
+        self.assertEqual(grid_windows, [])
 
     def test_charge_planning_uses_projected_room_after_pre_charge_demand_for_grid_topup(self):
         now = datetime(2026, 6, 29, 16, 0)
@@ -1508,10 +1507,10 @@ class BatteryPlannerTest(unittest.TestCase):
             battery_min_profit=0.08,
         )
 
-        # 8 October: a small evening demand cannot justify buying the full
-        # grid target; independently profitable solar remains available.
+        # October 10: if the full new supplement fails its profit check,
+        # skip the solar portion too instead of starting a partial cycle.
         self.assertEqual(grid_windows, [])
-        self.assertAlmostEqual(sum(float(w["charge_kwh"]) for w in solar_windows), 1.2)
+        self.assertEqual(solar_windows, [])
 
     def test_solar_charge_window_ends_when_selected_energy_is_loaded(self):
         now = datetime(2026, 6, 26, 7, 30)
@@ -2165,7 +2164,8 @@ class BatteryPlannerTest(unittest.TestCase):
 
         today_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
-        self.assertTrue(any(datetime.fromisoformat(window["start"]) >= today_end for window in solar_windows))
+        # The later solar opportunity also cannot complete a new full fill.
+        self.assertEqual(solar_windows, [])
 
         mode_windows, _ = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
             coordinator,
