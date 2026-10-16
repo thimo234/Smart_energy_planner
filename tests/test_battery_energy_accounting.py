@@ -92,7 +92,6 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                                           "battery_demand_safety_margin": 0,
                                           "battery_charge_safety_margin": solar_margin,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
-    c._locked_eco_window = c._locked_preheat_end = c._preheat_expired_at = None
     namespace = c._build_plan_for_horizon.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {
         "build_hourly_home_demand_forecast": lambda **kwargs: data["estimated_hourly_home_demand"],
@@ -107,12 +106,9 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
             price_average=None, export_price_average=None, current_price=prices[0].price,
             solar_forecast_kwh=sum(w.forecast_kwh for w in solar if w.start.date() == now.date()),
             solar_windows=solar, all_solar_windows=solar, solcast_confidence=None,
-            heating_estimate_kwh=0, lookback_average_kwh=20, total_energy_daily_average_kwh=20,
+            lookback_average_kwh=20, total_energy_daily_average_kwh=20,
             non_heating_daily_average_kwh=20, hourly_demand_table={}, demand_adjustment_factor=1,
-            room_temperature_c=None, thermostat_setpoint_c=None, thermostat_cool_setpoint_c=None,
-            thermostat_preheat_setpoint_c=None, thermostat_eco_setpoint_c=None,
-            room_cooling_hours_to_eco=None, room_cooling_rate_c_per_hour=None,
-            cooling_reference_outdoor_temp_c=None, battery_soc_percent=soc,
+            battery_soc_percent=soc,
             price_resolution="quarter_hourly", source_status={"price_sensor": "ok"}, source_errors=[],
         )
     return now, slots, result

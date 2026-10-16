@@ -29,6 +29,6 @@
     Smart Energy Planner
   </text>
   <text x="252" y="144" fill="#9fb3c8" font-family="Segoe UI, Arial, sans-serif" font-size="24">
-    Dynamic battery and thermostat planning for Home Assistant
+    Dynamic battery and price window planning for Home Assistant
   </text>
 </svg>

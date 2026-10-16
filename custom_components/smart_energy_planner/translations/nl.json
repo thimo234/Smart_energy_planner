@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Slimme Energieplanner",
-        "description": "Kies of je een accuplanner, thermostaatplanner of prijsvensterplanner wilt instellen.",
+        "description": "Kies of je een accuplanner of prijsvensterplanner wilt instellen.",
         "data": {
           "planner_kind": "Planner type",
           "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)"
@@ -20,19 +20,7 @@
           "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "battery_soc_sensor": "Accu laadstatus sensor",
-          "temperature_sensor": "Buitentemperatuur sensor",
-          "room_temperature_sensor": "Kamertemperatuur sensor",
-          "heating_switch_entity": "Verwarmingsschakelaar",
-          "cooling_mode_switch_entity": "Koelmodus schakelaar",
           "total_energy_sensor": "Totale energieverbruik sensor",
-          "thermostat_eco_temperature": "Eco temperatuur",
-          "thermostat_cold_tolerance": "Koude tolerantie",
-          "thermostat_hot_tolerance": "Warme tolerantie",
-          "thermostat_min_temp": "Minimale thermostaattemperatuur",
-          "thermostat_max_temp": "Maximale thermostaattemperatuur",
-          "thermostat_min_cycle_minutes": "Minimale schakeltijd (minuten)",
-          "thermostat_control_check_minutes": "Controle-interval verwarmingsstatus (minuten)",
-          "thermostat_preheat_minutes": "Voorverwarmtijd voor eco (minuten)",
           "price_resolution": "Prijsinterval energiecontract",
           "price_window_type": "Type prijsvenster",
           "price_window_duration_hours": "Duur aaneengesloten prijsvenster (uren)",
@@ -48,6 +36,9 @@
           "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)"
         }
       }
+    },
+    "abort": {
+      "unsupported_planner_kind": "Dit plannertype wordt niet meer ondersteund. Verwijder deze integratieconfiguratie."
     }
   },
   "options": {
@@ -60,19 +51,7 @@
           "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "battery_soc_sensor": "Accu laadstatus sensor",
-          "temperature_sensor": "Buitentemperatuur sensor",
-          "room_temperature_sensor": "Kamertemperatuur sensor",
-          "heating_switch_entity": "Verwarmingsschakelaar",
-          "cooling_mode_switch_entity": "Koelmodus schakelaar",
           "total_energy_sensor": "Totale energieverbruik sensor",
-          "thermostat_eco_temperature": "Eco temperatuur",
-          "thermostat_cold_tolerance": "Koude tolerantie",
-          "thermostat_hot_tolerance": "Warme tolerantie",
-          "thermostat_min_temp": "Minimale thermostaattemperatuur",
-          "thermostat_max_temp": "Maximale thermostaattemperatuur",
-          "thermostat_min_cycle_minutes": "Minimale schakeltijd (minuten)",
-          "thermostat_control_check_minutes": "Controle-interval verwarmingsstatus (minuten)",
-          "thermostat_preheat_minutes": "Voorverwarmtijd voor eco (minuten)",
           "price_resolution": "Prijsinterval energiecontract",
           "price_window_type": "Type prijsvenster",
           "price_window_duration_hours": "Duur aaneengesloten prijsvenster (uren)",
@@ -92,6 +71,9 @@
           "export_price_tax_deduction": "Alleen bij een lege terugleversensor of dezelfde sensor als de importprijs: terugleverprijs = importprijs min dit bedrag. 0,11 betekent 11 cent/kWh; 0 schakelt de aftrek uit. Gebruik een importprijs inclusief belasting. Een aparte terugleversensor wordt niet aangepast."
         }
       }
+    },
+    "abort": {
+      "unsupported_planner_kind": "Dit plannertype wordt niet meer ondersteund. Verwijder deze integratieconfiguratie."
     }
   }
 }

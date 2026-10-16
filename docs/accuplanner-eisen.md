@@ -271,6 +271,30 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: thermostaatgedeelte verwijderen — 16 oktober
+
+- Gewenst: de gebruiker vraagt het volledige thermostaatgedeelte te verwijderen.
+  Accu- en prijsvensterplanning blijven beschikbaar met hun bestaande werking.
+- Geïmplementeerd: thermostaatkeuze, instellingen, climate-entiteit, bijbehorende
+  sensoren, verwarmings-/koelaansturing, eco-/voorverwarmplanning en het koelmodel
+  verwijderd. Ook de bijbehorende resultaatvelden, runtime-toewijzingen,
+  vertalingen en documentatie zijn opgeschoond.
+- Bestaande thermostaatconfiguraties worden bij setup geweigerd en kunnen niet
+  via de opties als accuplanner worden geopend. Ze moeten in Home Assistant
+  worden verwijderd. De update bedient bestaande schakelaars niet; actieve
+  verwarmings- of koelregeling moet vóór installatie elders worden overgenomen.
+- Lokaal gecontroleerd: 205 bestaande Python-tests en vier nieuwe controles
+  slagen. Nieuwe controles dekken oude configuraties, configuratie-/optieflows,
+  prijsvensterplanning en updates zonder prijssensor. Diffcontrole slaagt.
+- Replay van de aangeleverde prognoses van 10 oktober 09:15: 20% SOC, 10 kWh,
+  20% veilige grens, 60% reserve, minimumwinst EUR 0,10/kWh, laden 2,5 kW,
+  ontladen 3 kW, zonder extra prognosemarges. Alle behouden resultaatvelden
+  zijn exact gelijk aan de versie vóór verwijdering. De vaste vergelijkingsgrafiek
+  toont deze berekende planning, inclusief de afzonderlijke vooruitblik.
+- De gebruiker heeft de concrete wijziging/grafiek op 16 oktober goedgekeurd.
+- Nog open: installatie en live controle in Home Assistant. De kaart en de
+  grafiektemplate zijn niet gewijzigd; daarom geen herhaalde browsercontrole.
+
 ### Goedgekeurde wijziging: gemiddelde winst over de netaanvulling — 10 oktober
 
 - De gebruiker heeft bevestigd dat de minimumwinst gemiddeld over de volledige

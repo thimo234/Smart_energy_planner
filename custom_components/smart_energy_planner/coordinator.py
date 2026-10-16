@@ -1,4 +1,4 @@
-﻿"""Coordinator for Smart Energy Planner."""
+"""Coordinator for Smart Energy Planner."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from homeassistant.components.recorder import get_instance as get_recorder_instance, history
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -49,13 +49,6 @@ from .battery_planner import (
     reserve_without_charge_opportunity,
     summarize_battery_cycles,
 )
-from .thermostat_planner import (
-    THERMOSTAT_MAX_COOLDOWN_HOURS,
-    estimate_cooling_profile_from_model,
-    find_next_valley_start,
-    select_expensive_peak_blocks,
-    select_thermostat_peak_eco_windows,
-)
 from .const import (
     CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT,
     CONF_BATTERY_CAPACITY_KWH,
@@ -67,23 +60,15 @@ from .const import (
     CONF_BATTERY_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
-    CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
-    CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
     CONF_PRICE_RESOLUTION,
     CONF_PRICE_WINDOW_TYPE,
     CONF_PRICE_WINDOW_DURATION_HOURS,
     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
-    CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_SOLCAST_TOMORROW_SENSOR,
-    CONF_TEMPERATURE_SENSOR,
-    CONF_THERMOSTAT_ECO_TEMPERATURE,
-    CONF_THERMOSTAT_MAX_TEMP,
-    CONF_THERMOSTAT_MIN_TEMP,
-    CONF_THERMOSTAT_PREHEAT_MINUTES,
     CONF_TOTAL_ENERGY_SENSOR,
     COORDINATOR_UPDATE_INTERVAL,
     DEFAULT_BATTERY_CAPACITY_KWH,
@@ -97,14 +82,9 @@ from .const import (
     DEFAULT_PRICE_WINDOW_DURATION_HOURS,
     DEFAULT_PRICE_WINDOW_TYPE,
     DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
-    DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
-    DEFAULT_THERMOSTAT_MAX_TEMP,
-    DEFAULT_THERMOSTAT_MIN_TEMP,
-    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_PRICE_WINDOW,
-    PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     PRICE_WINDOW_TYPE_MOST_EXPENSIVE,
     RUNTIME_STATE,
@@ -176,10 +156,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         self._active_charge_phase_end: datetime | None = None
         self._active_charge_phase_mode = "accu_uit"
-        self._eco_early_exit_until: datetime | None = None  # kept for state compat, no longer used
-        self._locked_eco_window: dict | None = None
-        self._locked_preheat_end: datetime | None = None
-        self._preheat_expired_at: datetime | None = None  # set when preheat lock times out without eco
         self._source_error_retry_unsub: object | None = None
         self._charge_session_started: bool = False
         self._discharge_session_started: bool = False
@@ -272,10 +248,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             export_price_sensor = self._config_entity_id(CONF_EXPORT_PRICE_SENSOR)
             solar_sensor = self._config_entity_id(CONF_SOLCAST_TODAY_SENSOR)
             solar_tomorrow_sensor = self._config_entity_id(CONF_SOLCAST_TOMORROW_SENSOR)
-            temperature_sensor = self._config_entity_id(CONF_TEMPERATURE_SENSOR)
-            room_temperature_sensor = self._config_entity_id(CONF_ROOM_TEMPERATURE_SENSOR)
-            heating_switch_entity = self._config_entity_id(CONF_HEATING_SWITCH_ENTITY)
-            cooling_mode_switch_entity = self._config_entity_id(CONF_COOLING_MODE_SWITCH_ENTITY)
             total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
             battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
@@ -283,12 +255,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             export_price_state = self.hass.states.get(export_price_sensor) if export_price_sensor else None
             solar_state = self.hass.states.get(solar_sensor) if solar_sensor else None
             solar_tomorrow_state = self.hass.states.get(solar_tomorrow_sensor) if solar_tomorrow_sensor else None
-            temperature_state = self.hass.states.get(temperature_sensor) if temperature_sensor else None
-            room_temperature_state = self.hass.states.get(room_temperature_sensor) if room_temperature_sensor else None
-            heating_switch_state = self.hass.states.get(heating_switch_entity) if heating_switch_entity else None
-            cooling_mode_switch_state = (
-                self.hass.states.get(cooling_mode_switch_entity) if cooling_mode_switch_entity else None
-            )
             total_energy_state = self.hass.states.get(total_energy_sensor) if total_energy_sensor else None
             battery_soc_state = self.hass.states.get(battery_soc_sensor) if battery_soc_sensor else None
 
@@ -313,14 +279,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar_state=solar_state,
                 solar_tomorrow_sensor=solar_tomorrow_sensor,
                 solar_tomorrow_state=solar_tomorrow_state,
-                temperature_sensor=temperature_sensor,
-                temperature_state=temperature_state,
-                room_temperature_sensor=room_temperature_sensor,
-                room_temperature_state=room_temperature_state,
-                heating_switch_entity=heating_switch_entity,
-                heating_switch_state=heating_switch_state,
-                cooling_mode_switch_entity=cooling_mode_switch_entity,
-                cooling_mode_switch_state=cooling_mode_switch_state,
                 total_energy_sensor=total_energy_sensor,
                 total_energy_state=total_energy_state,
                 battery_soc_sensor=battery_soc_sensor,
@@ -385,27 +343,21 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
             if not price_state:
                 source_status["price_sensor"] = "waiting_for_price_sensor"
-                if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    windows = build_neutral_price_windows(current_price)
-                else:
-                    neutral_windows = build_neutral_price_windows(current_price, hours=48)
-                    windows = list(neutral_windows)
-                    all_windows = list(neutral_windows)
-                    export_windows = list(neutral_windows)
-                    all_export_windows = list(neutral_windows)
-                    battery_switch_windows = list(neutral_windows)
+                neutral_windows = build_neutral_price_windows(current_price, hours=48)
+                windows = list(neutral_windows)
+                all_windows = list(neutral_windows)
+                export_windows = list(neutral_windows)
+                all_export_windows = list(neutral_windows)
+                battery_switch_windows = list(neutral_windows)
 
             if not windows:
                 source_status["price_sensor"] = "no_price_windows"
-                if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    windows = build_neutral_price_windows(current_price)
-                else:
-                    neutral_windows = build_neutral_price_windows(current_price, hours=48)
-                    windows = list(neutral_windows)
-                    all_windows = list(neutral_windows)
-                    export_windows = list(neutral_windows)
-                    all_export_windows = list(neutral_windows)
-                    battery_switch_windows = list(neutral_windows)
+                neutral_windows = build_neutral_price_windows(current_price, hours=48)
+                windows = list(neutral_windows)
+                all_windows = list(neutral_windows)
+                export_windows = list(neutral_windows)
+                all_export_windows = list(neutral_windows)
+                battery_switch_windows = list(neutral_windows)
 
             solar_forecast = _coerce_float(
                 solar_state.attributes.get("estimate") if solar_state else None,
@@ -418,14 +370,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_soc_percent = _coerce_float(battery_soc_state.state if battery_soc_state else None)
             if battery_soc_percent is not None:
                 battery_soc_percent = max(0.0, min(100.0, battery_soc_percent))
-            outdoor_temperature = _coerce_float(
-                temperature_state.state if temperature_state else None, default=7.0
-            )
-            room_temperature = _coerce_float(room_temperature_state.state if room_temperature_state else None)
-            thermostat_setpoint = self._get_manual_thermostat_setpoint()
-            thermostat_cool_setpoint = self._get_manual_cool_temperature()
-            thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
-            thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
             solar_windows = extract_solar_windows(solar_state.attributes if solar_state else {})
             solar_windows.extend(
                 extract_solar_windows(solar_tomorrow_state.attributes if solar_tomorrow_state else {})
@@ -507,10 +451,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 else 0.0
             )
 
-            if temperature_state and outdoor_temperature is None:
-                source_status["temperature_sensor"] = "invalid_temperature_value"
-            if room_temperature_state and room_temperature is None:
-                source_status["room_temperature_sensor"] = "invalid_temperature_value"
             if total_energy_state and total_energy_daily_average <= 0:
                 source_status["total_energy_sensor"] = "no_total_energy_history_yet"
             if (
@@ -536,12 +476,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if planner_kind != PLANNER_KIND_BATTERY:
                 total_energy_daily_average = 0.0
                 non_heating_daily_average = 0.0
-                heating_estimate = 0.0
                 hourly_demand_table: dict[str, float] = {}
                 demand_adjustment_factor = 1.0
             else:
                 non_heating_daily_average = total_energy_daily_average
-                heating_estimate = 0.0
                 hourly_demand_table = {}
                 demand_adjustment_factor = 1.0
                 if total_energy_sensor and total_energy_state:
@@ -570,130 +508,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         or 1.0
                     )
 
-            cooling_profile = await self._async_estimate_room_cooling_profile(
-                room_temperature_sensor=room_temperature_sensor,
-                heating_switch_entity=heating_switch_entity,
-                outdoor_temperature_sensor=temperature_sensor,
-                room_temperature_c=room_temperature,
-                outdoor_temperature_c=outdoor_temperature,
-                thermostat_setpoint_c=thermostat_setpoint,
-                thermostat_cool_setpoint_c=thermostat_cool_setpoint,
-                thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
-                thermostat_eco_setpoint_c=thermostat_eco_setpoint,
+            result = self._build_plan(
+                planner_kind=planner_kind,
+                windows=windows,
+                all_windows=all_windows,
+                export_windows=export_windows,
+                all_export_windows=all_export_windows,
+                battery_switch_windows=battery_switch_windows,
+                price_average=price_average,
+                export_price_average=export_price_average,
+                current_price=current_price,
+                solar_forecast_kwh=solar_forecast,
+                solar_windows=solar_windows,
+                all_solar_windows=all_solar_windows,
+                solcast_confidence=solcast_confidence,
+                lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
+                total_energy_daily_average_kwh=total_energy_daily_average,
+                non_heating_daily_average_kwh=non_heating_daily_average,
+                hourly_demand_table=hourly_demand_table,
+                demand_adjustment_factor=demand_adjustment_factor,
+                battery_soc_percent=battery_soc_percent,
+                price_resolution=price_resolution,
+                source_status=source_status,
+                source_errors=self._collect_source_errors(source_status),
             )
-
-            # Apply EMA (Î±=0.2) to smooth hours_to_eco and suppress per-refresh noise.
-            raw_eco_hours = cooling_profile.get("hours_to_eco")
-            if raw_eco_hours is not None and planner_kind == PLANNER_KIND_THERMOSTAT:
-                _rs = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-                    self.config_entry.entry_id, {}
-                )
-                last_smoothed = _coerce_float(_rs.get("smoothed_eco_hours"))
-                smoothed = (
-                    round(last_smoothed + (raw_eco_hours - last_smoothed) * 0.2, 2)
-                    if last_smoothed is not None
-                    else round(raw_eco_hours, 2)
-                )
-                _rs["smoothed_eco_hours"] = smoothed
-                cooling_profile["hours_to_eco"] = smoothed
-
-            # Eco window duration = time to cool from the CURRENT room temperature to the
-            # eco setpoint, so the scheduled eco block always covers the full cool-down
-            # starting from wherever the room actually is right now.
-            cooling_hours_from_current: float | None = None
-            if (
-                planner_kind == PLANNER_KIND_THERMOSTAT
-                and room_temperature is not None
-                and thermostat_eco_setpoint is not None
-            ):
-                if room_temperature <= thermostat_eco_setpoint:
-                    cooling_hours_from_current = 0.0
-                else:
-                    _cur_delta = room_temperature - thermostat_eco_setpoint
-                    _last_rate = cooling_profile.get("last_observed_rate_c_per_hour")
-                    _last_delta_t = cooling_profile.get("last_observed_delta_temp_c")
-                    _cur_delta_t = (
-                        room_temperature - outdoor_temperature
-                        if outdoor_temperature is not None else None
-                    )
-                    if (
-                        _last_rate is not None and _last_rate > 0
-                        and _last_delta_t is not None and _last_delta_t > 0
-                        and _cur_delta_t is not None and _cur_delta_t > 0
-                    ):
-                        _adjusted_rate = _last_rate * (_cur_delta_t / _last_delta_t)
-                        cooling_hours_from_current = round(
-                            min(_cur_delta / max(_adjusted_rate, 0.01), THERMOSTAT_MAX_COOLDOWN_HOURS), 2
-                        )
-                    else:
-                        _model_hours = cooling_profile.get("hours_to_eco")
-                        _cooldown_ref = max(room_temperature, thermostat_setpoint or room_temperature)
-                        _cooldown_delta = _cooldown_ref - thermostat_eco_setpoint
-                        if _model_hours is not None and _cooldown_delta > 0:
-                            cooling_hours_from_current = round(
-                                min((_cur_delta / _cooldown_delta) * _model_hours, THERMOSTAT_MAX_COOLDOWN_HOURS), 2
-                            )
-
-            try:
-                result = self._build_plan(
-                    planner_kind=planner_kind,
-                    windows=windows,
-                    all_windows=all_windows,
-                    export_windows=export_windows,
-                    all_export_windows=all_export_windows,
-                    battery_switch_windows=battery_switch_windows,
-                    price_average=price_average,
-                    export_price_average=export_price_average,
-                    current_price=current_price,
-                    solar_forecast_kwh=solar_forecast,
-                    solar_windows=solar_windows,
-                    all_solar_windows=all_solar_windows,
-                    solcast_confidence=solcast_confidence,
-                    heating_estimate_kwh=heating_estimate,
-                    lookback_average_kwh=total_energy_daily_average if planner_kind == PLANNER_KIND_BATTERY else 0.0,
-                    total_energy_daily_average_kwh=total_energy_daily_average,
-                    non_heating_daily_average_kwh=non_heating_daily_average,
-                    hourly_demand_table=hourly_demand_table,
-                    demand_adjustment_factor=demand_adjustment_factor,
-                    room_temperature_c=room_temperature,
-                    thermostat_setpoint_c=thermostat_setpoint,
-                    thermostat_cool_setpoint_c=thermostat_cool_setpoint,
-                    thermostat_preheat_setpoint_c=thermostat_preheat_setpoint,
-                    thermostat_eco_setpoint_c=thermostat_eco_setpoint,
-                    room_cooling_hours_to_eco=cooling_hours_from_current if cooling_hours_from_current is not None else cooling_profile.get("hours_to_eco"),
-                    room_cooling_rate_c_per_hour=cooling_profile["cooling_rate_c_per_hour"],
-                    cooling_reference_outdoor_temp_c=cooling_profile["reference_outdoor_temp_c"],
-                    battery_soc_percent=battery_soc_percent,
-                    price_resolution=price_resolution,
-                    source_status=source_status,
-                    source_errors=self._collect_source_errors(source_status),
-                )
-            except Exception as err:
-                if planner_kind != PLANNER_KIND_THERMOSTAT:
-                    raise
-                _LOGGER.exception("Thermostat planner failed; falling back to normal mode")
-                fallback_errors = self._collect_source_errors(source_status)
-                fallback_error = f"thermostat_planning_error: {err!s}"
-                if fallback_error not in fallback_errors:
-                    fallback_errors.append(fallback_error)
-                result = self._build_pending_result(
-                    "ready_with_warnings",
-                    planner_kind,
-                    source_status,
-                    fallback_errors,
-                )
-                result.current_price = current_price
-                result.room_temperature_c = room_temperature
-                result.thermostat_setpoint_c = thermostat_setpoint
-                result.thermostat_cool_setpoint_c = thermostat_cool_setpoint
-                result.thermostat_preheat_setpoint_c = thermostat_preheat_setpoint
-                result.thermostat_eco_setpoint_c = thermostat_eco_setpoint
-                result.room_cooling_hours_to_eco = cooling_profile["hours_to_eco"]
-                result.room_cooling_rate_c_per_hour = cooling_profile["cooling_rate_c_per_hour"]
-                result.cooling_reference_outdoor_temp_c = cooling_profile["reference_outdoor_temp_c"]
-                result.rationale = "thermostat planning degraded after runtime error; using normal mode"
-            if cooling_hours_from_current is not None:
-                result.room_cooling_hours_to_eco = cooling_hours_from_current
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 configured_battery_capacity = float(
                     self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
@@ -719,25 +557,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # integration can recover without a manual reload.
             self._schedule_source_error_retry()
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
-            if planner_kind == PLANNER_KIND_THERMOSTAT:
-                fallback_status = self._unknown_source_status(planner_kind)
-                fallback_errors = [f"thermostat_planning_error: {err!s}"]
-                result = self._build_pending_result(
-                    "ready_with_warnings",
-                    planner_kind,
-                    fallback_status,
-                    fallback_errors,
-                )
-                thermostat_setpoint = self._get_manual_thermostat_setpoint()
-                thermostat_cool_setpoint = self._get_manual_cool_temperature()
-                thermostat_preheat_setpoint = self._get_manual_preheat_temperature()
-                thermostat_eco_setpoint = self._get_manual_eco_temperature(thermostat_setpoint)
-                result.thermostat_setpoint_c = thermostat_setpoint
-                result.thermostat_cool_setpoint_c = thermostat_cool_setpoint
-                result.thermostat_preheat_setpoint_c = thermostat_preheat_setpoint
-                result.thermostat_eco_setpoint_c = thermostat_eco_setpoint
-                result.rationale = "thermostat planning degraded after runtime error; using normal mode"
-                return result
             return self._build_pending_result(
                 "planner_runtime_error",
                 planner_kind,
@@ -749,8 +568,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self, status: str, planner_kind: str, source_status: dict[str, str], source_errors: list[str]
     ) -> PlannerResult:
         battery_strategy = "accu_uit"
-        if planner_kind == PLANNER_KIND_THERMOSTAT:
-            battery_strategy = "not_applicable"
 
         return PlannerResult(
             planner_kind=planner_kind,
@@ -758,8 +575,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score=0,
             recommendation="waiting_for_data",
             battery_strategy=battery_strategy,
-            heat_pump_strategy="normal",
-            heating_estimate_kwh=0.0,
             solar_forecast_kwh=0.0,
             current_price=None,
             price_spread=0.0,
@@ -826,20 +641,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_simulated_remaining_kwh_after_discharge=0.0,
             next_high_price_window_start=None,
             next_high_price_window_price=None,
-            room_temperature_c=None,
-            thermostat_setpoint_c=None,
-            thermostat_cool_setpoint_c=None,
-            thermostat_preheat_setpoint_c=None,
-            thermostat_eco_setpoint_c=None,
-            room_cooling_hours_to_eco=None,
-            room_cooling_rate_c_per_hour=None,
-            cooling_reference_outdoor_temp_c=None,
-            planned_eco_window_start=None,
-            planned_eco_window_end=None,
-            planned_eco_windows=[],
-            planned_preheat_window_start=None,
-            planned_preheat_window_end=None,
-            planned_preheat_windows=[],
             selected_price_window=None,
             price_window_type=None,
             cheapest_price_window=None,
@@ -865,14 +666,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solar_state,
         solar_tomorrow_sensor: str | None,
         solar_tomorrow_state,
-        temperature_sensor: str,
-        temperature_state,
-        room_temperature_sensor: str | None,
-        room_temperature_state,
-        heating_switch_entity: str | None,
-        heating_switch_state,
-        cooling_mode_switch_entity: str | None,
-        cooling_mode_switch_state,
         total_energy_sensor: str | None,
         total_energy_state,
         battery_soc_sensor: str | None,
@@ -894,16 +687,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 "price_sensor": self._state_status(price_sensor, price_state),
             }
 
-        return {
-            "price_sensor": self._state_status(price_sensor, price_state),
-            "temperature_sensor": self._state_status(temperature_sensor, temperature_state),
-            "room_temperature_sensor": self._state_status(room_temperature_sensor, room_temperature_state),
-            "heating_switch_entity": self._state_status(heating_switch_entity, heating_switch_state),
-            "cooling_mode_switch_entity": self._state_status(
-                cooling_mode_switch_entity,
-                cooling_mode_switch_state,
-            ),
-        }
+        return {"price_sensor": self._state_status(price_sensor, price_state)}
 
     def _collect_source_errors(self, source_status: dict[str, str]) -> list[str]:
         return [
@@ -943,10 +727,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         return {
             "price_sensor": "unknown",
-            "temperature_sensor": "unknown",
-            "room_temperature_sensor": "unknown",
-            "heating_switch_entity": "unknown",
-            "cooling_mode_switch_entity": "unknown",
         }
 
     async def _async_update_battery_profit_tracking(
@@ -1192,15 +972,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         data = await store.async_load() or {}
         entry_state = {
             **(data.get(self.config_entry.entry_id, {}) or {}),
-            "manual_temperature": runtime_state.get("manual_temperature"),
-            "manual_cool_temperature": runtime_state.get("manual_cool_temperature"),
-            "manual_eco_temperature": runtime_state.get("manual_eco_temperature"),
-            "manual_preheat_temperature": runtime_state.get("manual_preheat_temperature"),
-            "hvac_mode": runtime_state.get("hvac_mode"),
-            "manual_preset_mode": runtime_state.get("manual_preset_mode"),
-            "cooling_model": runtime_state.get("cooling_model", {}),
-            "last_cooling_observation": runtime_state.get("last_cooling_observation"),
-            "eco_cooling_session": runtime_state.get("eco_cooling_session"),
             "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
             "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
             "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
@@ -1215,7 +986,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             _EXPECTED_DEMAND_LAST_HOUR_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_HOUR_KEY),
             _EXPECTED_DEMAND_LAST_TS_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_TS_KEY),
             _EXPECTED_DEMAND_TODAY_KEY: runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY, {}),
-            "smoothed_eco_hours": runtime_state.get("smoothed_eco_hours"),
         }
         for legacy_key in _LEGACY_DEMAND_KEYS:
             entry_state.pop(legacy_key, None)
@@ -1267,87 +1037,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return 0.0
         return round(statistics.fmean(deltas), 2)
 
-    def _get_manual_thermostat_setpoint(self) -> float:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        manual_temperature = _coerce_float(runtime_state.get("manual_temperature"))
-        if manual_temperature is None:
-            manual_temperature = min(max(20.0, self._thermostat_min_temp()), self._thermostat_max_temp())
-        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), manual_temperature)), 2)
-
-    def _get_manual_eco_temperature(self, thermostat_setpoint_c: float | None) -> float | None:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        eco_temperature = _coerce_float(runtime_state.get("manual_eco_temperature"))
-        if eco_temperature is None:
-            eco_temperature = _coerce_float(
-                self._config.get(CONF_THERMOSTAT_ECO_TEMPERATURE, DEFAULT_THERMOSTAT_ECO_TEMPERATURE)
-            )
-        if eco_temperature is None:
-            return None
-        if thermostat_setpoint_c is not None:
-            eco_temperature = min(eco_temperature, thermostat_setpoint_c)
-        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), eco_temperature)), 2)
-
-    def _get_manual_cool_temperature(self) -> float:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        cool_temperature = _coerce_float(runtime_state.get("manual_cool_temperature"))
-        if cool_temperature is None:
-            cool_temperature = min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), 24.0))
-        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), cool_temperature)), 2)
-
-    def _get_manual_preheat_temperature(self) -> float:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        preheat_temperature = _coerce_float(runtime_state.get("manual_preheat_temperature"))
-        if preheat_temperature is None:
-            base_temperature = self._get_manual_thermostat_setpoint()
-            preheat_temperature = min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), base_temperature + 1.0))
-        return round(min(self._thermostat_max_temp(), max(self._thermostat_min_temp(), preheat_temperature)), 2)
-
-    def _thermostat_min_temp(self) -> float:
-        return float(self._config.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP))
-
-    def _thermostat_max_temp(self) -> float:
-        return float(self._config.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP))
-
-    async def _async_estimate_room_cooling_profile(
-        self,
-        *,
-        room_temperature_c: float | None,
-        outdoor_temperature_c: float,
-        thermostat_setpoint_c: float | None,
-        thermostat_eco_setpoint_c: float | None,
-        **_: Any,
-    ) -> dict[str, float | None]:
-        if thermostat_setpoint_c is None or thermostat_eco_setpoint_c is None or room_temperature_c is None:
-            return {
-                "hours_to_eco": None,
-                "cooling_rate_c_per_hour": None,
-                "reference_outdoor_temp_c": outdoor_temperature_c,
-                "last_observed_rate_c_per_hour": None,
-                "last_observed_delta_temp_c": None,
-            }
-
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
-        cooling_model = runtime_state.get("cooling_model", {})
-        last_observed_rate = _coerce_float(cooling_model.get("last_observed_drop_c_per_hour"))
-        last_observed_delta = _coerce_float(cooling_model.get("last_delta_temp_c"))
-
-        cooldown_reference_temperature = max(room_temperature_c, thermostat_setpoint_c)
-        cooldown_delta = max(cooldown_reference_temperature - thermostat_eco_setpoint_c, 0.3)
-        estimated_rate, hours_to_eco = estimate_cooling_profile_from_model(
-            cooling_model=cooling_model,
-            outdoor_temperature_c=outdoor_temperature_c,
-            room_temperature_c=cooldown_reference_temperature,
-            cooldown_delta_c=cooldown_delta,
-        )
-        reference_outdoor = outdoor_temperature_c
-
-        return {
-            "hours_to_eco": round(hours_to_eco, 2),
-            "cooling_rate_c_per_hour": round(estimated_rate, 3),
-            "reference_outdoor_temp_c": reference_outdoor,
-            "last_observed_rate_c_per_hour": last_observed_rate,
-            "last_observed_delta_temp_c": last_observed_delta,
-        }
 
     @staticmethod
     def _two_cycle_end(windows):
@@ -1484,20 +1173,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         solar_windows: list[SolarWindow],
         all_solar_windows: list[SolarWindow],
         solcast_confidence: float | None,
-        heating_estimate_kwh: float,
         lookback_average_kwh: float,
         total_energy_daily_average_kwh: float,
         non_heating_daily_average_kwh: float,
         hourly_demand_table: dict[str, float],
         demand_adjustment_factor: float,
-        room_temperature_c: float | None,
-        thermostat_setpoint_c: float | None,
-        thermostat_cool_setpoint_c: float | None,
-        thermostat_preheat_setpoint_c: float | None,
-        thermostat_eco_setpoint_c: float | None,
-        room_cooling_hours_to_eco: float | None,
-        room_cooling_rate_c_per_hour: float | None,
-        cooling_reference_outdoor_temp_c: float | None,
         battery_soc_percent: float | None,
         price_resolution: str,
         source_status: dict[str, str],
@@ -1636,8 +1316,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             default=now.replace(hour=0, minute=0, second=0, microsecond=0),
         )
         estimated_hourly_home_demand = build_hourly_home_demand_forecast(
+            heating_estimate_kwh=0.0,
             non_heating_daily_average_kwh=non_heating_daily_average_kwh,
-            heating_estimate_kwh=heating_estimate_kwh,
             hourly_demand_table=hourly_demand_table,
             demand_adjustment_factor=demand_adjustment_factor,
             horizon_end=planning_horizon_end,
@@ -1724,216 +1404,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if current_price is not None and future_max_price is not None
             else None
         )
-        eco_duration_hours = room_cooling_hours_to_eco or 0.0
-        eco_expensive_threshold = (
-            mid_price_threshold if planner_kind == PLANNER_KIND_THERMOSTAT else expensive_threshold
-        )
-        eco_windows = []
-        thermostat_planning_error: str | None = None
-        if price_signal_available:
-            try:
-                if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    eco_windows = select_thermostat_peak_eco_windows(
-                        windows=all_windows,
-                        now=now,
-                        cooldown_hours=eco_duration_hours,
-                        expensive_threshold=eco_expensive_threshold,
-                    )
-                else:
-                    eco_windows = select_expensive_peak_blocks(
-                        windows=windows,
-                        now=now,
-                        duration_hours=eco_duration_hours,
-                        expensive_threshold=eco_expensive_threshold,
-                    )
-            except Exception as err:
-                if planner_kind == PLANNER_KIND_THERMOSTAT:
-                    thermostat_planning_error = f"thermostat_planning_error: {err!s}"
-                    _LOGGER.exception("Thermostat peak planning failed")
-                    eco_windows = []
-                else:
-                    raise
-        if thermostat_planning_error is not None and thermostat_planning_error not in source_errors:
-            source_errors = [*source_errors, thermostat_planning_error]
-        active_eco_window = next(
-            (window for window in eco_windows if window["start"] <= now < window["end"]),
-            None,
-        )
-        # Lock the eco window once entered so that mid-session price updates
-        # (e.g. day-ahead prices arriving at ~13:00) cannot silently switch to
-        # a different window and break the active eco session.
-        if self._locked_eco_window is not None:
-            locked_end = cast(datetime, self._locked_eco_window["end"])
-            room_reached_eco = (
-                planner_kind == PLANNER_KIND_THERMOSTAT
-                and room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_temperature_c <= thermostat_eco_setpoint_c
-            )
-            if now >= locked_end or room_reached_eco:
-                self._locked_eco_window = None  # window expired or room cooled enough
-            else:
-                active_eco_window = self._locked_eco_window  # keep running window
-        if self._locked_eco_window is None and active_eco_window is not None:
-            self._locked_eco_window = active_eco_window  # latch new window
-
-        preheat_minutes = int(
-            self._config.get(CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES)
-        )
-        # Preheat ends exactly when the eco window begins (window["start"]), so the
-        # room warms up before eco drops the setpoint â€” not during it.
-        # With multiple eco peaks, clamp each preheat start to not overlap with the
-        # preceding eco window â€” otherwise preheat for peak N+1 suppresses eco for peak N.
-        sorted_eco_for_preheat = sorted(eco_windows, key=lambda w: w["start"])
-        preheat_windows = []
-        for idx, eco_win in enumerate(sorted_eco_for_preheat):
-            if preheat_minutes <= 0:
-                break
-            eco_start = cast(datetime, eco_win["start"])
-            raw_start = eco_start - timedelta(minutes=preheat_minutes)
-            prev_eco_end = cast(datetime, sorted_eco_for_preheat[idx - 1]["end"]) if idx > 0 else None
-            clamped_start = max(
-                raw_start,
-                now.replace(hour=0, minute=0, second=0, microsecond=0),
-                *(([prev_eco_end]) if prev_eco_end is not None else []),
-            )
-            if clamped_start < eco_start and eco_start > now:
-                preheat_windows.append(
-                    {"start": clamped_start, "end": eco_start, "average_price": eco_win["average_price"]}
-                )
-        preheat_window = next(
-            (
-                window
-                for window in preheat_windows
-                if window["start"] <= now < window["end"]
-            ),
-            next((window for window in preheat_windows if window["start"] > now), None),
-        )
-        preheat_active_now = any(window["start"] <= now < window["end"] for window in preheat_windows)
-        # â”€â”€ Step 1: resolve an existing lock â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        # Lock preheat once it activates so that eco-window drift (caused by
-        # EMA updates to hours_to_eco) cannot push the preheat-window start
-        # past NOW and revert the mode to "normal" mid-preheat.  The lock is
-        # released as soon as eco starts (locked_eco_window is set) or the
-        # locked end-time is reached.
-        if self._locked_preheat_end is not None:
-            if self._locked_eco_window is not None:
-                # Eco started â€” normal end of preheat session.
-                self._locked_preheat_end = None
-                self._preheat_expired_at = None
-            elif now >= self._locked_preheat_end:
-                # Timeout without eco starting: record the expiry timestamp so
-                # we can suppress a back-to-back session (see Step 2 below).
-                self._preheat_expired_at = self._locked_preheat_end
-                self._locked_preheat_end = None
-            else:
-                preheat_active_now = True  # hold preheat mode across planning ticks
-        # â”€â”€ Step 2: suppress back-to-back sessions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        # When the previous preheat session timed out without eco starting
-        # (e.g. day-ahead prices arriving at 13:00 shifted the eco window
-        # 2 h forward) a new preheat window may start at exactly the moment
-        # the old one expired.  Without this guard that would double the total
-        # preheat duration.  Suppress any preheat window whose start â‰¤ the
-        # recorded expiry; the suppression is lifted once eco starts.
-        if self._preheat_expired_at is not None:
-            if self._locked_eco_window is not None:
-                self._preheat_expired_at = None  # eco arrived â€” fresh cycle
-            elif preheat_active_now and any(
-                w["start"] <= self._preheat_expired_at
-                for w in preheat_windows
-                if w["start"] <= now < w["end"]
-            ):
-                preheat_active_now = False
-        # â”€â”€ Step 3: latch a new lock for this session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        if preheat_active_now and self._locked_preheat_end is None:
-            preheat_eco_start = next(
-                (cast(datetime, w["end"]) for w in preheat_windows if w["start"] <= now < w["end"]),
-                None,
-            )
-            if preheat_eco_start is not None:
-                self._locked_preheat_end = preheat_eco_start
-        # Never preheat while a locked eco session is running: preheating would
-        # counteract the active eco session AND break eco_active_now via the
-        # preheat_active_now condition.  The preheat for the NEXT eco cycle is
-        # applied naturally once the locked window expires.
-        if self._locked_eco_window is not None:
-            preheat_active_now = False
-
-        # Eco continues for the full planned window regardless of individual cheap
-        # price slots within it â€” interrupting eco mid-window for a cheap slot
-        # prevents the room from ever cooling to eco temperature.
-        # Eco may only be interrupted early when no proper cheap valley remains
-        # after the eco block ends.  A valley requires at least 4 cheap windows.
-        next_valley_reachable = True
-        if active_eco_window is not None:
-            eco_end_ts = cast(datetime, active_eco_window["end"])
-            windows_after_eco = [w for w in all_windows if w.start >= eco_end_ts]
-            # Only evaluate when enough post-eco data exists; if the eco window
-            # extends to or beyond the price-data horizon, assume a valley is
-            # reachable rather than prematurely breaking eco.
-            if len(windows_after_eco) >= 8:
-                # The room is already cooling during eco, so the cooling-time
-                # offset is NOT applied here â€” using now + time_to_eco would
-                # push the search window 18 h into the future while the room is
-                # already cooling, causing eco to break prematurely.
-                # Instead, require at least 4 consecutive cheap windows after
-                # eco ends (= a proper valley, as requested by the user).
-                cheap_reachable = [
-                    w for w in all_windows
-                    if w.start >= eco_end_ts and w.price <= average_price
-                ]
-                next_valley_reachable = len(cheap_reachable) >= 4
-        eco_active_now = (
-            active_eco_window is not None
-            and not preheat_active_now
-            and next_valley_reachable
-        )
-        # Dynamic permanent-eco: instead of a fixed 18-hour cap, check whether
-        # the room can actually cool to eco setpoint before the next cheap valley.
-        # The "next valley" is the first cheap window (price <= average) that
-        # follows the next upcoming expensive period.  If the remaining cooling
-        # time (from the CURRENT room temperature, not the setpoint) exceeds
-        # hours_to_next_valley, the room won't reach eco setpoint in time â€” so
-        # force eco continuously.  Once the room has cooled enough the condition
-        # stops being met and normal scheduling resumes.
-        if planner_kind == PLANNER_KIND_THERMOSTAT and eco_duration_hours > 0:
-            # Compute remaining time to reach eco setpoint from the actual current
-            # room temperature rather than from the (higher) setpoint temperature.
-            # This prevents forcing eco when the room is already close to eco temp.
-            if (
-                room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_cooling_rate_c_per_hour is not None
-                and room_cooling_rate_c_per_hour > 0
-                and room_temperature_c > thermostat_eco_setpoint_c
-            ):
-                _current_delta = room_temperature_c - thermostat_eco_setpoint_c
-                _eco_hours_from_current = _current_delta / room_cooling_rate_c_per_hour
-            elif (
-                room_temperature_c is not None
-                and thermostat_eco_setpoint_c is not None
-                and room_temperature_c <= thermostat_eco_setpoint_c
-            ):
-                _eco_hours_from_current = 0.0  # room already at or below eco temp
-            else:
-                _eco_hours_from_current = eco_duration_hours  # fallback to setpoint-based
-            _next_valley_start = find_next_valley_start(
-                all_windows, now, average_price
-            )
-            if _next_valley_start is not None:
-                hours_to_next_valley = max(
-                    0.0, (_next_valley_start - now).total_seconds() / 3600
-                )
-                if _eco_hours_from_current > hours_to_next_valley:
-                    eco_active_now = True
-                    preheat_active_now = False
-                    self._locked_preheat_end = None
-        eco_window = (
-            active_eco_window
-            if eco_active_now
-            else next((window for window in eco_windows if window["start"] > now), None)
-        )
-
         battery_enabled = bool(self._config.get(CONF_BATTERY_ENABLED, DEFAULT_BATTERY_ENABLED))
         battery_capacity = float(
             self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH)
@@ -2173,53 +1643,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if planner_kind == PLANNER_KIND_BATTERY and non_heating_daily_average_kwh > 0:
             rationale_parts.append("estimated home demand is derived from total self-used energy history")
 
-        heat_pump_strategy = "normal"
-        if planner_kind == PLANNER_KIND_BATTERY:
-            heat_pump_strategy = "not_applicable"
-        elif planner_kind == PLANNER_KIND_THERMOSTAT and eco_active_now:
-            heat_pump_strategy = "energy_saving_on"
-            score += 8
-            recommendation = "set_thermostat_to_eco"
-            rationale_parts.append(
-                "thermostat eco is active around the current price peak"
-            )
-            if thermostat_eco_setpoint_c is not None:
-                rationale_parts.append(
-                    f"set the room thermostat to about {thermostat_eco_setpoint_c:.1f} C until the room is cooled down or the price falls below the daily average"
-                )
-        elif planner_kind == PLANNER_KIND_THERMOSTAT and preheat_active_now:
-            heat_pump_strategy = "preheating"
-            score += 6
-            rationale_parts.append(
-                "preheating is active so the floor can store heat before the upcoming eco window"
-            )
-        elif planner_kind == PLANNER_KIND_THERMOSTAT and cheap_now and any(
-            cast(datetime, w["start"]) > now for w in eco_windows
-        ):
-            heat_pump_strategy = "normal"
-            score += 4
-            rationale_parts.append(
-                "price is cheap now and an eco window is upcoming: good time to preheat the floor"
-            )
-        elif cheap_now and (best_solar_is_now or solar_covers_today):
-            heat_pump_strategy = "normal"
-            rationale_parts.append("heat pump does not need power saving because this is already a cheap solar window")
-        elif planner_kind == PLANNER_KIND_THERMOSTAT and eco_windows:
-            rationale_parts.append(
-                f"thermostat eco is planned around {len(eco_windows)} above-average price peak(s) in the current planning horizon"
-            )
-            if preheat_minutes > 0:
-                rationale_parts.append(
-                    f"preheating starts about {preheat_minutes} minute(s) before each eco window"
-                )
-            rationale_parts.append(
-                "each eco window is now built around the most expensive moment of the next peak by adding the most expensive neighboring hours until the cooldown duration is covered, and it ends once the price drops below the daily average"
-            )
-
         battery_strategy = "accu_uit"
-        if planner_kind == PLANNER_KIND_THERMOSTAT:
-            battery_strategy = "not_applicable"
-        elif battery_enabled:
+        if battery_enabled:
             if battery_soc_percent is None:
                 rationale_parts.append("battery state of charge is unavailable, so battery control stays idle")
             else:
@@ -2272,8 +1697,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             score=max(0, min(100, score)),
             recommendation=recommendation,
             battery_strategy=battery_strategy,
-            heat_pump_strategy=heat_pump_strategy,
-            heating_estimate_kwh=heating_estimate_kwh,
             solar_forecast_kwh=solar_forecast_kwh,
             current_price=current_price,
             price_spread=price_spread,
@@ -2357,20 +1780,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_simulated_remaining_kwh_after_discharge=battery_simulated_remaining_kwh_after_discharge,
             next_high_price_window_start=next_high_price_window.start.isoformat() if next_high_price_window else None,
             next_high_price_window_price=next_high_price_window.price if next_high_price_window else None,
-            room_temperature_c=room_temperature_c,
-            thermostat_setpoint_c=thermostat_setpoint_c,
-            thermostat_cool_setpoint_c=thermostat_cool_setpoint_c,
-            thermostat_preheat_setpoint_c=thermostat_preheat_setpoint_c,
-            thermostat_eco_setpoint_c=thermostat_eco_setpoint_c,
-            room_cooling_hours_to_eco=room_cooling_hours_to_eco,
-            room_cooling_rate_c_per_hour=room_cooling_rate_c_per_hour,
-            cooling_reference_outdoor_temp_c=cooling_reference_outdoor_temp_c,
-            planned_eco_window_start=eco_window["start"].isoformat() if eco_window else None,
-            planned_eco_window_end=eco_window["end"].isoformat() if eco_window else None,
-            planned_eco_windows=self._serialize_planned_price_windows(eco_windows),
-            planned_preheat_window_start=preheat_window["start"].isoformat() if preheat_window else None,
-            planned_preheat_window_end=preheat_window["end"].isoformat() if preheat_window else None,
-            planned_preheat_windows=self._serialize_planned_price_windows(preheat_windows),
             selected_price_window=None,
             price_window_type=None,
             cheapest_price_window=None,

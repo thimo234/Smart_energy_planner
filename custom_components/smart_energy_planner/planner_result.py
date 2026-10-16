@@ -12,8 +12,6 @@ class PlannerResult:
     score: int
     recommendation: str
     battery_strategy: str
-    heat_pump_strategy: str
-    heating_estimate_kwh: float
     solar_forecast_kwh: float
     current_price: float | None
     price_spread: float
@@ -74,20 +72,6 @@ class PlannerResult:
     battery_simulated_remaining_kwh_after_discharge: float
     next_high_price_window_start: str | None
     next_high_price_window_price: float | None
-    room_temperature_c: float | None
-    thermostat_setpoint_c: float | None
-    thermostat_cool_setpoint_c: float | None
-    thermostat_preheat_setpoint_c: float | None
-    thermostat_eco_setpoint_c: float | None
-    room_cooling_hours_to_eco: float | None
-    room_cooling_rate_c_per_hour: float | None
-    cooling_reference_outdoor_temp_c: float | None
-    planned_eco_window_start: str | None
-    planned_eco_window_end: str | None
-    planned_eco_windows: list[dict[str, str | float]]
-    planned_preheat_window_start: str | None
-    planned_preheat_window_end: str | None
-    planned_preheat_windows: list[dict[str, str | float]]
     selected_price_window: dict[str, str | float] | None
     price_window_type: str | None
     cheapest_price_window: dict[str, str | float] | None

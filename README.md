@@ -6,11 +6,10 @@ Smart Energy Planner is a Home Assistant custom integration for:
 
 - dynamic energy prices from a Nord Pool sensor
 - Solcast solar forecast for today
-- outdoor temperature
 - optional home battery capacity and charge/discharge limits
 
 The integration exposes planner sensors that can be used in automations to shift loads to cheaper and greener moments.
-You can now add the integration multiple times and choose a separate planner type for the battery and for thermostat control.
+You can now add the integration multiple times and choose a separate planner type for battery and price window planning.
 
 ## Features
 
@@ -26,25 +25,18 @@ You can now add the integration multiple times and choose a separate planner typ
 Add the integration from the Home Assistant UI and choose one of these planner types:
 
 - `Battery planner`
-- `Thermostat planner`
+- `Price window planner`
 
-You can add the integration multiple times if you want one standalone battery planner and one standalone thermostat planner.
+You can add the integration multiple times if you want separate battery and price window planners.
+Thermostat control has been removed. Before updating, move any active heating or
+cooling control to another controller. Existing thermostat entries no longer load;
+remove them from Home Assistant. Existing switches are not changed by this update.
+
 Depending on the selected planner type, configure:
 
 - Energy price sensor
 - Solcast forecast sensor for today
-- Outdoor temperature sensor
-- Room temperature sensor
-- Heating control switch
 - Total home energy sensor
-- Number of historical days to inspect
-- Eco setback below thermostat setpoint
-- Cold tolerance
-- Hot tolerance
-- Minimum thermostat temperature
-- Maximum thermostat temperature
-- Minimum switch interval (minutes)
-- Heating status check interval (minutes)
 - Contract price interval: hourly or quarter-hourly
 - Optional home battery support
 - Battery capacity
@@ -53,10 +45,9 @@ Depending on the selected planner type, configure:
 - Maximum battery discharge power
 
 After setup, you can open the integration settings again from Home Assistant and adjust the full configuration from the settings icon.
-The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, temperature, and energy sensors.
+The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, and energy sensors.
 
 The battery planner derives the estimated energy for today only from the history of your total home energy sensor. It does not split heating out separately and does not require a heating energy sensor.
-The thermostat planner focuses on room cooling behavior and expensive hours, and creates its own climate entity that becomes your room thermostat in Home Assistant. It automatically chooses eco mode during the most expensive block that the room can bridge by slowly cooling down, switches the heating switch with configurable hysteresis, and periodically checks whether the heating state still matches the thermostat target.
 
 ## Exposed entities
 
@@ -64,13 +55,9 @@ The thermostat planner focuses on room cooling behavior and expensive hours, and
 - `sensor.smart_energy_planner_recommendation`
 - `sensor.smart_energy_planner_battery_strategy`
 - `sensor.smart_energy_planner_estimated_home_demand_today`
-- `sensor.smart_energy_planner_room_cooling_hours_to_eco`
-- `sensor.smart_energy_planner_thermostat_eco_start_time`
-- `climate.smart_energy_planner_planner_thermostat`
 
 The sensors also expose extra attributes such as the next cheap window, the price spread for the current day, and the Solcast production forecast used by the planner.
 The estimated home demand sensor includes `estimated_hourly_home_demand` with a per-hour forecast for today.
-For thermostat planners, the entities also include `planned_eco_window_start`, `planned_eco_window_end`, `room_cooling_rate_c_per_hour`, and the current thermostat setpoint.
 
 For Solcast, the planner works best with the sensor that exposes today's forecast total plus `detailedHourly`.
 Battery strategy values:

@@ -8,7 +8,7 @@ import voluptuous as vol
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.const import UnitOfEnergy, UnitOfTemperature
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
 
@@ -23,11 +23,9 @@ from .const import (
     CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT,
     CONF_BATTERY_MIN_PROFIT_PER_KWH,
     CONF_BATTERY_SOC_SENSOR,
-    CONF_COOLING_MODE_SWITCH_ENTITY,
     CONF_EXPORT_PRICE_SENSOR,
     CONF_EXPORT_PRICE_TAX_DEDUCTION,
     DEFAULT_EXPORT_PRICE_TAX_DEDUCTION,
-    CONF_HEATING_SWITCH_ENTITY,
     CONF_PLANNER_NAME,
     CONF_PLANNER_KIND,
     CONF_PRICE_SENSOR,
@@ -35,18 +33,8 @@ from .const import (
     CONF_PRICE_WINDOW_TYPE,
     CONF_PRICE_WINDOW_DURATION_HOURS,
     CONF_PRICE_WINDOW_WHOLE_HOUR_START,
-    CONF_ROOM_TEMPERATURE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_SOLCAST_TOMORROW_SENSOR,
-    CONF_TEMPERATURE_SENSOR,
-    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
-    CONF_THERMOSTAT_COLD_TOLERANCE,
-    CONF_THERMOSTAT_ECO_TEMPERATURE,
-    CONF_THERMOSTAT_HOT_TOLERANCE,
-    CONF_THERMOSTAT_MAX_TEMP,
-    CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
-    CONF_THERMOSTAT_MIN_TEMP,
-    CONF_THERMOSTAT_PREHEAT_MINUTES,
     CONF_TOTAL_ENERGY_SENSOR,
     DEFAULT_BATTERY_CAPACITY_KWH,
     DEFAULT_BATTERY_ENABLED,
@@ -62,18 +50,9 @@ from .const import (
     DEFAULT_PRICE_WINDOW_TYPE,
     DEFAULT_PRICE_WINDOW_DURATION_HOURS,
     DEFAULT_PRICE_WINDOW_WHOLE_HOUR_START,
-    DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES,
-    DEFAULT_THERMOSTAT_COLD_TOLERANCE,
-    DEFAULT_THERMOSTAT_ECO_TEMPERATURE,
-    DEFAULT_THERMOSTAT_HOT_TOLERANCE,
-    DEFAULT_THERMOSTAT_MAX_TEMP,
-    DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES,
-    DEFAULT_THERMOSTAT_MIN_TEMP,
-    DEFAULT_THERMOSTAT_PREHEAT_MINUTES,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_PRICE_WINDOW,
-    PLANNER_KIND_THERMOSTAT,
     PRICE_RESOLUTION_HOURLY,
     PRICE_RESOLUTION_QUARTER_HOURLY,
     PRICE_WINDOW_TYPE_CHEAPEST,
@@ -101,18 +80,6 @@ def _filter_solcast_sensors(hass: HomeAssistant) -> list[str]:
         state.entity_id
         for state in _sensor_options(hass)
         if "estimate" in state.attributes or state.attributes.get("detailedHourly")
-    ]
-
-
-def _filter_temperature_sensors(hass: HomeAssistant) -> list[str]:
-    """Return likely temperature sensors."""
-    return [
-        state.entity_id
-        for state in _sensor_options(hass)
-        if state.attributes.get("device_class")
-        in (SensorDeviceClass.TEMPERATURE, SensorDeviceClass.TEMPERATURE.value)
-        or state.attributes.get("unit_of_measurement")
-        in (UnitOfTemperature.CELSIUS, UnitOfTemperature.FAHRENHEIT)
     ]
 
 
@@ -157,12 +124,6 @@ def _entity_selector(
 
     return selector.EntitySelector(selector.EntitySelectorConfig(**config))
 
-def _filter_heating_switch_entities(hass: HomeAssistant) -> list[str]:
-    """Return likely heating control switches."""
-    switch_entities = [state.entity_id for state in hass.states.async_all("switch")]
-    boolean_entities = [state.entity_id for state in hass.states.async_all("input_boolean")]
-    return [*switch_entities, *boolean_entities]
-
 
 def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
     """Build the planner type selector schema."""
@@ -175,7 +136,6 @@ def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
                 selector.SelectSelectorConfig(
                     options=[
                         selector.SelectOptionDict(value=PLANNER_KIND_BATTERY, label="Battery planner"),
-                        selector.SelectOptionDict(value=PLANNER_KIND_THERMOSTAT, label="Thermostat planner"),
                         selector.SelectOptionDict(value=PLANNER_KIND_PRICE_WINDOW, label="Price window planner"),
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
@@ -339,117 +299,6 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
     )
 
 
-def _build_thermostat_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
-    """Build the thermostat planner schema."""
-    user_input = _base_defaults(user_input)
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_PLANNER_NAME,
-                default=user_input.get(CONF_PLANNER_NAME, f"{DEFAULT_NAME} Thermostat"),
-            ): selector.TextSelector(),
-            vol.Required(
-                CONF_PRICE_SENSOR, default=user_input.get(CONF_PRICE_SENSOR)
-            ): _entity_selector(_filter_price_sensors(hass), current_value=user_input.get(CONF_PRICE_SENSOR)),
-            vol.Optional(
-                CONF_TEMPERATURE_SENSOR, default=user_input.get(CONF_TEMPERATURE_SENSOR)
-            ): _entity_selector(
-                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_TEMPERATURE_SENSOR)
-            ),
-            vol.Required(
-                CONF_ROOM_TEMPERATURE_SENSOR, default=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            ): _entity_selector(
-                _filter_temperature_sensors(hass), current_value=user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-            ),
-            vol.Required(
-                CONF_HEATING_SWITCH_ENTITY, default=user_input.get(CONF_HEATING_SWITCH_ENTITY)
-            ): _entity_selector(
-                _filter_heating_switch_entities(hass),
-                current_value=user_input.get(CONF_HEATING_SWITCH_ENTITY),
-                domain=None,
-            ),
-            vol.Optional(
-                CONF_COOLING_MODE_SWITCH_ENTITY,
-                default=user_input.get(CONF_COOLING_MODE_SWITCH_ENTITY),
-            ): _entity_selector(
-                _filter_heating_switch_entities(hass),
-                current_value=user_input.get(CONF_COOLING_MODE_SWITCH_ENTITY),
-                domain=None,
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_ECO_TEMPERATURE,
-                default=user_input.get(
-                    CONF_THERMOSTAT_ECO_TEMPERATURE, DEFAULT_THERMOSTAT_ECO_TEMPERATURE
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_COLD_TOLERANCE,
-                default=user_input.get(CONF_THERMOSTAT_COLD_TOLERANCE, DEFAULT_THERMOSTAT_COLD_TOLERANCE),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_HOT_TOLERANCE,
-                default=user_input.get(CONF_THERMOSTAT_HOT_TOLERANCE, DEFAULT_THERMOSTAT_HOT_TOLERANCE),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0.1, max=3, step=0.1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MIN_TEMP,
-                default=user_input.get(CONF_THERMOSTAT_MIN_TEMP, DEFAULT_THERMOSTAT_MIN_TEMP),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=30, step=0.5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MAX_TEMP,
-                default=user_input.get(CONF_THERMOSTAT_MAX_TEMP, DEFAULT_THERMOSTAT_MAX_TEMP),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=5, max=35, step=0.5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_MIN_CYCLE_MINUTES,
-                default=user_input.get(
-                    CONF_THERMOSTAT_MIN_CYCLE_MINUTES, DEFAULT_THERMOSTAT_MIN_CYCLE_MINUTES
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_CONTROL_CHECK_MINUTES,
-                default=user_input.get(
-                    CONF_THERMOSTAT_CONTROL_CHECK_MINUTES, DEFAULT_THERMOSTAT_CONTROL_CHECK_MINUTES
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=1, max=60, step=1, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_THERMOSTAT_PREHEAT_MINUTES,
-                default=user_input.get(
-                    CONF_THERMOSTAT_PREHEAT_MINUTES, DEFAULT_THERMOSTAT_PREHEAT_MINUTES
-                ),
-            ): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=180, step=5, mode=selector.NumberSelectorMode.BOX)
-            ),
-            vol.Required(
-                CONF_PRICE_RESOLUTION,
-                default=user_input.get(CONF_PRICE_RESOLUTION, DEFAULT_PRICE_RESOLUTION),
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(value=PRICE_RESOLUTION_HOURLY, label="Hourly contract"),
-                        selector.SelectOptionDict(
-                            value=PRICE_RESOLUTION_QUARTER_HOURLY, label="Quarter-hour contract"
-                        ),
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-        }
-    )
-
-
 def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] | None = None) -> vol.Schema:
     """Build the price window planner schema."""
     user_input = _base_defaults(user_input)
@@ -514,14 +363,12 @@ def _schema_for_kind(
         return _build_battery_schema(hass, user_input)
     if planner_kind == PLANNER_KIND_PRICE_WINDOW:
         return _build_price_window_schema(hass, user_input)
-    return _build_thermostat_schema(hass, user_input)
+    raise ValueError(f"Unsupported planner kind: {planner_kind}")
 
 
 def _title_for_kind(planner_kind: str) -> str:
     if planner_kind == PLANNER_KIND_BATTERY:
         return f"{DEFAULT_NAME} Battery"
-    if planner_kind == PLANNER_KIND_THERMOSTAT:
-        return f"{DEFAULT_NAME} Thermostat"
     if planner_kind == PLANNER_KIND_PRICE_WINDOW:
         return f"{DEFAULT_NAME} Price Windows"
     return f"{DEFAULT_NAME} Battery"
@@ -537,6 +384,8 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle the initial step."""
         if user_input is not None:
+            if user_input.get(CONF_PLANNER_KIND) not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+                return self.async_abort(reason="unsupported_planner_kind")
             self.context["planner_kind"] = user_input[CONF_PLANNER_KIND]
             return await self.async_step_configure()
 
@@ -547,15 +396,15 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Configure the selected planner kind."""
         planner_kind = self.context.get("planner_kind", DEFAULT_PLANNER_KIND)
+        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+            return self.async_abort(reason="unsupported_planner_kind")
 
         if user_input is not None:
             user_input = _normalize_selector_values(user_input)
             data = {CONF_PLANNER_KIND: planner_kind, **user_input}
             title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(planner_kind))
             unique_anchor = (
-                user_input.get(CONF_HEATING_SWITCH_ENTITY)
-                or user_input.get(CONF_ROOM_TEMPERATURE_SENSOR)
-                or user_input.get(CONF_BATTERY_SOC_SENSOR)
+                user_input.get(CONF_BATTERY_SOC_SENSOR)
                 or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
                 or user_input.get(CONF_PLANNER_NAME)
                 or user_input.get(CONF_PRICE_SENSOR)
@@ -586,6 +435,8 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
         """Manage the options."""
         merged = {**self.config_entry.data, **self.config_entry.options}
         planner_kind = merged.get(CONF_PLANNER_KIND, DEFAULT_PLANNER_KIND)
+        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+            return self.async_abort(reason="unsupported_planner_kind")
 
         if user_input is not None:
             user_input = _normalize_selector_values(user_input)

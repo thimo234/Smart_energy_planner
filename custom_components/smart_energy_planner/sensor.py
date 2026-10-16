@@ -17,7 +17,6 @@ from .const import (
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_PRICE_WINDOW,
-    PLANNER_KIND_THERMOSTAT,
     RUNTIME_STATE,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
@@ -74,34 +73,6 @@ async def async_setup_entry(
                     "Battery Profit Total",
                 ),
                 HomeDemandSensor(coordinator, entry),
-            ]
-        )
-
-    if planner_kind == PLANNER_KIND_THERMOSTAT:
-        entities.extend(
-            [
-                ThermostatPlannerSensor(
-                    coordinator,
-                    entry,
-                    "score",
-                    "Planner Score",
-                    "score",
-                ),
-                ThermostatPlannerSensor(
-                    coordinator,
-                    entry,
-                    "room_cooling_hours_to_eco",
-                    "Room Cooling Hours To Eco",
-                    "room_cooling_hours_to_eco",
-                    native_unit_of_measurement="h",
-                ),
-                ThermostatPlannerSensor(
-                    coordinator,
-                    entry,
-                    "thermostat_eco_start_time",
-                    "Thermostat Eco Start Time",
-                    "planned_eco_window_start",
-                ),
             ]
         )
 
@@ -387,37 +358,4 @@ class BatteryProfitSensor(PlannerSensor):
             "tracked_average_cost_per_kwh": average_cost,
             "last_tracked_battery_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
             "last_profit_update": runtime_state.get("battery_profit_last_updated"),
-        }
-
-
-class ThermostatPlannerSensor(PlannerSensor):
-    """Thermostat planner sensor with thermostat-only attributes."""
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str | float | int | None]:
-        data: PlannerResult = self.coordinator.data
-        runtime_state = self.coordinator.hass.data.get(RUNTIME_STATE, {}).get(self._entry_id, {})
-        return super().extra_state_attributes | {
-            "current_price": data.current_price,
-            "price_spread": data.price_spread,
-            "next_cheap_window_start": data.next_window_start,
-            "next_cheap_window_end": data.next_window_end,
-            "next_cheap_window_price": data.next_window_price,
-            "room_temperature_c": getattr(data, "room_temperature_c", None),
-            "thermostat_setpoint_c": getattr(data, "thermostat_setpoint_c", None),
-            "thermostat_cool_setpoint_c": getattr(data, "thermostat_cool_setpoint_c", None),
-            "thermostat_preheat_setpoint_c": getattr(data, "thermostat_preheat_setpoint_c", None),
-            "thermostat_eco_setpoint_c": getattr(data, "thermostat_eco_setpoint_c", None),
-            "room_cooling_hours_to_eco": getattr(data, "room_cooling_hours_to_eco", None),
-            "room_cooling_rate_c_per_hour": getattr(data, "room_cooling_rate_c_per_hour", None),
-            "cooling_reference_outdoor_temp_c": getattr(data, "cooling_reference_outdoor_temp_c", None),
-            "planned_preheat_window_start": getattr(data, "planned_preheat_window_start", None),
-            "planned_preheat_window_end": getattr(data, "planned_preheat_window_end", None),
-            "planned_preheat_windows": getattr(data, "planned_preheat_windows", []),
-            "planned_eco_window_start": getattr(data, "planned_eco_window_start", None),
-            "planned_eco_window_end": getattr(data, "planned_eco_window_end", None),
-            "planned_eco_windows": getattr(data, "planned_eco_windows", []),
-            "cooling_model": runtime_state.get("cooling_model", {}),
-            "price_resolution": data.price_resolution,
-            "rationale": data.rationale,
         }

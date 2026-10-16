@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Smart Energy Planner",
-        "description": "Choose whether you want a battery planner, thermostat planner, or price window planner.",
+        "description": "Choose a battery planner or price window planner.",
         "data": {
           "planner_kind": "Planner type",
           "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
@@ -20,19 +20,7 @@
           "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "battery_soc_sensor": "Battery state of charge sensor",
-          "temperature_sensor": "Outdoor temperature sensor",
-          "room_temperature_sensor": "Room temperature sensor",
-          "heating_switch_entity": "Heating control switch",
-          "cooling_mode_switch_entity": "Cooling mode switch",
           "total_energy_sensor": "Total home energy sensor",
-          "thermostat_eco_temperature": "Eco temperature",
-          "thermostat_cold_tolerance": "Cold tolerance",
-          "thermostat_hot_tolerance": "Hot tolerance",
-          "thermostat_min_temp": "Minimum thermostat temperature",
-          "thermostat_max_temp": "Maximum thermostat temperature",
-          "thermostat_min_cycle_minutes": "Minimum switch interval (minutes)",
-          "thermostat_control_check_minutes": "Heating status check interval (minutes)",
-          "thermostat_preheat_minutes": "Preheat time before eco (minutes)",
           "price_resolution": "Energy contract price interval",
           "price_window_type": "Price window type",
           "price_window_duration_hours": "Contiguous price window duration (hours)",
@@ -48,6 +36,9 @@
           "battery_demand_safety_margin": "Demand forecast safety margin (%)"
         }
       }
+    },
+    "abort": {
+      "unsupported_planner_kind": "This planner type is no longer supported. Remove this integration entry."
     }
   },
   "options": {
@@ -60,19 +51,7 @@
           "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "battery_soc_sensor": "Battery state of charge sensor",
-          "temperature_sensor": "Outdoor temperature sensor",
-          "room_temperature_sensor": "Room temperature sensor",
-          "heating_switch_entity": "Heating control switch",
-          "cooling_mode_switch_entity": "Cooling mode switch",
           "total_energy_sensor": "Total home energy sensor",
-          "thermostat_eco_temperature": "Eco temperature",
-          "thermostat_cold_tolerance": "Cold tolerance",
-          "thermostat_hot_tolerance": "Hot tolerance",
-          "thermostat_min_temp": "Minimum thermostat temperature",
-          "thermostat_max_temp": "Maximum thermostat temperature",
-          "thermostat_min_cycle_minutes": "Minimum switch interval (minutes)",
-          "thermostat_control_check_minutes": "Heating status check interval (minutes)",
-          "thermostat_preheat_minutes": "Preheat time before eco (minutes)",
           "price_resolution": "Energy contract price interval",
           "price_window_type": "Price window type",
           "price_window_duration_hours": "Contiguous price window duration (hours)",
@@ -92,6 +71,9 @@
           "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged."
         }
       }
+    },
+    "abort": {
+      "unsupported_planner_kind": "This planner type is no longer supported. Remove this integration entry."
     }
   }
 }
