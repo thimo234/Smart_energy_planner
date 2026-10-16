@@ -15,6 +15,10 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_PRICE_PEAK_MIN_GAP_HOURS,
     DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
+    CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
+    DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
+    CONF_PRICE_PEAK_REMOVE_SMALL_PENDING,
+    DEFAULT_PRICE_PEAK_REMOVE_SMALL_PENDING,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
@@ -331,6 +335,16 @@ def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] |
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Required(
+                CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
+                default=user_input.get(CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_PEAK_REMOVE_SMALL_PENDING,
+                default=user_input.get(CONF_PRICE_PEAK_REMOVE_SMALL_PENDING, DEFAULT_PRICE_PEAK_REMOVE_SMALL_PENDING),
+            ): selector.BooleanSelector(),
             vol.Required(
                 CONF_PRICE_PEAK_MIN_GAP_HOURS,
                 default=user_input.get(CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS),

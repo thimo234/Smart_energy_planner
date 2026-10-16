@@ -55,7 +55,10 @@ The price window planner's expensive-price mode finds successive local price
 peaks. For each peak it locks the most expensive contiguous block of the configured
 duration around that peak, then searches after that block and the minimum off time.
 Equal consecutive peak prices count as one peak; lower known prices must confirm
-both sides. There is no rolling-average threshold, so small local peaks count too.
+both sides. **Minimum peak prominence (% of price spread)** filters small ripples:
+the summit must rise above its surrounding valley floors by at least this
+percentage of its local day's highest minus lowest known price. The default is
+10%; 0 disables the filter. There is no rolling average or two-peaks-per-day limit.
 Only complete blocks covered by known prices are selected. Peaks that cannot fit
 are skipped. The cheapest-window mode keeps its existing daily selection.
 
@@ -64,8 +67,12 @@ duration: default 1 hour, configurable from 0.25 to 48 hours in quarter-hour ste
 Blocks never overlap or touch. The binary sensor turns off at the locked end time,
 without waiting for another planner update. Locked blocks survive restarts and
 temporary price-sensor outages; their list is exposed as `planned_price_peak_windows`.
-Setting changes apply to new blocks. Lowering the maximum duration also shortens
-existing blocks when required; increasing it never extends a locked block.
+**Remove small peak blocks that have not started** (default on) also removes
+previously locked future blocks that no longer contain a sufficiently prominent
+peak. Rechecking requires complete daily prices; missing data never cancels a
+block. Turning this option off preserves existing blocks. Active blocks and
+qualifying future blocks keep their start and end times. Lowering the maximum
+duration can shorten blocks as before; increasing it never extends a locked block.
 
 - `sensor.smart_energy_planner_score`
 - `sensor.smart_energy_planner_recommendation`

@@ -271,6 +271,45 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: duidelijke pieken via relatieve piekhoogte — 16 oktober
+
+- Gewenst: in het getoonde voorbeeld verwacht de gebruiker twee duidelijke
+  pieken (ochtend en avond). Kleine schommelingen moeten niet zelfstandig
+  meetellen. Dit vervangt de eerdere werking waarbij iedere lokale top telt;
+  het is geen limiet van twee pieken per dag en gebruikt geen rollend gemiddelde.
+- De gebruiker kiest een instelbaar percentage van het prijsverschil, geen
+  vaste grens in cent/kWh. Geïmplementeerd: piekhoogte boven de hoogste van
+  de twee omliggende dalbodems, vergeleken met een percentage van de hoogste
+  minus laagste bekende prijs van de lokale dag van de piek. Zoek aan beide
+  kanten tot een hogere top of een datagat; kleine rimpels op een grotere
+  piek krijgen daardoor niet de hoogte van de grote piek toegekend.
+- Het percentage is instelbaar van 0 tot 100; 0 schakelt het hoogtefilter uit.
+  Standaard 10% is de gekozen implementatiestandaard. Morgen heeft een eigen
+  prijsverschil en verandert de drempel voor vandaag niet.
+- De gebruiker kiest het verwijderen van kleine, nog niet gestarte blokken
+  en vraagt ook dit instelbaar te maken. Daarvoor is een aparte schakelaar
+  toegevoegd, standaard aan. Behoud de begin- en eindtijd van een actief blok
+  en van toekomstige blokken die nog een voldoende hoge piek omvatten.
+- Beoordeel opgeslagen blokken alleen opnieuw als alle tarieven van de
+  betreffende lokale dag(en) volledig beschikbaar zijn. Bij ontbrekende
+  prijzen blijven ze behouden. De schakelaar uit bewaart ook kleine blokken.
+  Verwijderde toekomstige blokken mogen geen fictieve zoekgrens achterlaten;
+  bewaar het einde van het laatste voltooide blok voor de minimale pauze.
+  Bij oude opslag zonder herstelbaar voltooid einde wordt conservatief vanaf
+  nu een volle pauze gehanteerd als een toekomstige zoekgrens vervalt.
+- Gecontroleerd: 36 gerichte tests geslaagd, inclusief dezelfde echte prijzen,
+  0/10/50%, meerdere duidelijke pieken, negatieve prijzen en schaalverandering,
+  daggrenzen, oude opgeslagen blokken, de opschoonschakelaar, actieve blokken,
+  ontbrekende tarieven en behoud van duur, pauze en prijsvensterwerking.
+- Controlegrafiek: dezelfde aangeleverde prijzen van 10 oktober, doorgerekend
+  vanaf 00:00, 3 uur hoog en minimaal 2 uur laag. Met 10% blijven 07:00–10:00
+  en 18:00–21:00 over. De topverschillen zijn 6,1 en 7,2 cent; de drempel is
+  ongeveer 2,2 cent. Grafiekgenerator/template zijn ongewijzigd, daarom geen
+  herhaalde browsercontrole. Alleen lokaal getest.
+- De gebruiker heeft de concrete correctie/grafiek op 16 oktober goedgekeurd
+  en opdracht gegeven te pushen.
+- Nog open: installatie en live controle in Home Assistant.
+
 ### Goedgekeurde wijziging: opeenvolgende dure prijspieken — 16 oktober
 
 - Gewenst: de prijsvensterplanner zoekt lokale prijstoppen, zonder rollend
