@@ -124,7 +124,7 @@ class CheapestPriceWindowStartSensorTest(unittest.TestCase):
     def test_exposes_cheapest_block_start_as_timestamp(self):
         start = "2026-08-07T02:00:00+02:00"
         data = types.SimpleNamespace(
-            cheapest_price_window={
+            selected_price_window={
                 "start": start,
                 "end": "2026-08-07T05:00:00+02:00",
                 "average_price": 0.12,
@@ -142,6 +142,23 @@ class CheapestPriceWindowStartSensorTest(unittest.TestCase):
         self.assertEqual(entity.native_value, datetime.fromisoformat(start))
         self.assertEqual(entity._attr_device_class, "timestamp")
         self.assertEqual(entity.extra_state_attributes["end"], "2026-08-07T05:00:00+02:00")
+
+    def test_expensive_selection_and_updates_follow_the_selected_block(self):
+        cheap = dict(start="2026-10-16T11:30:00+02:00", end="2026-10-16T16:30:00+02:00", average_price=.3449, duration_hours=5)
+        peak = dict(start="2026-10-16T16:45:00+02:00", end="2026-10-16T21:45:00+02:00", average_price=.4305, duration_hours=5)
+        data = types.SimpleNamespace(planner_kind="price_window", source_status={}, source_errors=[],
+                                     price_window_type="most_expensive", cheapest_price_window=cheap,
+                                     selected_price_window=peak)
+        entity = CheapestPriceWindowStartSensor(types.SimpleNamespace(data=data),
+                                               types.SimpleNamespace(entry_id="entry-1", title="Prices"))
+        for block in (peak, cheap, None):
+            data.selected_price_window = block
+            self.assertEqual(entity.native_value, datetime.fromisoformat(block["start"]) if block else None)
+            attrs = entity.extra_state_attributes
+            for key in ("end", "average_price", "duration_hours"):
+                self.assertEqual(attrs[key], block[key] if block else None)
+            self.assertEqual(attrs["selected_price_window_start"], block["start"] if block else None)
+        self.assertEqual(entity._attr_unique_id, "entry-1_cheapest_price_window_start")
 
 
 if __name__ == "__main__":

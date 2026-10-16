@@ -120,7 +120,7 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
 
 
 class CheapestPriceWindowStartSensor(PlannerSensor):
-    """Timestamp at which the cheapest configured price block starts."""
+    """Timestamp at which the selected price block starts (legacy entity ID)."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -133,7 +133,7 @@ class CheapestPriceWindowStartSensor(PlannerSensor):
             coordinator,
             entry,
             "cheapest_price_window_start",
-            "Cheapest Price Window Start",
+            "Price Window Start",
             "cheapest_price_window_start",
         )
         self._attr_icon = "mdi:clock-start"
@@ -146,6 +146,8 @@ class CheapestPriceWindowStartSensor(PlannerSensor):
     def extra_state_attributes(self) -> dict:
         window = self._window
         return super().extra_state_attributes | {
+            "price_window_type": getattr(self.coordinator.data, "price_window_type", None),
+            "selected_price_window_start": window.get("start"),
             "end": window.get("end"),
             "average_price": window.get("average_price"),
             "duration_hours": window.get("duration_hours"),
@@ -153,7 +155,7 @@ class CheapestPriceWindowStartSensor(PlannerSensor):
 
     @property
     def _window(self) -> dict:
-        value = getattr(self.coordinator.data, "cheapest_price_window", None)
+        value = getattr(self.coordinator.data, "selected_price_window", None)
         return value if isinstance(value, dict) else {}
 
 

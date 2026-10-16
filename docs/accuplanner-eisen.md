@@ -271,6 +271,24 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: startsensor volgt gekozen prijsblok — 16 oktober
+
+- Gebruikersverzoek: bij selectie duur moet de startsensor het geselecteerde
+  dure blok tonen, bij goedkoop het goedkope blok. Geïmplementeerd via
+  selected_price_window, inclusief bijbehorende eindtijd, prijs en duur.
+- Naam gewijzigd naar Price Window Start. Bestaande unique ID/entity-ID en
+  legacy attribuut cheapest_price_window_start blijven behouden voor bestaande
+  automatiseringen; selected_price_window_start geeft dezelfde start weer.
+- Zonder geselecteerd blok is de timestamp leeg, zonder terugval op goedkoop.
+- Twee gerichte sensortests geslaagd: goedkope selectie, dure selectie,
+  wisselend geselecteerd blok, ontbrekend blok en consistente attributen.
+- Controlegrafiek gebruikt aangeleverde tarieven, 5 uur, aangenomen standaard
+  pauze 1 uur en piekhoogte 10%, zonder opgeslagen blokken. De plannerberekening
+  zelf is ongewijzigd. Live instellingen/opgeslagen piekblokken ontbreken.
+- De gebruiker heeft de concrete wijziging en grafiek op 16 oktober goedgekeurd
+  en opdracht gegeven naar main te pushen.
+- Nog open: installatie en live controle in Home Assistant.
+
 ### Goedgekeurde correctie: duidelijke pieken via relatieve piekhoogte — 16 oktober
 
 - Gewenst: in het getoonde voorbeeld verwacht de gebruiker twee duidelijke
