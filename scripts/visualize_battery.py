@@ -21,6 +21,8 @@ def read_snapshot(path):
 
 
 def plot_data(data, charge_kw, discharge_kw, label):
+    if data.get('planner_kind') == 'price_window':
+        return plot_price_peaks(data, label)
     parse = datetime.fromisoformat
     prices = data['upcoming_energy_price_windows']
     actual = data['planned_battery_mode_windows']
@@ -72,6 +74,39 @@ def plot_data(data, charge_kw, discharge_kw, label):
                               (float(data['battery_total_energy_kwh'])-float(data['battery_energy_available_kwh']))/capacity*100)),
                 label=f'{label} · {start:%d-%m %H:%M} tot {end:%d-%m %H:%M} · '
                       f'berekende SOC, laden {charge_kw:g} kW / ontladen {discharge_kw:g} kW{preview_note}')
+
+
+def plot_price_peaks(data, label):
+    """Use the same template for prices and the strict binary peak schedule."""
+    parse = datetime.fromisoformat
+    prices = data['upcoming_energy_price_windows']
+    windows = sorted([{**w, 'mode': 'prijspiek'} for w in data['planned_price_peak_windows']],
+                     key=lambda w: parse(w['start']).timestamp())
+    previous_end = None
+    for window in windows:
+        a, b = parse(window['start']).timestamp(), parse(window['end']).timestamp()
+        if b <= a or b-a > float(data['configured_duration_hours'])*3600 + .001:
+            raise ValueError('Piekblok overschrijdt de ingestelde maximale duur.')
+        if previous_end is not None and a-previous_end < float(data['minimum_gap_hours'])*3600 - .001:
+            raise ValueError('Pauze tussen piekblokken is te kort.')
+        previous_end = b
+    start, end = min(parse(w['start']) for w in prices), max(parse(w['end']) for w in prices)
+    edges = sorted({start, end, *(parse(w[k]) for w in prices+windows for k in ('start', 'end')
+                               if start <= parse(w[k]) <= end)})
+    rows, bit = [], []
+    for at in edges:
+        price = next((w['price'] for w in prices if parse(w['start']) <= at < parse(w['end'])),
+                     prices[-1]['price'] if at == end else None)
+        if price is None:
+            raise ValueError(f'Ontbrekend tarief op {at.isoformat()}')
+        active = any(parse(w['start']) <= at < parse(w['end']) for w in windows)
+        rows.append(dict(t=at.isoformat(), price=price, solar=0, demand=0))
+        bit.append([at.isoformat(), int(active)])
+    return dict(rows=rows, windows=windows, soc=bit, minimum=0, is_price_peaks=True,
+                start=start.isoformat(), end=end.isoformat(),
+                label=f'{label} · {start:%d-%m %H:%M} tot {end:%d-%m %H:%M} · '
+                      f'maximaal {data["configured_duration_hours"]:g} uur hoog · '
+                      f'minimaal {data["minimum_gap_hours"]:g} uur laag')
 
 
 def render(snapshot, output, charge_kw, discharge_kw, comparison=None):

@@ -32,7 +32,11 @@
           "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)",
-          "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)"
+          "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
+          "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)"
+        },
+        "data_description": {
+          "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked."
         }
       }
     },
@@ -63,10 +67,12 @@
           "battery_max_charge_kw": "Max charge power (kW)",
           "battery_max_discharge_kw": "Max discharge power (kW)",
           "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
-          "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
+          "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)",
+          "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)"
         },
         "data_description": {
-          "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged."
+          "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged.",
+          "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked."
         }
       }
     },

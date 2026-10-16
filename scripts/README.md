@@ -14,6 +14,12 @@ visualize-renderer kan dit desgewenst omzetten naar een zelfstandige browserpagi
 De template staat in `scripts/templates/battery_chart.html`; verander de template
 niet voor iedere nieuwe meting. Bewaar gegenereerde grafieken buiten Git.
 
+Dezelfde generator ondersteunt prijsvenster-snapshots met `planner_kind: price_window`,
+`upcoming_energy_price_windows`, `planned_price_peak_windows`,
+`configured_duration_hours` en `minimum_gap_hours`. Dan toont de template prijzen,
+piekblokken en de bit (0/1), en controleert de generator onafhankelijk de maximale
+blokduur en minimale pauze. De laad-/ontlaadparameters worden daarbij niet gebruikt.
+
 Het script toont prijzen, zon, verbruik, modusvensters en onafhankelijk berekende
 SOC. Het voert **geen nieuwe plannerberekening** uit. Voor een codewijziging levert
 de regressiereplay de nieuwe modusvensters aan als JSON, met dezelfde prognoses.

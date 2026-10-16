@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from dataclasses import replace
 from copy import copy
+import asyncio
 import logging
 import statistics
 from typing import Any, cast
@@ -101,6 +102,8 @@ from .price_helpers import (
     extract_price_windows,
     select_contiguous_price_window,
 )
+from .price_peaks import STATE_KEY as PRICE_PEAK_STATE_KEY, plan_price_peaks
+from .const import CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS
 from .price_models import PlannerWindow
 from .planner_result import PlannerResult
 
@@ -550,6 +553,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 self._store_battery_cycle_state_snapshot(now)
                 await self._async_persist_runtime_state(runtime_state)
+            if planner_kind == PLANNER_KIND_PRICE_WINDOW:
+                runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+                    self.config_entry.entry_id, {},
+                )
+                if PRICE_PEAK_STATE_KEY in runtime_state:
+                    await self._async_persist_runtime_state(runtime_state)
             return result
         except Exception as err:
             _LOGGER.exception("Planner update failed")
@@ -968,29 +977,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         return True
 
     async def _async_persist_runtime_state(self, runtime_state: dict[str, Any]) -> None:
-        store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
-        data = await store.async_load() or {}
-        entry_state = {
-            **(data.get(self.config_entry.entry_id, {}) or {}),
-            "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
-            "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
-            "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
-            "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
-            "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
-            "battery_grid_charge_price": runtime_state.get("battery_grid_charge_price"),
-            _BATTERY_CYCLE_STATE_KEY: runtime_state.get(_BATTERY_CYCLE_STATE_KEY, {}),
-            _EXPECTED_DEMAND_STATS_KEY: runtime_state.get(_EXPECTED_DEMAND_STATS_KEY, {}),
-            _EXPECTED_DEMAND_TABLE_KEY: runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY, {}),
-            _EXPECTED_DEMAND_ADJUSTMENT_KEY: runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY, 1.0),
-            _EXPECTED_DEMAND_LAST_VALUE_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_VALUE_KEY),
-            _EXPECTED_DEMAND_LAST_HOUR_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_HOUR_KEY),
-            _EXPECTED_DEMAND_LAST_TS_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_TS_KEY),
-            _EXPECTED_DEMAND_TODAY_KEY: runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY, {}),
-        }
-        for legacy_key in _LEGACY_DEMAND_KEYS:
-            entry_state.pop(legacy_key, None)
-        data[self.config_entry.entry_id] = entry_state
-        await store.async_save(data)
+        # Battery and peak planners share the same store; serialize each read-modify-write.
+        lock = self.hass.data.setdefault(f"{DOMAIN}_runtime_store_lock", asyncio.Lock())
+        async with lock:
+            store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
+            data = await store.async_load() or {}
+            entry_state = {
+                **(data.get(self.config_entry.entry_id, {}) or {}),
+                PRICE_PEAK_STATE_KEY: runtime_state.get(PRICE_PEAK_STATE_KEY, {}),
+                "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
+                "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
+                "battery_profit_tracked_energy_kwh": runtime_state.get("battery_profit_tracked_energy_kwh", 0.0),
+                "battery_profit_last_energy_kwh": runtime_state.get("battery_profit_last_energy_kwh"),
+                "battery_profit_last_updated": runtime_state.get("battery_profit_last_updated"),
+                "battery_grid_charge_price": runtime_state.get("battery_grid_charge_price"),
+                _BATTERY_CYCLE_STATE_KEY: runtime_state.get(_BATTERY_CYCLE_STATE_KEY, {}),
+                _EXPECTED_DEMAND_STATS_KEY: runtime_state.get(_EXPECTED_DEMAND_STATS_KEY, {}),
+                _EXPECTED_DEMAND_TABLE_KEY: runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY, {}),
+                _EXPECTED_DEMAND_ADJUSTMENT_KEY: runtime_state.get(_EXPECTED_DEMAND_ADJUSTMENT_KEY, 1.0),
+                _EXPECTED_DEMAND_LAST_VALUE_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_VALUE_KEY),
+                _EXPECTED_DEMAND_LAST_HOUR_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_HOUR_KEY),
+                _EXPECTED_DEMAND_LAST_TS_KEY: runtime_state.get(_EXPECTED_DEMAND_LAST_TS_KEY),
+                _EXPECTED_DEMAND_TODAY_KEY: runtime_state.get(_EXPECTED_DEMAND_TODAY_KEY, {}),
+            }
+            for legacy_key in _LEGACY_DEMAND_KEYS:
+                entry_state.pop(legacy_key, None)
+            data[self.config_entry.entry_id] = entry_state
+            await store.async_save(data)
+
 
     async def _async_get_average_daily_usage(self, entity_id: str) -> float:
         """Estimate average daily usage from recorder history of a cumulative kWh sensor."""
@@ -1253,13 +1267,28 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 whole_hour_start=whole_hour_start,
                 day_offset=1,
             )
+            peak_windows = []
             most_expensive_price_window = select_contiguous_price_window(
-                all_windows,
-                now=now,
-                duration_hours=duration_hours,
-                cheapest=False,
-                whole_hour_start=whole_hour_start,
-            )
+                all_windows, now=now, duration_hours=duration_hours,
+                cheapest=False, whole_hour_start=whole_hour_start,
+            ) if not wants_most_expensive else None
+            if wants_most_expensive:
+                runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
+                    self.config_entry.entry_id, {},
+                )
+                peak_state = plan_price_peaks(
+                    all_windows if source_status.get("price_sensor") == "ok" else [],
+                    now=now, duration_hours=duration_hours, whole_hour_start=whole_hour_start,
+                    minimum_gap_hours=float(self._config.get(
+                        CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
+                    )),
+                    saved=runtime_state.get(PRICE_PEAK_STATE_KEY),
+                )
+                runtime_state[PRICE_PEAK_STATE_KEY] = peak_state
+                peak_windows = peak_state["windows"]
+                most_expensive_price_window = next(
+                    (w for w in peak_windows if datetime.fromisoformat(w["end"]) > now), None,
+                )
             selected_price_window = (
                 most_expensive_price_window
                 if wants_most_expensive
@@ -1267,6 +1296,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             )
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             day_end = day_start + timedelta(days=1)
+            price_horizon_end = max((w.end for w in all_windows), default=day_end) if wants_most_expensive else day_end
             result = self._build_pending_result(
                 "ready_with_warnings" if source_errors else "ready",
                 planner_kind,
@@ -1290,14 +1320,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             result.upcoming_energy_price_windows = self._serialize_price_windows(
                 all_windows,
                 horizon_start=day_start,
-                horizon_end=day_end,
+                horizon_end=price_horizon_end,
             )
             result.selected_price_window = selected_price_window
             result.price_window_type = price_window_type
             result.cheapest_price_window = cheapest_price_window
             result.tomorrow_cheapest_price_window = tomorrow_cheapest_price_window
             result.most_expensive_price_window = most_expensive_price_window
+            result.planned_price_peak_windows = peak_windows
             result.rationale = (
+                "local price peaks locked in sequence; on duration and minimum off time are enforced"
+                if wants_most_expensive else
                 f"selected {duration_hours:g} contiguous hour price windows between "
                 f"{day_start.isoformat()} and {day_end.isoformat()}"
             )

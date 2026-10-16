@@ -74,6 +74,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime_state = hass.data.setdefault(RUNTIME_STATE, {})
     persisted_state = await _async_load_runtime_state(hass, entry.entry_id)
     runtime_state[entry.entry_id] = {
+        "price_peak_state": persisted_state.get("price_peak_state", {}),
         "battery_profit_total_eur": persisted_state.get("battery_profit_total_eur", 0.0),
         "battery_profit_cost_basis_eur": persisted_state.get("battery_profit_cost_basis_eur", 0.0),
         "battery_profit_tracked_energy_kwh": persisted_state.get("battery_profit_tracked_energy_kwh", 0.0),

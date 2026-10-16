@@ -9,6 +9,18 @@ spec.loader.exec_module(viewer)
 
 
 class BatteryVisualizationTest(unittest.TestCase):
+    def test_peak_bit_returns_low_at_end_and_checks_maximum_duration(self):
+        data = dict(planner_kind='price_window', configured_duration_hours=1, minimum_gap_hours=.25,
+                    upcoming_energy_price_windows=[dict(start='2026-10-16T10:00:00+02:00',
+                        end='2026-10-16T14:00:00+02:00', price=.3)],
+                    planned_price_peak_windows=[dict(start='2026-10-16T11:00:00+02:00',
+                        end='2026-10-16T12:00:00+02:00')])
+        result = viewer.plot_data(data, 2.5, 3, '')
+        self.assertEqual([v for _,v in result['soc']], [0,1,0,0])
+        data['planned_price_peak_windows'][0]['end'] = '2026-10-16T12:15:00+02:00'
+        with self.assertRaisesRegex(ValueError, 'maximale duur'):
+            viewer.plot_data(data, 2.5, 3, '')
+
     def data(self):
         period = dict(start='2026-09-28T12:00:00+02:00', end='2026-09-28T13:00:00+02:00')
         return dict(battery_soc_percent=50, battery_total_energy_kwh=5,

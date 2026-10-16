@@ -13,6 +13,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
 
 from .const import (
+    CONF_PRICE_PEAK_MIN_GAP_HOURS,
+    DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
@@ -318,7 +320,7 @@ def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] |
                 selector.SelectSelectorConfig(
                     options=[
                         selector.SelectOptionDict(value=PRICE_WINDOW_TYPE_CHEAPEST, label="Cheapest window"),
-                        selector.SelectOptionDict(value=PRICE_WINDOW_TYPE_MOST_EXPENSIVE, label="Most expensive window"),
+                        selector.SelectOptionDict(value=PRICE_WINDOW_TYPE_MOST_EXPENSIVE, label="Successive price peaks"),
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
@@ -328,6 +330,12 @@ def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] |
                 default=user_input.get(CONF_PRICE_WINDOW_DURATION_HOURS, DEFAULT_PRICE_WINDOW_DURATION_HOURS),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_PEAK_MIN_GAP_HOURS,
+                default=user_input.get(CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0.25, max=48, step=0.25, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_WINDOW_WHOLE_HOUR_START,

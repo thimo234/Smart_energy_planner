@@ -33,7 +33,11 @@
           "battery_max_charge_kw": "Max laadvermogen (kW)",
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
           "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
-          "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)"
+          "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
+          "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)"
+        },
+        "data_description": {
+          "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan."
         }
       }
     },
@@ -65,10 +69,12 @@
           "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
           "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
           "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
-          "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)"
+          "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)",
+          "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)"
         },
         "data_description": {
-          "export_price_tax_deduction": "Alleen bij een lege terugleversensor of dezelfde sensor als de importprijs: terugleverprijs = importprijs min dit bedrag. 0,11 betekent 11 cent/kWh; 0 schakelt de aftrek uit. Gebruik een importprijs inclusief belasting. Een aparte terugleversensor wordt niet aangepast."
+          "export_price_tax_deduction": "Alleen bij een lege terugleversensor of dezelfde sensor als de importprijs: terugleverprijs = importprijs min dit bedrag. 0,11 betekent 11 cent/kWh; 0 schakelt de aftrek uit. Gebruik een importprijs inclusief belasting. Een aparte terugleversensor wordt niet aangepast.",
+          "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan."
         }
       }
     },

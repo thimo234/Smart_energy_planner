@@ -87,3 +87,4 @@ class PlannerResult:
     current_export_price: float | None = None
     estimated_battery_mode_windows: list[dict] | None = None
     upcoming_export_price_windows: list[dict[str, str | float | bool]] | None = None
+    planned_price_peak_windows: list[dict] | None = None

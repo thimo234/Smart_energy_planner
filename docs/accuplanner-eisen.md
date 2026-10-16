@@ -271,6 +271,47 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: opeenvolgende dure prijspieken — 16 oktober
+
+- Gewenst: de prijsvensterplanner zoekt lokale prijstoppen, zonder rollend
+  gemiddelde (dit vervangt het aanvankelijke verzoek om een gemiddelde).
+  Kies per piek de duurste aaneengesloten X uur rond die piek. Leg gevonden
+  blokken meteen vast en zoek daarna de volgende piek; herberekeningen en
+  herstarts mogen de gevonden blokken niet vooruit schuiven of verlengen.
+- De bit mag nooit langer dan de ingestelde X uur aaneengesloten hoog zijn.
+  De minimale lage tijd tussen blokken is afzonderlijk instelbaar.
+- Lokaal geïmplementeerd: opeenvolgende gelijke topprijzen vormen één piek,
+  bevestigd door lagere bekende prijzen aan beide kanten. Ook kleine lokale
+  toppen tellen mee; er is geen minimumhoogte of gemiddelde als drempel.
+  Alleen volledig met bekende tarieven gedekte blokken worden vastgelegd.
+  Bij gelijke blokgemiddelden wordt het vroegste geschikte blok gekozen.
+- De zoekvolgorde is chronologisch. Een piek waarvoor geen volledig blok past
+  ná het vorige blok plus de vereiste pauze wordt overgeslagen. De planner
+  zoekt verder; hij plakt blokken nooit aan elkaar en vult geen ontbrekende
+  tarieven in om een piek te kunnen plannen. Daggrenzen beperken de piekzoeker
+  niet. De keuze voor goedkoopste uren behoudt haar bestaande werking.
+- De pauze is instelbaar in kwartierstappen van 0,25 tot 48 uur, standaard
+  1 uur. Deze keuze is een implementatiestandaard, geen opgegeven gebruikerswaarde.
+  Instellingen gelden voor nieuw te vinden blokken; bestaande blokken blijven
+  vaststaan. Alleen een verlaagde maximale blokduur kort bestaande blokken in
+  als ze anders de nieuwe bovengrens zouden overschrijden. Verhogen verlengt niet.
+- Begin/einde worden met aparte tijdcallbacks gepubliceerd, ook zonder een
+  nieuwe plannerupdate. Vastgelegde blokken blijven beschikbaar bij tijdelijk
+  weggevallen tarieven. De gedeelde opslag van accu- en prijsplanners gebruikt
+  een lock, zodat gelijktijdig opslaan geen nieuwe piek- of accustatus verliest.
+- Lokaal: 31 gerichte regressies geslaagd, inclusief maximumduur, instelbare
+  pauze, kwartierprijzen, negatieve prijzen, onvolledige prijzen, herstart,
+  bronuitval, wintertijd, schakelen op de eindtijd en behoud van accustatus.
+  De bestaande grafiekgenerator/template ondersteunt nu ook prijspiekblokken
+  en een hoog/laag-lijn. Desktop- en mobiele controles voor beide grafiektypen
+  slagen, inclusief legenda-interactie; geen JavaScript-fouten.
+- Controlegrafiek: echte aangeleverde prijzen van 10 oktober, doorgerekend vanaf
+  00:00 met 3 uur per blok en minimaal 2 uur pauze. Deze instellingen zijn een
+  voorbeeld. De accuplanning blijft met dezelfde eerdere replay-invoer gelijk.
+- De gebruiker heeft op 16 oktober expliciet opdracht gegeven deze wijziging
+  te pushen. Controlegrafieken zijn vóór publicatie getoond.
+- Nog open: installatie en live verificatie van de bit in Home Assistant.
+
 ### Goedgekeurde wijziging: thermostaatgedeelte verwijderen — 16 oktober
 
 - Gewenst: de gebruiker vraagt het volledige thermostaatgedeelte te verwijderen.
