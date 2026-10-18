@@ -25,6 +25,10 @@ def replay(windows=None, **kwargs):
     })
 
 
+def legacy_state():
+    return json.loads((Path(__file__).parent/'fixtures/price_peaks_legacy_2026_10_10.json').read_text())
+
+
 class PeakProminenceTest(unittest.TestCase):
     def test_supplied_prices_have_two_broad_peaks_with_default_ten_percent(self):
         result = replay()['windows']
@@ -33,7 +37,7 @@ class PeakProminenceTest(unittest.TestCase):
         self.assertEqual([w['peak_prominence'] for w in result], [.061,.072])
 
     def test_percentage_is_configurable_and_zero_restores_small_peaks(self):
-        self.assertEqual(len(replay(minimum_prominence_percent=0)['windows']), 4)
+        self.assertEqual(len(replay(minimum_prominence_percent=0)['windows']), 6)
         self.assertEqual(len(replay(minimum_prominence_percent=10)['windows']), 2)
         self.assertEqual(len(replay(minimum_prominence_percent=50)['windows']), 0)
 
@@ -58,32 +62,32 @@ class PeakProminenceTest(unittest.TestCase):
                          [(w['start'],w['end']) for w in replay()['windows']])
 
     def test_cleanup_keeps_large_block_times_and_can_be_disabled(self):
-        saved = replay(minimum_prominence_percent=0)
+        saved = legacy_state()
         filtered = replay(saved=saved)['windows']
         self.assertEqual(len(filtered),2)
         self.assertEqual(filtered, [saved['windows'][1],saved['windows'][3]])
         self.assertEqual(replay(saved=saved, remove_small_pending=False)['windows'], saved['windows'])
 
     def test_cleanup_preserves_active_block_and_never_extends_it(self):
-        saved = replay(minimum_prominence_percent=0)
+        saved = legacy_state()
         now = datetime.fromisoformat(saved['windows'][0]['start'])+timedelta(minutes=30)
         result = replay(saved=saved,now=now)['windows']
         self.assertEqual(len(result),3)
         self.assertEqual(result[0],saved['windows'][0])
 
     def test_incomplete_or_missing_prices_do_not_cancel_pending_blocks(self):
-        saved = replay(minimum_prominence_percent=0)
+        saved = legacy_state()
         self.assertEqual(replay([],saved=saved)['windows'],saved['windows'])
         self.assertEqual(replay(supplied_prices()[1:],saved=saved)['windows'],saved['windows'])
 
     def test_cancelled_future_tail_does_not_block_new_valid_peaks(self):
-        saved = replay(minimum_prominence_percent=0)
+        saved = legacy_state()
         cleared = replay(saved=saved, minimum_prominence_percent=50)
         self.assertFalse(cleared['windows'])
         self.assertEqual(len(replay(saved=cleared)['windows']),2)
 
     def test_finished_block_preserves_minimum_pause_after_cleanup(self):
-        saved = replay(minimum_prominence_percent=0)
+        saved = legacy_state()
         now = datetime.fromisoformat(saved['windows'][1]['end'])
         cleared = replay(saved=saved, now=now, minimum_prominence_percent=50)
         self.assertEqual(datetime.fromisoformat(cleared['last_finished_end']),now)
@@ -97,7 +101,7 @@ class PeakSettingsTest(unittest.IsolatedAsyncioTestCase):
         source = SimpleNamespace(state='.15', attributes={'raw_today': [
             {'start': w.start.isoformat(), 'end': w.end.isoformat(), 'value': w.price} for w in raw
         ]})
-        old = replay(minimum_prominence_percent=0)
+        old = legacy_state()
         for percentage, cleanup, expected in [(0,True,4),(10,False,4),(10,True,2),(50,True,0)]:
             instance = coordinator()
             instance.config_entry = SimpleNamespace(entry_id='peaks', data={

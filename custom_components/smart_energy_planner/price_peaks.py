@@ -92,6 +92,20 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
             groups.append(window)
     peaks = _significant_peaks(groups, known, local_zone, minimum_prominence_percent)
     peak_times = [top.start+(top.end-top.start)/2 for top, _, _ in peaks]
+    def normal_price(peak, prominence, span):
+        return peak.price-prominence+span*max(0.0, min(100.0, minimum_prominence_percent))/100
+
+    def early_end(start, end, peak_at, threshold):
+        if peak_at is None or threshold is None or not start <= peak_at < end:
+            return end
+        # Never infer a return to normal across missing or overlapping tariffs.
+        for window in known:
+            if peak_at < window.start < end and window.price <= threshold + 1e-10:
+                if _average(known, start, window.start) is not None:
+                    return window.start
+                return end
+        return end
+
     def complete_days(start, end):
         day = start.astimezone(local_zone).date()
         last_day = (end-timedelta(microseconds=1)).astimezone(local_zone).date()
@@ -116,6 +130,27 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
             continue
         # Changing the maximum may shorten a commitment; it can never extend it.
         end = min(end, start + duration)
+        peak_at = parse(item.get("peak_at"))
+        threshold = item.get("normal_price_threshold")
+        if threshold is None and peak_at is not None:
+            matching = next(((p, prominence, span) for p, prominence, span in peaks
+                             if p.start <= peak_at < p.end), None)
+            if matching:
+                threshold = normal_price(*matching)
+        shortened = early_end(start, end, peak_at, threshold) if end > now else end
+        # On migration an active block can stop now, never retroactively.
+        if start <= now < end:
+            shortened = max(now, shortened)
+        if shortened < end:
+            removed = True  # Rebuild the search boundary from actual ends.
+            end = shortened
+        item = {**item}
+        if threshold is not None and end != parse(item.get("end")):
+            item["normal_price_threshold"] = threshold
+        if end != parse(item.get("end")):
+            average = _average(known, start, end)
+            if average is not None:
+                item["average_price"] = round(average, 6)
         if end <= now:
             last_finished = max(last_finished, end) if last_finished else end
         elif (remove_small_pending and start > now and complete_days(start, end)
@@ -148,8 +183,13 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
         if not candidates:
             continue
         average, start, end = max(candidates, key=lambda c: (c[0], -c[1].timestamp()))
+        threshold = normal_price(peak, prominence, span)
+        end = early_end(start, end, peak_at, threshold)
+        average = _average(known, start, end)
         committed.append({"start": stamp(start), "end": stamp(end),
-                          "average_price": round(average, 6), "duration_hours": duration_hours,
+                          "average_price": round(average, 6),
+                          "duration_hours": (end-start).total_seconds()/3600,
+                          "normal_price_threshold": threshold,
                           "peak_at": stamp(peak_at), "peak_price": peak.price,
                           "peak_prominence": round(prominence, 6),
                           "day_price_spread": round(span, 6)})

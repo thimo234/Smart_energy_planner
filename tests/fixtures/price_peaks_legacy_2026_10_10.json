@@ -1,0 +1,46 @@
+{
+  "windows": [
+    {
+      "start": "2026-10-10T00:00:00+02:00",
+      "end": "2026-10-10T03:00:00+02:00",
+      "average_price": 0.149833,
+      "duration_hours": 3,
+      "peak_at": "2026-10-10T00:22:30+02:00",
+      "peak_price": 0.156,
+      "peak_prominence": 0.011,
+      "day_price_spread": 0.219
+    },
+    {
+      "start": "2026-10-10T07:00:00+02:00",
+      "end": "2026-10-10T10:00:00+02:00",
+      "average_price": 0.1925,
+      "duration_hours": 3,
+      "peak_at": "2026-10-10T07:22:30+02:00",
+      "peak_price": 0.19,
+      "peak_prominence": 0.005,
+      "day_price_spread": 0.219
+    },
+    {
+      "start": "2026-10-10T13:00:00+02:00",
+      "end": "2026-10-10T16:00:00+02:00",
+      "average_price": 0.131083,
+      "duration_hours": 3,
+      "peak_at": "2026-10-10T13:07:30+02:00",
+      "peak_price": 0.132,
+      "peak_prominence": 0.005,
+      "day_price_spread": 0.219
+    },
+    {
+      "start": "2026-10-10T18:00:00+02:00",
+      "end": "2026-10-10T21:00:00+02:00",
+      "average_price": 0.314583,
+      "duration_hours": 3,
+      "peak_at": "2026-10-10T18:52:30+02:00",
+      "peak_price": 0.345,
+      "peak_prominence": 0.072,
+      "day_price_spread": 0.219
+    }
+  ],
+  "last_end": "2026-10-10T21:00:00+02:00",
+  "last_finished_end": null
+}

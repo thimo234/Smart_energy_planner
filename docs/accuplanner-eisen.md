@@ -271,6 +271,35 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: dure piekblokken eerder stoppen — 18 oktober
+
+- Gebruikersverzoek: ingestelde lengte (hier 5 uur) is een maximum. Stop na
+  de piek eerder als de prijs weer normaal is, zodat de kachel vaker kan werken.
+- Gebruiker kiest als grens het omliggende dal plus de ingestelde piekdrempel.
+  Geïmplementeerd: hoogste van beide dalbodems uit de bestaande piekhoogtemeting
+  plus ingesteld percentage van hoogste minus laagste bekende piekdagprijs.
+  Stop bij het eerste tariefinterval na de top op of onder deze grens.
+- Kies eerst het bestaande duurste blok; behoud de start en kort het einde in.
+  Sla de grens en werkelijke duur/gemiddelde prijs op. Nooit opnieuw verlengen.
+  Minimum pauze geldt vanaf het eerdere einde; daarna kunnen meer pieken passen.
+- Dit vervangt de eerdere eis om ook actieve eindtijden volledig vast te houden:
+  actieve en toekomstige blokken mogen korter worden. Een reeds gepasseerde
+  grens stopt een actief blok nu; herschrijf geen historische eindtijd.
+  Ontbrekende/overlappende tarieven mogen geen vervroegde stop veroorzaken.
+  Goedkope blokken houden hun vaste duur; kleine-blokkenopschoning blijft apart.
+- Tests: 30 gerichte regressies, inclusief migratie, herstart, prijsuitval,
+  maximumduur, pauze, echte tarieven en eerder afgeronde blokken. De oude
+  migratietests gebruiken nu opgeslagen blokken uit de versie vóór deze wijziging.
+  Bij 0% passen in de eerdere testdag nu 6 in plaats van 4 korte piekblokken.
+- Controlegrafiek: echte tarieven 18 oktober vanaf middernacht, 5 uur maximum,
+  aangenomen 1 uur pauze en 10% piekdrempel, zonder opgeslagen live blokken.
+  Ochtend 08:30–10:30 in plaats van 08:30–13:30; grens EUR 0,359/kWh.
+  Overige nieuwe blokken: 00:00–01:15, 15:45–16:00, 17:15–18:00, 19:00–20:15.
+- De gebruiker heeft de concrete wijziging en grafiek op 18 oktober goedgekeurd
+  en opdracht gegeven naar main te pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+  Grafiektemplate en generator zijn ongewijzigd.
+
 ### Goedgekeurde correctie: startsensor volgt gekozen prijsblok — 16 oktober
 
 - Gebruikersverzoek: bij selectie duur moet de startsensor het geselecteerde

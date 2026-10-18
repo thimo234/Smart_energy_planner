@@ -40,7 +40,8 @@
         "data_description": {
           "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
           "price_peak_min_prominence_percent": "Height above surrounding valleys, as a percentage of the highest minus lowest known daily price. 10% filters small fluctuations; 0 disables the filter. Expensive peaks only.",
-          "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices."
+          "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices.",
+          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration."
         }
       }
     },
@@ -80,7 +81,8 @@
           "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged.",
           "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
           "price_peak_min_prominence_percent": "Height above surrounding valleys, as a percentage of the highest minus lowest known daily price. 10% filters small fluctuations; 0 disables the filter. Expensive peaks only.",
-          "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices."
+          "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices.",
+          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration."
         }
       }
     },

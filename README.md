@@ -53,7 +53,12 @@ The battery planner derives the estimated energy for today only from the history
 
 The price window planner's expensive-price mode finds successive local price
 peaks. For each peak it locks the most expensive contiguous block of the configured
-duration around that peak, then searches after that block and the minimum off time.
+maximum duration around that peak. After the peak, it ends the block early at the
+first known price at or below the higher surrounding valley floor plus the
+configured prominence percentage of that day's price spread. The start stays
+locked; the minimum off time runs from the actual earlier end. The threshold is
+stored as `normal_price_threshold`, and the average price and duration describe
+the shortened block. A shortened block is never extended on refresh or restart.
 Equal consecutive peak prices count as one peak; lower known prices must confirm
 both sides. **Minimum peak prominence (% of price spread)** filters small ripples:
 the summit must rise above its surrounding valley floors by at least this
@@ -70,8 +75,10 @@ temporary price-sensor outages; their list is exposed as `planned_price_peak_win
 **Remove small peak blocks that have not started** (default on) also removes
 previously locked future blocks that no longer contain a sufficiently prominent
 peak. Rechecking requires complete daily prices; missing data never cancels a
-block. Turning this option off preserves existing blocks. Active blocks and
-qualifying future blocks keep their start and end times. Lowering the maximum
+block. Turning this option off preserves existing blocks, but still allows early
+ending when the price normalizes. Active and future blocks can also end early;
+an active block whose normal-price boundary has already passed stops now, without
+backdating its end. Missing tariffs cannot trigger an early end. Lowering the maximum
 duration can shorten blocks as before; increasing it never extends a locked block.
 
 - `sensor.smart_energy_planner_score`
