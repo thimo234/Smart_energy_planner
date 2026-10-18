@@ -159,6 +159,13 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## 5. Onzekerheid in zon en verbruik
 
+- Nieuw verzoek 18 oktober: leer het weekritme (bijvoorbeeld dinsdag rond
+  12:00 handdoeken wassen) en houd daarnaast rekening met huishoudelijk werk
+  dat naar goedkope uren verschuift. Een vast weekpatroon mag niet zonder
+  onderscheid als volledig verschuifbaar verbruik worden behandeld.
+- De gebruiker bevestigt dat de aangeleverde totaalteller het volledige
+  huisverbruik omvat, inclusief zon/accu en exclusief acculaden.
+
 - Houd rekening met werkelijk gemeten verbruik en actuele SOC. Herbereken
   wanneer verbruik of prognoses veranderen.
 - Bij onverwacht hoger verbruik moet rendabel aanvullend netladen kunnen
@@ -270,6 +277,48 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: weekritme en flexibele vraag — 18 oktober
+
+- Gewenst: bovenstaande combinatie van weekritme en prijsafhankelijk gedrag.
+- Geïmplementeerd: maximaal vier recente metingen per weekdag/uur. Na minstens
+  twee herhaalde verhogingen boven vergelijkbare dagen weegt dat weekuur
+  zwaarder. Bestaande opslag zonder deze metingen blijft werken en leert verder.
+- De verhoging van een weekuur boven andere vergelijkbare dagen wordt in de
+  prognose als vermoedelijke routine beschermd tegen de prijsverschuiving.
+  Het overige deel blijft gedeeltelijk verschuifbaar. Dit is een benadering,
+  geen herkenning van individuele apparaten of gegarandeerde wasstart.
+- Alleen volledig bekende uurprijzen tellen voor verschuiven; bij minder dan
+  5 cent prijsverschil blijft het profiel staan. Geen verplaatsing naar een
+  duurder uur, verstreken uur of het reeds begonnen uur. Dagenergie blijft gelijk.
+- Goedgekeurd tijdvenster: flexibele werkzaamheden tussen 08:00 en 23:00.
+  De bestaande correctie op dagverbruik blijft behouden.
+- Analyse: CSV van 1 oktober 00:00 tot 18 oktober 13:30 lokale tijd; geen volle
+  maand, twee dinsdagen. Kleine negatieve tellercorrecties tellen met hun teken
+  mee. Intervallen boven 75 minuten en sprongen groter dan 10 kWh worden voor
+  deze analyse uitgesloten, evenals onvolledig gedekte uren. Dit verandert
+  de live tellerverwerking niet. Ontbrekende dekking is geen nulverbruik.
+- Walk-forward controle met de later aangeleverde prijshistorie, op negen
+  volledige toetsdagen (9–17 oktober), na zeven volledige trainingsdagen:
+  gemiddelde absolute uurfout 0,3664 naar 0,3625 kWh, circa 1,1% verbetering.
+  Dagfout circa 4,59 kWh blijft gelijk (afrondingsverschil <0,001 kWh).
+  Elke toetsdag gebruikt uitsluitend eerdere verbruiksdagen; bruikbare uren
+  van onvolledige dagen leren wel mee. Bij dubbele tijdstempels geldt de
+  laatste tellerstand. Dit toetst dagvooruitprofielen met werkelijke tarieven,
+  zonder veiligheidsmarge en actuele dagcorrectie; het is geen reconstructie
+  van de eerder live getoonde voorspellingen. Aanname: dagtarieven vooraf
+  bekend. Publicatiemomenten zijn niet uit de export af te leiden.
+- Lokale controles: 111 gerichte tests, na correctie van een nieuwe test
+  slagen de 33 prognosetests; de overige 76 waren reeds geslaagd. Grafiek
+  en twee analysetests slagen. De definitieve grafiek gebruikt verbruik van
+  vóór 16 oktober als training en echte tarieven van 16–17 oktober.
+  Zon blijft synthetisch; aannames 10 kWh, 60% SOC/reserve, 20% minimum, 3 kW,
+  EUR 0,08 minimumwinst, EUR 0,11 aftrek, geen extra prognosemarges.
+  Onafhankelijke energiecontrole blijft binnen 20–100% SOC.
+- De gebruiker heeft op 18 oktober de concrete wijziging en vergelijkingsgrafiek
+  goedgekeurd en opdracht gegeven naar main te pushen.
+- Nog te testen: nauwkeurigheid op langere historie met meer herhalingen en
+  live Home Assistant. De CSV is niet automatisch in Home Assistant geïmporteerd.
 
 ### Goedgekeurde wijziging: grote pieken krijgen voorrang — 18 oktober
 

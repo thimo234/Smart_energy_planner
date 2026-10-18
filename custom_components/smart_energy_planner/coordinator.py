@@ -1368,6 +1368,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         estimated_hourly_home_demand = align_price_responsive_demand_to_cheap_hours(
             estimated_hourly_home_demand,
             all_windows,
+            now=now,
         )
         demand_safety_margin = (
             self._battery_demand_safety_margin()

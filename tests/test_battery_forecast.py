@@ -106,7 +106,7 @@ class BatteryForecastTest(unittest.TestCase):
                 )
             )
 
-        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
+        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices, flexible_hours=(0, 24))
         adjusted_values = [float(slot["estimated_kwh"]) for slot in adjusted]
 
         self.assertLess(adjusted_values[20], 3.0)
@@ -128,7 +128,7 @@ class BatteryForecastTest(unittest.TestCase):
             )
             prices.append(PlannerWindow(start=start, end=start + timedelta(hours=1), price=0.10 + hour))
 
-        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices)
+        adjusted = align_price_responsive_demand_to_cheap_hours(demand, prices, flexible_hours=(0, 24))
         adjusted_values = [float(slot["estimated_kwh"]) for slot in adjusted]
 
         self.assertLess(adjusted_values[23], 0.7)
@@ -459,7 +459,7 @@ class BatteryForecastTest(unittest.TestCase):
 
         self.assertEqual(stats["10"]["count"], 2)
         self.assertEqual(stats["daytype:weekday:10"]["count"], 2)
-        self.assertLess(len(str(stats)), 200)
+        self.assertLess(len(str(stats)), 300)
         self.assertGreater(expected["10"], expected["11"])
 
     def test_expected_hourly_demand_uses_fast_day_type_profile(self):

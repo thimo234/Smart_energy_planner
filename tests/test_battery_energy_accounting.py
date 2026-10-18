@@ -95,7 +95,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
     namespace = c._build_plan_for_horizon.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {
         "build_hourly_home_demand_forecast": lambda **kwargs: data["estimated_hourly_home_demand"],
-        "align_price_responsive_demand_to_cheap_hours": lambda demand, prices: demand,
+        "align_price_responsive_demand_to_cheap_hours": lambda demand, prices, **kwargs: demand,
     }):
         # Existing tests exercise the horizon algorithm; isolation is tested
         # separately through the production entry point.

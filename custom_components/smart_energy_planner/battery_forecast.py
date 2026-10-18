@@ -80,6 +80,14 @@ def build_hourly_home_demand_forecast(
                     "start": slot_start.isoformat(),
                     "end": (slot_start + timedelta(hours=1)).isoformat(),
                     "estimated_kwh": total_hourly,
+                    # The weekday-specific excess is a routine, not evidence
+                    # that the appliance can run at any cheapest hour.
+                    "routine_kwh": round(max(0.0, raw_non_heating_hourly - _median(
+                        _same_hour_values(table, hour=hour, weekdays=[
+                            d for d in range(7) if d != slot_start.weekday()
+                            and (d >= 5) == (slot_start.weekday() >= 5)
+                        ]) or [raw_non_heating_hourly]
+                    )) * non_heating_scale, 3),
                 }
             )
 
@@ -89,6 +97,9 @@ def build_hourly_home_demand_forecast(
 def align_price_responsive_demand_to_cheap_hours(
     hourly_demand: list[dict[str, str | float]],
     price_windows: list[Any],
+    *,
+    now: datetime | None = None,
+    flexible_hours: tuple[int, int] = (8, 23),
 ) -> list[dict[str, str | float]]:
     """Move learned flexible demand from expensive hours to cheap matching day hours."""
 
@@ -115,6 +126,10 @@ def align_price_responsive_demand_to_cheap_hours(
             demand_kwh = _coerce_float(slot.get("estimated_kwh"), default=0.0) or 0.0
             if slot_start is None or slot_end is None or demand_kwh <= 0:
                 continue
+            if now is not None and slot_start < now:
+                continue
+            if not flexible_hours[0] <= slot_start.hour < flexible_hours[1]:
+                continue
             price = _optional_window_price(
                 start=slot_start,
                 end=slot_end,
@@ -125,6 +140,8 @@ def align_price_responsive_demand_to_cheap_hours(
 
         if len(priced_slots) < 3:
             continue
+        if max(item[4] for item in priced_slots) - min(item[4] for item in priced_slots) < 0.05:
+            continue
 
         demand_values = [demand_kwh for _, _, _, demand_kwh, _ in priced_slots]
         median_demand = _median(demand_values)
@@ -132,8 +149,8 @@ def align_price_responsive_demand_to_cheap_hours(
         upper_quartile = high_values[int(len(high_values) * 0.75)]
         peak_threshold = max(median_demand + 0.25, upper_quartile)
         flexible_by_start = {
-            slot_start: max(0.0, demand_kwh - peak_threshold)
-            for _, slot_start, _, demand_kwh, _ in priced_slots
+            slot_start: max(0.0, demand_kwh - peak_threshold - float(slot.get("routine_kwh", 0)))
+            for slot, slot_start, _, demand_kwh, _ in priced_slots
         }
         peak_flexible_kwh = sum(flexible_by_start.values())
         max_peak_flexible_kwh = sum(demand_values) * 0.35
@@ -141,7 +158,14 @@ def align_price_responsive_demand_to_cheap_hours(
         source_total = sum(flexible_by_start.values())
         if peak_flexible_kwh > 0.05 and source_total > 0:
             target_count = max(1, min(len(priced_slots), sum(1 for value in flexible_by_start.values() if value > 0)))
-            cheapest_slots = sorted(priced_slots, key=lambda item: (item[4], item[1]))[:target_count]
+            source_prices = [price for _, start, _, _, price in priced_slots
+                             if flexible_by_start[start] > 0]
+            cheapest_slots = sorted(
+                [item for item in priced_slots if item[4] < min(source_prices)],
+                key=lambda item: (item[4], item[1]),
+            )[:target_count]
+            if not cheapest_slots:
+                continue
             per_target_kwh = peak_flexible_kwh / len(cheapest_slots)
 
             for slot, slot_start, _, demand_kwh, _ in priced_slots:
@@ -167,6 +191,15 @@ def align_price_responsive_demand_to_cheap_hours(
             adjusted_by_start=adjusted_by_start,
             priced_slots=priced_slots,
         )
+        rounding_delta = round(sum(item[3] for item in priced_slots) - sum(
+            float(adjusted_by_start[str(item[0]['start'])]['estimated_kwh'])
+            for item in priced_slots
+        ), 3)
+        if rounding_delta:
+            target = min(priced_slots, key=lambda item: item[4])[0]
+            adjusted_slot = adjusted_by_start[str(target['start'])]
+            adjusted_slot['estimated_kwh'] = round(
+                float(adjusted_slot['estimated_kwh']) + rounding_delta, 3)
 
     return adjusted
 
@@ -203,7 +236,8 @@ def _shift_baseline_demand_away_from_expensive_hours(
         if current_kwh <= 0.05 or price <= median_price:
             continue
         price_weight = (price - median_price) / (max_price - median_price)
-        removable_kwh = min(current_kwh * 0.25 * price_weight, max(0.0, current_kwh - 0.05))
+        flexible_kwh = max(0.0, current_kwh - float(slot.get("routine_kwh", 0)))
+        removable_kwh = min(flexible_kwh * 0.25 * price_weight, max(0.0, flexible_kwh - 0.05))
         if removable_kwh > 0:
             removals.append((adjusted_slot, removable_kwh))
 
@@ -260,14 +294,18 @@ def _optional_window_price(
 ) -> float | None:
     weighted_price = 0.0
     weighted_hours = 0.0
-    for window in windows:
+    cursor = start
+    for window in sorted(windows, key=lambda w: w.start):
         overlap_hours = _overlap_hours(start, end, window.start, window.end)
         if overlap_hours <= 0:
             continue
+        if not getattr(window, "price_known", True) or max(start, window.start) != cursor:
+            return None
+        cursor = min(end, window.end)
         weighted_price += float(window.price) * overlap_hours
         weighted_hours += overlap_hours
 
-    if weighted_hours <= 0:
+    if weighted_hours <= 0 or cursor != end:
         return None
     return round(weighted_price / weighted_hours, 6)
 
@@ -345,6 +383,11 @@ def _update_demand_stat(
         "count": count + 1,
         "mean_kwh": round(mean_kwh, 4),
     }
+    if slot_key.isdigit():
+        # Keep a few weekly samples to distinguish recurring peaks from one-offs.
+        updated[slot_key]["recent_kwh"] = [
+            *raw_slot.get("recent_kwh", [])[-3:], round(measured_value, 4),
+        ]
     return updated
 
 
@@ -392,6 +435,16 @@ def _expected_hourly_demand_value(
     all_hour_values = _stat_means_for_hour(stats, hour=hour, weekdays=range(7))
 
     if exact is not None:
+        recent = stats.get(slot_key, {}).get("recent_kwh", [])
+        peers = _stat_means_for_hour(stats, hour=hour, weekdays=[
+            d for d in similar_weekdays if d != weekday
+        ])
+        peer = _median(peers) if peers else day_type_mean
+        if (len(recent) >= 2 and peer is not None
+                and min(recent) > peer + 0.25):
+            # Require repeated elevation before letting the weekly routine
+            # outweigh the fast day-type model. Old stores learn this gradually.
+            return max(0.0, exact * 0.80 + peer * 0.20)
         # The exact weekday/hour slot only gets one observation per week.  Blend
         # it with the much faster adapting weekday/weekend hour statistic when
         # available, so changed routines are reflected within days, not weeks.
