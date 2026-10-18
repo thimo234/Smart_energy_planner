@@ -8,6 +8,20 @@ from test_price_peaks import plan, prices, NOW, PlannerWindow, plan_price_peaks
 
 
 class EarlyEndTest(unittest.TestCase):
+    def test_large_evening_peak_wins_over_small_afternoon_peak(self):
+        raw=json.loads((Path(__file__).parent/'fixtures/price_peaks_2026_10_18.json').read_text())
+        windows=[PlannerWindow(datetime.fromisoformat(w['start']),datetime.fromisoformat(w['end']),w['price']) for w in raw]
+        stop='2026-10-18T10:00:00+02:00'
+        result=plan_price_peaks(windows,now=datetime.fromisoformat(stop),duration_hours=5,
+            whole_hour_start=False,minimum_gap_hours=5,
+            saved={'last_end':stop,'last_finished_end':stop})
+        self.assertEqual([(w['start'][11:16],w['end'][11:16]) for w in result['windows']],
+                         [('17:15','22:15')])
+        self.assertEqual(result['windows'][0]['peak_price'],.503)
+        restored=plan_price_peaks(windows,now=datetime.fromisoformat('2026-10-18T13:00:00+02:00'),
+            duration_hours=5,whole_hour_start=False,minimum_gap_hours=5,saved=result)
+        self.assertEqual(restored['windows'],result['windows'])
+
     def test_returns_to_valley_plus_percentage_not_daily_average(self):
         raw = prices((.1, .3, .6, .3, .15, .1, .1, .1))
         block = plan(raw, duration_hours=5)['windows'][0]
@@ -41,7 +55,7 @@ class EarlyEndTest(unittest.TestCase):
         self.assertEqual(result['last_end'], now.isoformat())
 
     def test_gap_starts_at_actual_early_end_and_maximum_is_preserved(self):
-        raw = prices((.1,.3,.6,.1,.1,.4,.7,.3,.1,.1,.1,.1))
+        raw = prices((.1,.3,.6,.1,.1,.1,.1,.1,.1,.4,.7,.3,.1,.1,.1,.1))
         result = plan(raw,duration_hours=5,minimum_gap_hours=1)['windows']
         self.assertGreaterEqual(len(result),2)
         for block in result:

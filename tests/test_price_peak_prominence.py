@@ -37,7 +37,7 @@ class PeakProminenceTest(unittest.TestCase):
         self.assertEqual([w['peak_prominence'] for w in result], [.061,.072])
 
     def test_percentage_is_configurable_and_zero_restores_small_peaks(self):
-        self.assertEqual(len(replay(minimum_prominence_percent=0)['windows']), 6)
+        self.assertEqual(len(replay(minimum_prominence_percent=0)['windows']), 5)
         self.assertEqual(len(replay(minimum_prominence_percent=10)['windows']), 2)
         self.assertEqual(len(replay(minimum_prominence_percent=50)['windows']), 0)
 

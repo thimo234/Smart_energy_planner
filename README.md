@@ -51,6 +51,12 @@ The battery planner derives the estimated energy for today only from the history
 
 ## Exposed entities
 
+Price Window Start includes `next_price_window_start` and `next_price_window_end`
+for the block after the selected block; these are empty when no following block
+is known. Estimated Home Demand Today exposes only today's total and hourly
+consumption forecast and its source diagnostics. Battery Strategy retains the
+battery and planning details. The former Planner Score entity is removed on setup.
+
 The price window planner's expensive-price mode finds successive local price
 peaks. For each peak it locks the most expensive contiguous block of the configured
 maximum duration around that peak. After the peak, it ends the block early at the
@@ -64,6 +70,9 @@ both sides. **Minimum peak prominence (% of price spread)** filters small ripple
 the summit must rise above its surrounding valley floors by at least this
 percentage of its local day's highest minus lowest known price. The default is
 10%; 0 disables the filter. There is no rolling average or two-peaks-per-day limit.
+When new blocks compete for the required off time, the more prominent peak wins.
+A small early summit therefore cannot displace the larger evening peak. Existing
+locked blocks retain their start times; this priority applies to newly found blocks.
 Only complete blocks covered by known prices are selected. Peaks that cannot fit
 are skipped. The cheapest-window mode keeps its existing daily selection.
 
@@ -81,7 +90,6 @@ an active block whose normal-price boundary has already passed stops now, withou
 backdating its end. Missing tariffs cannot trigger an early end. Lowering the maximum
 duration can shorten blocks as before; increasing it never extends a locked block.
 
-- `sensor.smart_energy_planner_score`
 - `sensor.smart_energy_planner_recommendation`
 - `sensor.smart_energy_planner_battery_strategy`
 - `sensor.smart_energy_planner_estimated_home_demand_today`

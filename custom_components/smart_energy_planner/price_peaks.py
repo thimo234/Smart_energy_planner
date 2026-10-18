@@ -63,7 +63,8 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
     """Return persisted state; only complete known peaks can create new blocks.
 
     A flat summit is one peak, confirmed by lower prices on both sides.
-    Commit peaks in time order, then search strictly after the preceding block.
+    Prefer more prominent peaks when new blocks compete for the required pause.
+    Existing commitments remain fixed; return new blocks in time order.
     The configured OFF time (at least 15 minutes) prevents concatenated ON time.
     """
     saved = saved if isinstance(saved, dict) else {}
@@ -168,6 +169,7 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
     # Starting at an interval boundary also makes the maximum reproducible at each refresh.
     starts = sorted({w.start for w in known
                      if not whole_hour_start or (w.start.astimezone(local_zone).minute == 0 and w.start.second == 0)})
+    proposals = []
     for peak, prominence, span in peaks:
         peak_at = peak.start + (peak.end - peak.start) / 2
         if peak_at < now or (last_end and peak_at <= last_end):
@@ -186,14 +188,22 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
         threshold = normal_price(peak, prominence, span)
         end = early_end(start, end, peak_at, threshold)
         average = _average(known, start, end)
-        committed.append({"start": stamp(start), "end": stamp(end),
+        proposals.append((prominence, start, end, {"start": stamp(start), "end": stamp(end),
                           "average_price": round(average, 6),
                           "duration_hours": (end-start).total_seconds()/3600,
                           "normal_price_threshold": threshold,
                           "peak_at": stamp(peak_at), "peak_price": peak.price,
                           "peak_prominence": round(prominence, 6),
-                          "day_price_spread": round(span, 6)})
-        last_end = end
+                          "day_price_spread": round(span, 6)}))
+    # A minor summit must not consume the OFF interval needed for a larger one.
+    # Compare prominence, not absolute price (also works with negative tariffs).
+    selected = []
+    for prominence, start, end, block in sorted(proposals, key=lambda p: (-p[0], p[1])):
+        if any(not (end + gap <= a or b + gap <= start) for a, b in selected):
+            continue
+        selected.append((start, end))
+        committed.append(block)
+        last_end = max(last_end, end) if last_end else end
     return {"windows": sorted(committed, key=lambda w: datetime.fromisoformat(w["start"]).timestamp()),
             "last_end": stamp(last_end) if last_end else None,
             "last_finished_end": stamp(last_finished) if last_finished else None}

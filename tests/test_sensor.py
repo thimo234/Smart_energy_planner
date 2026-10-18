@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import Mock, patch
 from datetime import datetime
 
 from test_support import install_package_stub
@@ -34,6 +35,7 @@ def _install_homeassistant_stubs() -> None:
     core.callback = lambda function: function
 
     sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
+    sys.modules.setdefault("homeassistant.helpers.entity_registry", types.ModuleType("homeassistant.helpers.entity_registry"))
     entity_platform = sys.modules.setdefault(
         "homeassistant.helpers.entity_platform",
         types.ModuleType("homeassistant.helpers.entity_platform"),
@@ -98,9 +100,7 @@ class BatteryRecorderAttributesTest(unittest.TestCase):
         coordinator = types.SimpleNamespace(data=data)
         entry = types.SimpleNamespace(entry_id="battery-entry", title="Battery")
         entities = [
-            BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
             BatteryStrategySensor(coordinator, entry),
-            HomeDemandSensor(coordinator, entry),
         ]
         for entity in entities:
             with self.subTest(sensor=type(entity).__name__):
@@ -121,6 +121,22 @@ class BatteryRecorderAttributesTest(unittest.TestCase):
 
 
 class CheapestPriceWindowStartSensorTest(unittest.TestCase):
+    def test_following_block_is_after_selected_block_or_empty(self):
+        current = dict(start="2026-10-18T18:30:00+02:00",end="2026-10-18T21:30:00+02:00")
+        following = dict(start="2026-10-19T07:00:00+02:00",end="2026-10-19T09:00:00+02:00")
+        data = types.SimpleNamespace(planner_kind="price_window",source_status={},source_errors=[],
+            price_window_type="most_expensive",selected_price_window=current,
+            planned_price_peak_windows=[following,current])
+        entity = CheapestPriceWindowStartSensor(types.SimpleNamespace(data=data),
+            types.SimpleNamespace(entry_id="p",title="Prices"))
+        self.assertEqual(entity.extra_state_attributes['next_price_window_start'],following['start'])
+        self.assertEqual(entity.extra_state_attributes['next_price_window_end'],following['end'])
+        data.planned_price_peak_windows=[current]
+        self.assertIsNone(entity.extra_state_attributes['next_price_window_start'])
+        data.price_window_type='cheapest'
+        data.tomorrow_cheapest_price_window=following
+        self.assertEqual(entity.extra_state_attributes['next_price_window_end'],following['end'])
+
     def test_exposes_cheapest_block_start_as_timestamp(self):
         start = "2026-08-07T02:00:00+02:00"
         data = types.SimpleNamespace(
@@ -159,6 +175,44 @@ class CheapestPriceWindowStartSensorTest(unittest.TestCase):
                 self.assertEqual(attrs[key], block[key] if block else None)
             self.assertEqual(attrs["selected_price_window_start"], block["start"] if block else None)
         self.assertEqual(entity._attr_unique_id, "entry-1_cheapest_price_window_start")
+
+
+class HomeDemandDetailsTest(unittest.TestCase):
+    def test_only_today_demand_and_its_source_are_exposed(self):
+        from custom_components.smart_energy_planner import sensor
+        now=datetime.fromisoformat('2026-10-18T12:00:00+02:00')
+        today=dict(start='2026-10-18T14:00:00+02:00',estimated_kwh=1.2)
+        tomorrow=dict(start='2026-10-19T14:00:00+02:00',estimated_kwh=1.5)
+        data=types.SimpleNamespace(estimated_total_home_demand_kwh=12,
+            estimated_hourly_home_demand=[today,tomorrow],battery_soc_percent=80,
+            source_status={'total_energy_sensor':'ok','battery_soc_sensor':'ok'},
+            source_errors=['price_sensor: missing','total_energy_sensor: warning'])
+        entity=HomeDemandSensor(types.SimpleNamespace(data=data),types.SimpleNamespace(entry_id='a',title='Accu'))
+        with patch.object(sensor.dt_util,'now',return_value=now,create=True), patch.object(sensor.dt_util,'as_local',side_effect=lambda x:x,create=True):
+            attrs=entity.extra_state_attributes
+        self.assertEqual(entity.native_value,12)
+        self.assertEqual(set(attrs),{'estimated_total_home_demand_kwh','forecast_date','estimated_hourly_home_demand','source_status','source_errors'})
+        self.assertEqual(attrs['estimated_hourly_home_demand'],[today])
+        self.assertEqual(attrs['source_status'],{'total_energy_sensor':'ok'})
+        self.assertEqual(attrs['source_errors'],['total_energy_sensor: warning'])
+        self.assertIn('estimated_hourly_home_demand',entity._unrecorded_attributes)
+
+
+class ScoreRemovalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_removes_only_this_entries_score_and_does_not_recreate_it(self):
+        from custom_components.smart_energy_planner import sensor
+        registry=Mock()
+        registry.async_get_entity_id.return_value='sensor.accu_planner_score'
+        entry=types.SimpleNamespace(entry_id='a',title='Accu')
+        coordinator=types.SimpleNamespace(data=types.SimpleNamespace(planner_kind='battery'))
+        hass=types.SimpleNamespace(data={sensor.DOMAIN:{'a':coordinator}})
+        add=Mock()
+        with patch.object(sensor.er,'async_get',return_value=registry,create=True):
+            await sensor.async_setup_entry(hass,entry,add)
+        registry.async_get_entity_id.assert_called_once_with('sensor',sensor.DOMAIN,'a_score')
+        registry.async_remove.assert_called_once_with('sensor.accu_planner_score')
+        self.assertEqual([type(x).__name__ for x in add.call_args.args[0]],
+                         ['BatteryStrategySensor','BatteryProfitSensor','HomeDemandSensor'])
 
 
 if __name__ == "__main__":

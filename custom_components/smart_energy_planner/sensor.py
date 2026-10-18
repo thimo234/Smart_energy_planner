@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -62,9 +63,12 @@ async def async_setup_entry(
     entities: list[PlannerSensor] = []
 
     if planner_kind == PLANNER_KIND_BATTERY:
+        registry = er.async_get(hass)
+        old_score = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_score")
+        if old_score is not None:
+            registry.async_remove(old_score)
         entities.extend(
             [
-                BatteryPlannerSensor(coordinator, entry, "score", "Planner Score", "score"),
                 BatteryStrategySensor(coordinator, entry),
                 BatteryProfitSensor(
                     coordinator,
@@ -145,13 +149,29 @@ class CheapestPriceWindowStartSensor(PlannerSensor):
     @property
     def extra_state_attributes(self) -> dict:
         window = self._window
+        following = self._following_window
         return super().extra_state_attributes | {
             "price_window_type": getattr(self.coordinator.data, "price_window_type", None),
             "selected_price_window_start": window.get("start"),
             "end": window.get("end"),
             "average_price": window.get("average_price"),
             "duration_hours": window.get("duration_hours"),
+            "next_price_window_start": following.get("start"),
+            "next_price_window_end": following.get("end"),
         }
+
+    @property
+    def _following_window(self) -> dict:
+        end = _parse_datetime(self._window.get("end"))
+        if end is None:
+            return {}
+        data = self.coordinator.data
+        candidates = list(getattr(data, "planned_price_peak_windows", None) or [])
+        if getattr(data, "price_window_type", None) != "most_expensive":
+            candidates = [getattr(data, "tomorrow_cheapest_price_window", None)]
+        following = [w for w in candidates if isinstance(w, dict)
+                     and (start := _parse_datetime(w.get("start"))) is not None and start >= end]
+        return min(following, key=lambda w: _parse_datetime(w["start"])) if following else {}
 
     @property
     def _window(self) -> dict:
@@ -242,8 +262,10 @@ class BatteryPlannerSensor(PlannerSensor):
         }
 
 
-class HomeDemandSensor(BatteryPlannerSensor):
+class HomeDemandSensor(PlannerSensor):
     """Sensor exposing estimated total and hourly home demand for diagnostics."""
+
+    _unrecorded_attributes = frozenset({"estimated_hourly_home_demand"})
 
     def __init__(
         self,
@@ -261,8 +283,17 @@ class HomeDemandSensor(BatteryPlannerSensor):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return super().extra_state_attributes | {
-            "estimated_hourly_home_demand": self.coordinator.data.estimated_hourly_home_demand,
+        data = self.coordinator.data
+        today = dt_util.now().date()
+        return {
+            "estimated_total_home_demand_kwh": self.native_value,
+            "forecast_date": today.isoformat(),
+            "estimated_hourly_home_demand": [w for w in data.estimated_hourly_home_demand
+                if (start := _parse_datetime(w.get("start"))) is not None
+                and dt_util.as_local(start).date() == today],
+            "source_status": {k: v for k, v in data.source_status.items() if k == "total_energy_sensor"},
+            "source_errors": [error for error in data.source_errors
+                              if str(error).startswith("total_energy_sensor:")],
         }
 
 

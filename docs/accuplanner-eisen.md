@@ -271,6 +271,48 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: grote pieken krijgen voorrang — 18 oktober
+
+- Gebruiker bevestigt: sla een kleine eerdere top over wanneer die de grotere
+  piek door de verplichte pauze verdringt. Dit vervangt de chronologische
+  prioriteit voor nieuw te vinden pieken. De bestaande procentuele drempel blijft.
+- Geïmplementeerd: bepaal kandidaatblokken inclusief vervroegd einde; kies bij
+  overlap/pauzeconflict eerst de grootste piekhoogte boven de omliggende dalen.
+  Gelijke hoogte krijgt de vroegste start. Retourneer gekozen blokken op tijd.
+  Bestaande vastgezette blokken behouden hun start; geen nieuwe globale daglimiet.
+- Controle met tarieven 18 oktober en aangenomen werkelijk einde 10:00, maximum
+  5 uur en pauze 5 uur: 17:15–22:15 rond top 18:45, in plaats van 15:45–16:00.
+  Dit is een scenario; het live bewaarde blok 18:30–21:30 blijft vast.
+- 31 gerichte piekregressies geslaagd, naast de 6 sensortests van de onderstaande
+  wijziging. De test met 0% geeft nu 5 in plaats van 6 blokken door prioriteit.
+  De pauzetest gebruikt verder gescheiden pieken zodat beide zelfstandig passen.
+- De gebruiker heeft de gecombineerde wijziging en grafiek op 18 oktober
+  goedgekeurd en opdracht gegeven naar main te pushen.
+- Nog open: installatie en live verificatie. Grafiekgenerator en template ongewijzigd.
+
+### Goedgekeurde wijziging: gerichte sensordetails — 18 oktober
+
+- Gebruiker wil Planner Score verwijderen. De entiteit wordt niet meer aangemaakt;
+  setup verwijdert de bestaande registratie uitsluitend via de eigen unique ID.
+- Home Demand Today behoudt de bestaande totale prognose voor vandaag in kWh.
+  Attributen bevatten alleen vandaag, de uurprognose van vandaag en bronstatus/
+  fouten van total_energy_sensor. Accu-, prijs- en planningsdetails blijven op
+  Battery Strategy. De uurreeks blijft uitgesloten van Recorder.
+- Price Window Start toont next_price_window_start en next_price_window_end voor
+  het blok ná het geselecteerde blok. Zonder bekend volgend blok zijn ze leeg.
+  Bij goedkope selectie wordt hiervoor het bekende goedkoopste blok morgen gebruikt.
+- Gebruiker bevestigt 5 uur pauze vanaf uitschakelen. 10:00 uit betekent op zijn
+  vroegst 15:00 aan; met aangeleverde tarieven kiest een verse berekening 15:45.
+  Het live vastgezette blok 18:30–21:30 blijft vast, volgens eerdere afspraak.
+  Vorig werkelijk blokeinde ontbreekt: exacte oorzaak van 18:30 niet bewezen.
+  Live opgeslagen grens 0,406 wijkt af van 0,384 bij de huidige getoonde 10%.
+- Zes gerichte sensortests geslaagd, inclusief registratieopschoning, volgende
+  blokken, bronfiltering, dagfiltering en behoud van uitgebreide strategiedetails.
+- Plannerberekeningen ongewijzigd. Controlegrafiek toont de aangeleverde tarieven
+  met het live opgegeven blok 18:30–21:30, 5 uur maximum en 5 uur pauze.
+- Samen met de voorrang voor grote pieken goedgekeurd op 18 oktober.
+- Nog open: installatie en live verificatie.
+
 ### Goedgekeurde wijziging: dure piekblokken eerder stoppen — 18 oktober
 
 - Gebruikersverzoek: ingestelde lengte (hier 5 uur) is een maximum. Stop na
