@@ -11,6 +11,8 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFl
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
+from .const import (PLANNER_KIND_DEMAND, CONF_DEMAND_DEVICES, CONF_DEMAND_ENERGY_SENSORS,
+                    CONF_DEMAND_FORECAST_SENSOR)
 
 from .const import (
     CONF_PRICE_PEAK_MIN_GAP_HOURS,
@@ -143,6 +145,7 @@ def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
                     options=[
                         selector.SelectOptionDict(value=PLANNER_KIND_BATTERY, label="Battery planner"),
                         selector.SelectOptionDict(value=PLANNER_KIND_PRICE_WINDOW, label="Price window planner"),
+                        selector.SelectOptionDict(value=PLANNER_KIND_DEMAND, label="Consumption forecast"),
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
@@ -219,11 +222,15 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
             ): _entity_selector(
                 _filter_solcast_sensors(hass), current_value=user_input.get(CONF_SOLCAST_TOMORROW_SENSOR)
             ),
-            vol.Required(
+            vol.Optional(
                 CONF_TOTAL_ENERGY_SENSOR, default=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ): _entity_selector(
                 _filter_energy_sensors(hass), current_value=user_input.get(CONF_TOTAL_ENERGY_SENSOR)
             ),
+            vol.Optional(CONF_DEMAND_FORECAST_SENSOR,
+                         default=user_input.get(CONF_DEMAND_FORECAST_SENSOR)): _entity_selector(
+                [s.entity_id for s in _sensor_options(hass) if s.attributes.get('forecast_version') == 1],
+                current_value=user_input.get(CONF_DEMAND_FORECAST_SENSOR)),
             vol.Required(
                 CONF_BATTERY_SOC_SENSOR, default=user_input.get(CONF_BATTERY_SOC_SENSOR)
             ): _entity_selector(
@@ -385,6 +392,8 @@ def _schema_for_kind(
         return _build_battery_schema(hass, user_input)
     if planner_kind == PLANNER_KIND_PRICE_WINDOW:
         return _build_price_window_schema(hass, user_input)
+    if planner_kind == PLANNER_KIND_DEMAND:
+        return _build_demand_schema(hass, user_input)
     raise ValueError(f"Unsupported planner kind: {planner_kind}")
 
 
@@ -393,10 +402,78 @@ def _title_for_kind(planner_kind: str) -> str:
         return f"{DEFAULT_NAME} Battery"
     if planner_kind == PLANNER_KIND_PRICE_WINDOW:
         return f"{DEFAULT_NAME} Price Windows"
+    if planner_kind == PLANNER_KIND_DEMAND:
+        return f"{DEFAULT_NAME} Consumption"
     return f"{DEFAULT_NAME} Battery"
 
 
-class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
+def _build_demand_schema(hass, user_input=None):
+    data = _base_defaults(user_input)
+    return vol.Schema({
+        vol.Required(CONF_PLANNER_NAME, default=data.get(CONF_PLANNER_NAME, 'Home Consumption')): selector.TextSelector(),
+        vol.Optional(CONF_TOTAL_ENERGY_SENSOR, default=data.get(CONF_TOTAL_ENERGY_SENSOR)):
+            _entity_selector(_filter_energy_sensors(hass), current_value=data.get(CONF_TOTAL_ENERGY_SENSOR)),
+        vol.Required(CONF_DEMAND_ENERGY_SENSORS, default=data.get(CONF_DEMAND_ENERGY_SENSORS, [])):
+            selector.EntitySelector(selector.EntitySelectorConfig(domain='sensor', multiple=True)),
+        vol.Optional(CONF_PRICE_SENSOR, default=data.get(CONF_PRICE_SENSOR)):
+            _entity_selector(_filter_price_sensors(hass), current_value=data.get(CONF_PRICE_SENSOR)),
+        vol.Required(CONF_PRICE_WINDOW_DURATION_HOURS, default=data.get(CONF_PRICE_WINDOW_DURATION_HOURS, 5)):
+            selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=24, step=1, mode=selector.NumberSelectorMode.BOX)),
+        vol.Required(CONF_PRICE_WINDOW_WHOLE_HOUR_START, default=data.get(CONF_PRICE_WINDOW_WHOLE_HOUR_START, True)):
+            selector.BooleanSelector(),
+    })
+
+
+class DemandDeviceFlow:
+    """Configure each selected meter with normal HA selectors, also in options."""
+
+    async def _start_demand_devices(self, data, finish_step):
+        self._demand_data = dict(data)
+        self._demand_finish_step = finish_step
+        self._demand_queue = list(data.get(CONF_DEMAND_ENERGY_SENSORS, []))
+        self._demand_rules = []
+        total = data.get(CONF_TOTAL_ENERGY_SENSOR)
+        error = ('duplicate_energy_source' if total in self._demand_queue or len(set(self._demand_queue)) != len(self._demand_queue)
+                 else 'no_energy_sources' if not total and not self._demand_queue else None)
+        if error:
+            return self.async_show_form(step_id=finish_step, data_schema=_build_demand_schema(self.hass, data), errors={'base': error})
+        return await self.async_step_device()
+
+    async def async_step_device(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            if user_input['timing'] == 'cheap' and not self._demand_data.get(CONF_PRICE_SENSOR):
+                errors['base'] = 'price_sensor_required'
+            else:
+                rule = {**user_input, 'entity_id': self._demand_queue.pop(0)}
+                rule['weekdays'] = [int(d) for d in rule['weekdays']]
+                self._demand_rules.append(rule)
+        if not self._demand_queue:
+            self._demand_data[CONF_DEMAND_DEVICES] = self._demand_rules
+            self._demand_devices_complete = True
+            return await getattr(self, 'async_step_'+self._demand_finish_step)(self._demand_data)
+        entity = self._demand_queue[0]
+        defaults = user_input if errors else next((r for r in self._demand_data.get(CONF_DEMAND_DEVICES, [])
+                                                 if r['entity_id'] == entity), {})
+        schema = vol.Schema({
+            vol.Required('timing', default=defaults.get('timing', 'learned')): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=[
+                    selector.SelectOptionDict(value='learned', label='Learn clock time and weekly routine'),
+                    selector.SelectOptionDict(value='fixed', label='Fixed start time'),
+                    selector.SelectOptionDict(value='cheap', label='Start relative to cheapest block')],
+                    mode=selector.SelectSelectorMode.DROPDOWN)),
+            vol.Required('start_time', default=defaults.get('start_time', '17:30:00')): selector.TimeSelector(),
+            vol.Required('offset_hours', default=defaults.get('offset_hours', 0)): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=23, step=.25, mode=selector.NumberSelectorMode.BOX)),
+            vol.Required('weekdays', default=[str(d) for d in defaults.get('weekdays', range(7))]): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=[selector.SelectOptionDict(value=str(i), label=d)
+                    for i,d in enumerate(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])], multiple=True)),
+        })
+        return self.async_show_form(step_id='device', data_schema=schema, errors=errors,
+                                   description_placeholders={'entity': entity})
+
+
+class SmartEnergyPlannerConfigFlow(DemandDeviceFlow, ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Smart Energy Planner."""
 
     VERSION = 1
@@ -406,7 +483,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle the initial step."""
         if user_input is not None:
-            if user_input.get(CONF_PLANNER_KIND) not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+            if user_input.get(CONF_PLANNER_KIND) not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
                 return self.async_abort(reason="unsupported_planner_kind")
             self.context["planner_kind"] = user_input[CONF_PLANNER_KIND]
             return await self.async_step_configure()
@@ -418,11 +495,15 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Configure the selected planner kind."""
         planner_kind = self.context.get("planner_kind", DEFAULT_PLANNER_KIND)
-        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
             return self.async_abort(reason="unsupported_planner_kind")
 
         if user_input is not None:
             user_input = _normalize_selector_values(user_input)
+            if planner_kind == PLANNER_KIND_DEMAND and not getattr(self, '_demand_devices_complete', False):
+                return await self._start_demand_devices(user_input, 'configure')
+            if planner_kind == PLANNER_KIND_BATTERY and not (user_input.get(CONF_TOTAL_ENERGY_SENSOR) or user_input.get(CONF_DEMAND_FORECAST_SENSOR)):
+                return self.async_show_form(step_id='configure', data_schema=_build_battery_schema(self.hass, user_input), errors={'base': 'demand_source_required'})
             data = {CONF_PLANNER_KIND: planner_kind, **user_input}
             title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(planner_kind))
             unique_anchor = (
@@ -448,7 +529,7 @@ class SmartEnergyPlannerConfigFlow(ConfigFlow, domain=DOMAIN):
         return SmartEnergyPlannerOptionsFlow()
 
 
-class SmartEnergyPlannerOptionsFlow(OptionsFlow):
+class SmartEnergyPlannerOptionsFlow(DemandDeviceFlow, OptionsFlow):
     """Handle Smart Energy Planner options."""
 
     async def async_step_init(
@@ -457,7 +538,7 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
         """Manage the options."""
         merged = {**self.config_entry.data, **self.config_entry.options}
         planner_kind = merged.get(CONF_PLANNER_KIND, DEFAULT_PLANNER_KIND)
-        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW):
+        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
             return self.async_abort(reason="unsupported_planner_kind")
 
         if user_input is not None:
@@ -467,6 +548,10 @@ class SmartEnergyPlannerOptionsFlow(OptionsFlow):
                 user_input,
                 planner_kind=planner_kind,
             )
+            if planner_kind == PLANNER_KIND_DEMAND and not getattr(self, '_demand_devices_complete', False):
+                return await self._start_demand_devices(options_data, 'init')
+            if planner_kind == PLANNER_KIND_BATTERY and not (options_data.get(CONF_TOTAL_ENERGY_SENSOR) or options_data.get(CONF_DEMAND_FORECAST_SENSOR)):
+                return self.async_show_form(step_id='init', data_schema=_build_battery_schema(self.hass, options_data), errors={'base': 'demand_source_required'})
             title = str(options_data.get(CONF_PLANNER_NAME) or self.config_entry.title)
             self.hass.config_entries.async_update_entry(self.config_entry, title=title)
             return self.async_create_entry(title="", data=options_data)

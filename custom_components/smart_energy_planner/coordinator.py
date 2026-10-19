@@ -37,6 +37,8 @@ from .battery_forecast import (
     select_best_solar_window,
     update_expected_hourly_demand_stats,
 )
+from .const import PLANNER_KIND_DEMAND, CONF_DEMAND_FORECAST_SENSOR
+from .demand_forecast import read_forecast
 from .battery_models import SolarWindow
 from .battery_profit import grid_supplement_profit
 from .battery_planner import (
@@ -251,11 +253,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         try:
             now = dt_util.now()
             planner_kind = str(self._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY))
+            if planner_kind == PLANNER_KIND_DEMAND:
+                from .demand_coordinator import async_demand_result
+                result = await async_demand_result(self, now)
+                if result.status in ('ready', 'ready_with_warnings'):
+                    self._cancel_source_error_retry()
+                else:
+                    self._schedule_source_error_retry()
+                return result
+            external_demand = None
+            forecast_sensor = self._config_entity_id(CONF_DEMAND_FORECAST_SENSOR)
+            if planner_kind == PLANNER_KIND_BATTERY and forecast_sensor:
+                try:
+                    external_demand = read_forecast(self.hass.states.get(forecast_sensor), now=now,
+                        horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=2))
+                except ValueError as err:
+                    return self._build_pending_result('waiting_for_demand_forecast', planner_kind,
+                        {'demand_forecast_sensor': str(err)}, [f'demand_forecast_sensor: {err}'])
             price_sensor = self._config_entity_id(CONF_PRICE_SENSOR) or str(self._config[CONF_PRICE_SENSOR])
             export_price_sensor = self._config_entity_id(CONF_EXPORT_PRICE_SENSOR)
             solar_sensor = self._config_entity_id(CONF_SOLCAST_TODAY_SENSOR)
             solar_tomorrow_sensor = self._config_entity_id(CONF_SOLCAST_TOMORROW_SENSOR)
             total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
+            if external_demand is not None:
+                total_energy_sensor = None
             battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
             price_state = self.hass.states.get(price_sensor)
@@ -516,6 +537,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     )
 
             result = self._build_plan(
+                external_hourly_demand=external_demand,
                 planner_kind=planner_kind,
                 windows=windows,
                 all_windows=all_windows,
@@ -1200,6 +1222,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         price_resolution: str,
         source_status: dict[str, str],
         source_errors: list[str],
+        external_hourly_demand: list[dict] | None = None,
     ) -> PlannerResult:
         now = dt_util.now()
         if not windows:
@@ -1358,18 +1381,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             (window.start for window in all_windows),
             default=now.replace(hour=0, minute=0, second=0, microsecond=0),
         )
-        estimated_hourly_home_demand = build_hourly_home_demand_forecast(
-            heating_estimate_kwh=0.0,
-            non_heating_daily_average_kwh=non_heating_daily_average_kwh,
-            hourly_demand_table=hourly_demand_table,
-            demand_adjustment_factor=demand_adjustment_factor,
-            horizon_end=planning_horizon_end,
-        )
-        estimated_hourly_home_demand = align_price_responsive_demand_to_cheap_hours(
-            estimated_hourly_home_demand,
-            all_windows,
-            now=now,
-        )
+        if external_hourly_demand is not None:
+            estimated_hourly_home_demand = [dict(w) for w in external_hourly_demand]
+            source_status = {**source_status, 'demand_forecast_sensor': 'ok'}
+        else:
+            estimated_hourly_home_demand = build_hourly_home_demand_forecast(
+                heating_estimate_kwh=0.0,
+                non_heating_daily_average_kwh=non_heating_daily_average_kwh,
+                hourly_demand_table=hourly_demand_table,
+                demand_adjustment_factor=demand_adjustment_factor,
+                horizon_end=planning_horizon_end,
+            )
+            estimated_hourly_home_demand = align_price_responsive_demand_to_cheap_hours(
+                estimated_hourly_home_demand, all_windows, now=now,
+            )
         demand_safety_margin = (
             self._battery_demand_safety_margin()
             if planner_kind == PLANNER_KIND_BATTERY

@@ -165,6 +165,33 @@ geverifieerd is. Lees ook de open punten onderaan.
   onderscheid als volledig verschuifbaar verbruik worden behandeld.
 - De gebruiker bevestigt dat de aangeleverde totaalteller het volledige
   huisverbruik omvat, inclusief zon/accu en exclusief acculaden.
+- Nieuw architectuurverzoek 18 oktober: trek de verbruiksvoorspelling los van
+  de accuplanner. Een afzonderlijke verbruiksplanner krijgt energiemeters per
+  apparaat als invoer en publiceert een gezamenlijke voorspelling als entiteit.
+  Deze voorspellingsentiteit moet selecteerbaar zijn in de accuplanner.
+  Geïmplementeerd en voor publicatie goedgekeurd: een zelfstandige configuratie en entiteit
+  met een tijdreeks voor de planningshorizon, naast het verwachte dagtotaal.
+  De accuplanner gebruikt die tijdreeks voor laden/ontladen en mag de al
+  ingeplande apparaatvraag niet nogmaals naar andere uren verschuiven.
+  Bij gebruik van een totaalmeter plus apparaatmeters telt alleen het
+  restverbruik naast de apparaten mee; geen optelling die dubbel telt.
+  De bestaande prognosemarge blijft een accuplannerinstelling en wordt één
+  keer toegepast. Ontbrekende of onbruikbare voorspellingen moeten herkenbaar
+  zijn; een ontbrekende meetreeks mag niet als nulverbruik worden behandeld.
+- Aanvulling 18 oktober, na publicatie van het weekritme: de gebruiker mist
+  herkenbare pieken bij koken en bij het inschakelen van de warmtepomp op het
+  goedkope moment. Gewenst: deze vaste en geplande belasting herkenbaar
+  verwerken, zonder extra energie te verzinnen of dubbel te tellen.
+  Verduidelijkt door de gebruiker: de warmtepomp start twee uur na het begin
+  van de goedkoopste aaneengesloten vijf uur. Daarvoor draait de vaatwasser.
+  Koken gebeurt meestal rond 17:30. De vaatwasser bij de start van het goedkope
+  blok plaatsen is vooralsnog een implementatieaanname, geen afzonderlijk
+  bevestigd exact starttijdstip.
+  Lokaal configureerbaar in de zelfstandige verbruiksplanner: deze apparaatvolgorde
+  via prijsblokoffsets 0 en 2 uur en een vaste kookstart 17:30. Hoeveelheid en
+  profielduur worden uit de geselecteerde apparaatmeters geleerd. Zonder aparte
+  apparaatmetingen kan totale huisenergie niet als gemeten apparaatenergie
+  worden gepresenteerd. Dagenergie mag niet door de nieuwe pieken toenemen.
 
 - Houd rekening met werkelijk gemeten verbruik en actuele SOC. Herbereken
   wanneer verbruik of prognoses veranderen.
@@ -277,6 +304,54 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: zelfstandige verbruiksplanner — 18 oktober
+
+- Nieuw plannertype `demand`, zonder accu- of Solcastvereiste. Selecteer een
+  optionele totaalmeter en meerdere apparaatmeters. Elke apparaatmeter heeft
+  een eigen configuratiestap met kloktijd/weekritme leren, vaste starttijd of
+  offset ten opzichte van het goedkoopste aaneengesloten blok, plus weekdagen
+  voor expliciet ingeplande apparaten. Blokduur en hele-uurstart zijn instelbaar.
+- Eén sensor publiceert het dagtotaal, drie dagen kwartierwaarden en dezelfde
+  tijdreeks per component. Reeksen blijven live beschikbaar, niet in Recorder.
+- Historie: Wh/kWh, total en total_increasing, tot 28 dagen uit Recorder met
+  uurcache. Minimaal twee volledig gedekte dagen per component nodig. Kleine
+  getekende total-correcties blijven meetellen; reset bij total_increasing is
+  afzonderlijk behandeld. Dubbele tijdstempels gebruiken de laatste stand.
+  Gaten boven 75 minuten en ongeldige metingen leveren ontbrekende dekking op.
+  Dagen met zomer-/wintertijdwisseling worden niet als normale leerdag gebruikt.
+- Weekdagprofiel: maximaal vier gelijke weekdagen indien minstens twee aanwezig,
+  anders maximaal veertien recente dagen. Geplande apparaten houden hun gemeten
+  basislast en verschuiven het gemiddelde actieve profiel vanaf het eerste
+  actieve historische uur. Geen verzonnen apparaatvermogen of vaste cyclusduur.
+  Uurmetingen, meerdere dagelijkse cycli en veranderende verwarmingsvraag
+  begrenzen de nauwkeurigheid; kwartieruitvoer is geen kwartiermeetresolutie.
+- Restverbruik is historische totaalmeter minus de gekozen apparaten op dezelfde
+  gedekte uren. Dubbele bronnen en apparaten boven het totaal worden afgewezen.
+  Zonder totaalmeter worden uitsluitend de geselecteerde apparaten voorspeld.
+- Bij onbekende toekomstige prijzen gebruikt dat apparaat expliciet zijn
+  historische kloktijdprofiel; bronstatus vermeldt deze terugval. Geen willekeurige
+  'goedkoopste' start uit geschatte vlakke prijzen. Er worden geen apparaten bediend.
+- Accuplanner: optionele selectie `demand_forecast_sensor` vervangt het interne
+  vraagmodel en de prijsverschuiving. Bestaande entries zonder selectie behouden
+  hun oude werking. De accuplanner past alleen zijn verbruiksmarge één keer toe.
+  Contractversie, kWh-eenheid, eindige/niet-negatieve waarden, tijdzones, overlap,
+  horizonbedekking en actualiteit (maximaal twee uur) worden gecontroleerd.
+  Bij ontbrekende/ongeldige bron: wachten, geen nulvraag als bruikbare prognose.
+- Lokale controle: volledige regressiesuite geslaagd (267 tests), aangevuld met
+  vijf nieuwe regressies voor externe bronkoppeling, sensoren, DST en tellerreset:
+  272 unieke geslaagde tests. De latere gerichte hercontroles slagen. Configuratie
+  en bronverwerking zijn lokaal getest; grafiekdata is onafhankelijk doorgerekend
+  en blijft binnen 20–100% SOC. Kaart en grafiektemplate zijn niet gewijzigd.
+- Controlegrafiek gebruikt synthetische apparaatmetingen en prijzen: vaatwasser
+  11:00, warmtepomp 13:00, koken 17:30, 7,2 kWh restverbruik per dag. Totaal 13,8
+  kWh/dag, in de accu 16,56 kWh inclusief 20% marge. Geen zon, 10 kWh accu, 60%
+  begin-SOC, veilige grens 20%, laden/ontladen 3 kW. Geen claim over nauwkeurigheid
+  van echte apparaatprognoses: de aangeleverde CSV bevat alleen totaalverbruik.
+- De gebruiker heeft de concrete wijziging en grafiek goedgekeurd en op
+  19 oktober opdracht gegeven deze naar main te pushen.
+- Nog open: installatie en live HA-
+  controle met de werkelijk gekozen sensoren en bestaande apparaat-automatiseringen.
 
 ### Goedgekeurde wijziging: weekritme en flexibele vraag — 18 oktober
 

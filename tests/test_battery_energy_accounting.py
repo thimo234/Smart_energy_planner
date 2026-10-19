@@ -60,7 +60,7 @@ def replay():
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
                      solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False,
-                     snapshot_exports=False):
+                     snapshot_exports=False, external_demand=None, demand_margin=0):
     """Exercise final sensor scheduling with the already computed demand input."""
     now, slots = feedback_slots(snapshot, timestamp)
     data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
@@ -89,7 +89,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
     c.config_entry = SimpleNamespace(data={"battery_enabled": True, "battery_capacity_kwh": 10, "battery_min_soc_percent": 20,
                                           "battery_max_charge_kw": max_charge, "battery_max_discharge_kw": 3,
                                           "battery_min_profit_per_kwh": profit,
-                                          "battery_demand_safety_margin": 0,
+                                          "battery_demand_safety_margin": demand_margin,
                                           "battery_charge_safety_margin": solar_margin,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
     namespace = c._build_plan_for_horizon.__globals__
@@ -101,6 +101,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
         # separately through the production entry point.
         build = c._build_plan if isolated_cycles else c._build_plan_for_horizon
         result = build(
+            external_hourly_demand=external_demand,
             planner_kind="battery", windows=[p for p in prices if p.price_known], all_windows=prices,
             export_windows=exports, all_export_windows=exports, battery_switch_windows=prices,
             price_average=None, export_price_average=None, current_price=prices[0].price,

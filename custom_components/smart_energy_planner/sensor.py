@@ -22,6 +22,7 @@ from .const import (
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 from .planner_result import PlannerResult
+from .const import PLANNER_KIND_DEMAND
 
 _BATTERY_STRATEGY_OPTIONS = [
     "accu_uit",
@@ -82,6 +83,8 @@ async def async_setup_entry(
 
     if planner_kind == PLANNER_KIND_PRICE_WINDOW:
         entities.append(CheapestPriceWindowStartSensor(coordinator, entry))
+    if planner_kind == PLANNER_KIND_DEMAND:
+        entities.append(DemandForecastSensor(coordinator, entry))
 
     async_add_entities(entities)
 
@@ -267,6 +270,11 @@ class HomeDemandSensor(PlannerSensor):
 
     _unrecorded_attributes = frozenset({"estimated_hourly_home_demand"})
 
+    @property
+    def available(self):
+        return (getattr(self.coordinator, 'last_update_success', True)
+                and self.coordinator.data.status != 'waiting_for_demand_forecast')
+
     def __init__(
         self,
         coordinator: SmartEnergyPlannerCoordinator,
@@ -291,10 +299,34 @@ class HomeDemandSensor(PlannerSensor):
             "estimated_hourly_home_demand": [w for w in data.estimated_hourly_home_demand
                 if (start := _parse_datetime(w.get("start"))) is not None
                 and dt_util.as_local(start).date() == today],
-            "source_status": {k: v for k, v in data.source_status.items() if k == "total_energy_sensor"},
+            "source_status": {k: v for k, v in data.source_status.items()
+                              if k in ("total_energy_sensor", "demand_forecast_sensor")},
             "source_errors": [error for error in data.source_errors
-                              if str(error).startswith("total_energy_sensor:")],
+                              if str(error).startswith(("total_energy_sensor:", "demand_forecast_sensor:"))],
         }
+
+
+class DemandForecastSensor(PlannerSensor):
+    """Full-horizon, versioned demand input for a separately configured battery."""
+
+    _unrecorded_attributes = frozenset({'estimated_hourly_home_demand', 'demand_components'})
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, 'demand_forecast', 'Forecast',
+                         'estimated_total_home_demand_kwh', native_unit_of_measurement='kWh')
+
+    @property
+    def available(self):
+        return (getattr(self.coordinator, 'last_update_success', True)
+                and self.coordinator.data.status in ('ready', 'ready_with_warnings'))
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data
+        return dict(forecast_version=1, forecast_generated_at=data.forecast_generated_at,
+                    estimated_hourly_home_demand=data.estimated_hourly_home_demand,
+                    demand_components=data.demand_components,
+                    source_status=data.source_status, source_errors=data.source_errors)
 
 
 class BatteryStrategySensor(BatteryPlannerSensor):

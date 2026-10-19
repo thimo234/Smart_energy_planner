@@ -38,6 +38,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
+from .const import PLANNER_KIND_DEMAND, CONF_DEMAND_FORECAST_SENSOR, CONF_DEMAND_DEVICES
 from .frontend_resource import (
     async_load_and_upsert_card_resource,
     lovelace_uses_storage_resources,
@@ -62,7 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Energy Planner from a config entry."""
     merged = {**entry.data, **entry.options}
     if merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY) not in (
-        PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW,
+        PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND,
     ):
         _LOGGER.error("Planner type is no longer supported; remove this integration entry")
         return False
@@ -117,6 +118,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         tracked_entities.append(_entity_id(CONF_BATTERY_SOC_SENSOR))
     if planner_kind == PLANNER_KIND_BATTERY:
         tracked_entities.append(_entity_id(CONF_TOTAL_ENERGY_SENSOR))
+        tracked_entities.append(_entity_id(CONF_DEMAND_FORECAST_SENSOR))
+    # Demand learning uses completed Recorder history, refreshed hourly. The
+    # regular coordinator interval checks source health; avoid recomputing a
+    # three-day forecast on every appliance meter tick. Prices still trigger it.
 
     tracked = [entity_id for entity_id in tracked_entities if entity_id]
     _LOGGER.info("Smart Energy Planner: tracking state changes for entities: %s", tracked)

@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Smart Energy Planner",
-        "description": "Choose a battery planner or price window planner.",
+        "description": "Choose a battery planner, price window planner or standalone consumption forecast.",
         "data": {
           "planner_kind": "Planner type",
           "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
@@ -35,18 +35,38 @@
           "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
           "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)",
           "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
-          "price_peak_remove_small_pending": "Remove small peak blocks that have not started"
+          "price_peak_remove_small_pending": "Remove small peak blocks that have not started",
+          "demand_forecast_sensor": "Consumption forecast (optional)",
+          "demand_energy_sensors": "Appliance energy meters"
         },
         "data_description": {
           "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
           "price_peak_min_prominence_percent": "Height above surrounding valleys, as a percentage of the highest minus lowest known daily price. 10% filters small fluctuations; 0 disables the filter. Expensive peaks only.",
           "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices.",
-          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration."
+          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration.",
+          "demand_forecast_sensor": "Select a standalone consumption forecast. It replaces internal demand estimation; the safety margin is applied once afterwards.",
+          "demand_energy_sensors": "Select Wh/kWh counters (total or total_increasing), not power sensors. The optional household total includes these devices; only residual consumption is added."
+        }
+      },
+      "device": {
+        "title": "Appliance consumption",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "data": {
+          "timing": "Timing",
+          "start_time": "Fixed start time",
+          "offset_hours": "Hours after cheapest block starts",
+          "weekdays": "Active weekdays"
         }
       }
     },
     "abort": {
       "unsupported_planner_kind": "This planner type is no longer supported. Remove this integration entry."
+    },
+    "error": {
+      "duplicate_energy_source": "The same meter is selected more than once.",
+      "no_energy_sources": "Select a household total or appliance meters.",
+      "price_sensor_required": "A price sensor is required for a cheapest block.",
+      "demand_source_required": "Select a household total or consumption forecast."
     }
   },
   "options": {
@@ -75,19 +95,39 @@
           "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)",
           "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)",
           "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
-          "price_peak_remove_small_pending": "Remove small peak blocks that have not started"
+          "price_peak_remove_small_pending": "Remove small peak blocks that have not started",
+          "demand_forecast_sensor": "Consumption forecast (optional)",
+          "demand_energy_sensors": "Appliance energy meters"
         },
         "data_description": {
           "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged.",
           "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
           "price_peak_min_prominence_percent": "Height above surrounding valleys, as a percentage of the highest minus lowest known daily price. 10% filters small fluctuations; 0 disables the filter. Expensive peaks only.",
           "price_peak_remove_small_pending": "Remove locked future blocks without a sufficiently prominent peak. Active blocks remain unchanged. Nothing is removed with incomplete daily prices.",
-          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration."
+          "price_window_duration_hours": "For expensive peaks this is the maximum ON time. After the peak, the block ends early when the price returns to the surrounding valley plus the configured prominence threshold. Cheap blocks keep their fixed duration.",
+          "demand_forecast_sensor": "Select a standalone consumption forecast. It replaces internal demand estimation; the safety margin is applied once afterwards.",
+          "demand_energy_sensors": "Select Wh/kWh counters (total or total_increasing), not power sensors. The optional household total includes these devices; only residual consumption is added."
+        }
+      },
+      "device": {
+        "title": "Appliance consumption",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "data": {
+          "timing": "Timing",
+          "start_time": "Fixed start time",
+          "offset_hours": "Hours after cheapest block starts",
+          "weekdays": "Active weekdays"
         }
       }
     },
     "abort": {
       "unsupported_planner_kind": "This planner type is no longer supported. Remove this integration entry."
+    },
+    "error": {
+      "duplicate_energy_source": "The same meter is selected more than once.",
+      "no_energy_sources": "Select a household total or appliance meters.",
+      "price_sensor_required": "A price sensor is required for a cheapest block.",
+      "demand_source_required": "Select a household total or consumption forecast."
     }
   }
 }

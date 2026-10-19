@@ -41,6 +41,10 @@ CONF_BATTERY_DEMAND_SAFETY_MARGIN = "battery_demand_safety_margin"
 
 PLANNER_KIND_BATTERY = "battery"
 PLANNER_KIND_PRICE_WINDOW = "price_window"
+PLANNER_KIND_DEMAND = "demand"
+CONF_DEMAND_FORECAST_SENSOR = "demand_forecast_sensor"
+CONF_DEMAND_ENERGY_SENSORS = "demand_energy_sensors"
+CONF_DEMAND_DEVICES = "demand_devices"
 
 
 PRICE_RESOLUTION_HOURLY = "hourly"

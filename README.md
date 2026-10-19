@@ -267,3 +267,43 @@ Historische details tonen de geregistreerde accustand aan het begin van het uur;
 ontbrekende historie wordt als een streepje weergegeven.
 Wh/kWh-tellers worden via hun stijging en meetduur omgerekend naar gemiddeld kW;
 het laatste interval verschijnt zodra de volgende tellerstand beschikbaar is.
+# Independent consumption forecast
+
+Add another Smart Energy Planner integration entry and select **Consumption
+forecast**. This entry needs no battery or solar sensors. Select cumulative
+Wh/kWh meters (`total` or `total_increasing`), not W/kW power sensors.
+
+- Select an optional household total and the individual appliance meters. The
+  household total must include those appliances. The planner learns the
+  remainder after subtracting their measured consumption; it never adds the
+  full household total on top of the appliances. Without a household meter,
+  the forecast covers only the selected appliances.
+- For each appliance, choose learned clock-time/week patterns, a fixed start,
+  or an offset from the cheapest contiguous price block. Select active weekdays
+  for explicitly scheduled appliances. The price block duration and whole-hour
+  starts are configurable. A price sensor is required for price-based timing.
+- Example: five-hour block, dishwasher offset **0**, heat pump offset **2**,
+  cooking fixed at **17:30**. This predicts consumption; it does not switch
+  appliances or change their existing automations.
+- Energy and the shape/duration of the active profile come from Recorder. At
+  least two complete usable days are needed for every component, including
+  the remainder. The previous 28 days are read once an hour; a repeated weekday
+  uses up to four matching days, otherwise up to fourteen recent days are used.
+  Scheduled profiles are aligned using the first active historical hour.
+  Multiple cycles, changing heating demand and hourly source resolution limit
+  the accuracy; quarter-hour output does not imply quarter-hour measurements.
+- If future prices are unknown, the affected appliance keeps its historical
+  clock-time forecast and reports this fallback in the source diagnostics.
+
+The **Consumption Forecast** sensor reports today's expected kWh and publishes
+three days of quarter-hour intervals plus the component forecasts as live
+attributes. These large arrays are excluded from Recorder.
+
+In the battery planner options, select this sensor as **Consumption forecast**.
+It takes precedence over the old household meter calculation. Appliance timing
+is retained; only the battery's consumption safety margin is applied, once.
+An unavailable, malformed, incomplete or more than two-hour-old forecast puts
+the battery planner into a waiting state instead of assuming zero consumption.
+Existing battery entries keep their current internal forecast until an external
+forecast sensor is selected. Installation and testing in a live Home Assistant
+instance are still required.

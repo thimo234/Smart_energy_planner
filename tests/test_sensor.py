@@ -198,6 +198,29 @@ class HomeDemandDetailsTest(unittest.TestCase):
         self.assertIn('estimated_hourly_home_demand',entity._unrecorded_attributes)
 
 
+class IndependentDemandSensorTest(unittest.TestCase):
+    def test_full_horizon_components_stay_live_but_unrecorded(self):
+        from custom_components.smart_energy_planner.sensor import DemandForecastSensor
+        rows = [{'start': '2026-10-19T12:00:00+02:00', 'end': '2026-10-19T12:15:00+02:00', 'estimated_kwh': .3}]
+        data = types.SimpleNamespace(status='ready', estimated_total_home_demand_kwh=12,
+            estimated_hourly_home_demand=rows, demand_components={'pump':rows},
+            forecast_generated_at='2026-10-18T12:00:00+02:00', source_status={},source_errors=[])
+        entity = DemandForecastSensor(types.SimpleNamespace(data=data),types.SimpleNamespace(entry_id='a',title='Vraag'))
+        self.assertTrue(entity.available)
+        self.assertEqual(entity.native_value,12)
+        self.assertEqual(entity.extra_state_attributes['estimated_hourly_home_demand'],rows)
+        self.assertEqual(entity.extra_state_attributes['forecast_version'],1)
+        self.assertIn('demand_components',entity._unrecorded_attributes)
+        data.status='waiting_for_demand_sources'
+        self.assertFalse(entity.available)
+
+    def test_missing_external_demand_is_unavailable_in_battery_diagnostic(self):
+        from custom_components.smart_energy_planner.sensor import HomeDemandSensor
+        entity=HomeDemandSensor(types.SimpleNamespace(data=types.SimpleNamespace(status='waiting_for_demand_forecast')),
+                                types.SimpleNamespace(entry_id='a',title='Accu'))
+        self.assertFalse(entity.available)
+
+
 class ScoreRemovalTest(unittest.IsolatedAsyncioTestCase):
     async def test_setup_removes_only_this_entries_score_and_does_not_recreate_it(self):
         from custom_components.smart_energy_planner import sensor
