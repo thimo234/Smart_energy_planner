@@ -305,6 +305,54 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde kaartcorrectie: bronselectie via de UI — 19 oktober
+
+- Gebruiker meldt een defecte dashboardkaart en vraagt UI-selectie van power
+  forecast (verbruiksvoorspelling), Battery Strategy en solar forecast.
+- Vastgesteld: grote kaarteditor riep een ontbrekende escape-functie aan en
+  verwijderde demand_entity/price_entity bij opslaan. Bovendien kreeg de interne
+  prognose voorrang op een apart geselecteerde verbruiksvoorspelling.
+- Beide editors bieden nu planner_entity, demand_entity en solar_forecast_entity;
+  bewaar selecties en gemonteerde velden bij hass-updates. Expliciete bronnen gaan
+  voor; zonder aparte keuze blijft de bestaande plannerbron gelden. Onbeschikbare
+  geselecteerde voorspellingen krijgen een zichtbare melding. De echte zonmeter
+  van de minikaart blijft afzonderlijk solar_entity.
+- Ondersteunde zonreeksen: plannerattributen, Solcast detailedForecast en
+  detailedHourly met pv_estimate in kW en period_start.
+- Lokaal geslaagd: frontendregressies en browsercontrole van beide editors,
+  bronselectie en bewaren, grote kaart op 1100/360 px en minikaart op 480/320 px.
+  Preview gebruikt bestaande tarieffixture en synthetisch verbruik/zon; geen
+  live HA-controle. Plannerberekening ongewijzigd; bestaande synthetische
+  demand-diagnostics/planning.html blijft de berekende controlegrafiek.
+- De gebruiker heeft op 19 oktober de kaartcorrectie, forecastdiagnostiek en
+  meterfiltering met de getoonde preview goedgekeurd voor commit en push naar main.
+- Nog open: installatie en live controle.
+
+### Goedgekeurde diagnosecorrectie: onzichtbare forecastfout — 19 oktober
+
+- Live gemeld: Home Consumption Forecast is unavailable en toont geen bronstatus
+  of foutdetails. Het aangeleverde log bevat geen specifieke forecastfout.
+- Oorzaak van ontbrekende details vastgesteld: Home Assistant publiceert extra
+  attributen alleen voor beschikbare entiteiten. Lokaal aangepast: bij een geldig
+  wacht-/foutresultaat geeft de forecast unknown (geen getal) met status en fouten.
+  Oude prognosereeksen worden daarbij niet aangeboden. Bij coordinatoruitval blijft
+  de entiteit unavailable. De accuplanner weigert unknown als voorspelling.
+- Gewijzigde bronfouten worden eenmaal per verandering gelogd, inclusief entry-ID.
+- Aanvullend verzoek: alleen bruikbare entiteiten selecteerbaar maken. De
+  aangeleverde oven- en warmtepompmeter hebben kWh en total_increasing en zijn
+  ondersteund. Hun huidige standen bewijzen geen voldoende bruikbare historie.
+- Geïmplementeerd: gesloten keuzelijsten voor totaal- en apparaatmeters, uitsluitend
+  numerieke, eindige Wh/kWh-tellers met total of total_increasing. Geen terugval
+  op alle sensoren bij een lege lijst. Ook setup en opties valideren opgeslagen
+  of handmatig aangeleverde keuzes. Genoeg Recorderhistorie blijft apart vereist.
+- 28 gerichte tests geslaagd. De prognoseberekening is niet veranderd.
+  De bestaande synthetische controlegrafiek is opnieuw gegenereerd met de vaste
+  generator. Geen nieuwe live apparaatgeschiedenis beschikbaar.
+- Nog open: brongegevens/historie om de reden van de ontbrekende voorspelling
+  vast te stellen; dit is nog geen bewezen herstel
+  van de live voorspelling. Publicatie op 19 oktober goedgekeurd samen met de
+  kaartcorrectie; installatie en live controle blijven nodig.
+
 ### Goedgekeurde wijziging: kleine geplande pieken altijd opruimen — 19 oktober
 
 - Nieuw verzoek: verwijder de instelling waarmee kleine pieken bewaard kunnen

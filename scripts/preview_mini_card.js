@@ -198,6 +198,42 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     editor.remove(); return result;
   });
   if (!editorCheck) throw Error('Editor failed focus/search/selection persistence');
+  const largeEditorCheck = await page.evaluate(() => {
+    const editor=document.createElement('smart-energy-planner-card-editor');
+    document.body.append(editor);
+    editor.setConfig({planner_entity:'sensor.planner',title:'Planning'});
+    editor.hass={states:{}};
+    let count=0;
+    editor.addEventListener('config-changed',()=>count++);
+    for (const [key,value] of [['planner_entity','sensor.strategy'],['demand_entity','sensor.demand'],['solar_forecast_entity','sensor.solcast']]) {
+      const picker=editor.querySelector(`[data-key="${key}"]`);
+      picker.dispatchEvent(new CustomEvent('value-changed',{detail:{value},bubbles:true}));
+    }
+    const picker=editor.querySelector('[data-key="demand_entity"]');
+    editor.hass={states:{}};
+    const ok=count===3 && editor.config.planner_entity==='sensor.strategy' && editor.config.demand_entity==='sensor.demand'
+      && editor.config.solar_forecast_entity==='sensor.solcast' && picker===editor.querySelector('[data-key="demand_entity"]');
+    editor.remove();return ok;
+  });
+  if (!largeEditorCheck) throw Error('Large card editor source selection failed');
+  await page.setViewportSize({width:1100,height:850});
+  await page.evaluate(() => {
+    const mini=document.querySelector('smart-energy-planner-mini-card');
+    const card=document.createElement('smart-energy-planner-card');
+    const hass=mini._hass;
+    const planner=hass.states[mini.config.planner_entity];
+    hass.states['sensor.external_demand']={state:'20',attributes:{estimated_hourly_home_demand:planner.attributes.estimated_hourly_home_demand}};
+    hass.states['sensor.external_solar']={state:'20',attributes:{estimated_hourly_solar_forecast:planner.attributes.estimated_hourly_solar_forecast}};
+    card.setConfig({planner_entity:mini.config.planner_entity,demand_entity:'sensor.external_demand',solar_forecast_entity:'sensor.external_solar'});
+    document.body.append(card);card.hass=hass;
+    if(!card.querySelector('svg')) throw Error('Large card did not render');
+    if(card.querySelector('.error')) throw Error('Large card rendered an error');
+  });
+  await page.screenshot({path:path.join(output,'large-1100.png')});
+  await page.setViewportSize({width:360,height:850});
+  await page.screenshot({path:path.join(output,'large-360.png')});
+
+
   const refreshCheck = await page.evaluate(async () => {
     const originalNow = Date.now;
     let clock = originalNow(), requests = 0, renders = 0;

@@ -65,7 +65,8 @@
       "duplicate_energy_source": "The same meter is selected more than once.",
       "no_energy_sources": "Select a household total or appliance meters.",
       "price_sensor_required": "A price sensor is required for a cheapest block.",
-      "demand_source_required": "Select a household total or consumption forecast."
+      "demand_source_required": "Select a household total or consumption forecast.",
+      "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing."
     }
   },
   "options": {
@@ -125,7 +126,8 @@
       "duplicate_energy_source": "The same meter is selected more than once.",
       "no_energy_sources": "Select a household total or appliance meters.",
       "price_sensor_required": "A price sensor is required for a cheapest block.",
-      "demand_source_required": "Select a household total or consumption forecast."
+      "demand_source_required": "Select a household total or consumption forecast.",
+      "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing."
     }
   }
 }

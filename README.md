@@ -214,7 +214,13 @@ title: Energieprijs planning
 planner_entity: sensor.smart_energy_planner_battery_strategy
 ```
 
-In the visual editor you only need to select the planner sensor. The card reads
+Both visual card editors let you select Battery Strategy (`planner_entity`),
+an optional consumption forecast (`demand_entity`), and an optional solar forecast
+(`solar_forecast_entity`). Explicit forecasts override the planner's series;
+an unavailable selected forecast is reported rather than silently replaced.
+Solar forecasts support the planner's time series and Solcast `detailedForecast`
+or `detailedHourly`. The mini card's `solar_entity` remains the actual solar meter.
+With no separate forecasts selected, the card reads
 `upcoming_energy_price_windows`, `estimated_hourly_home_demand`, and
 `planned_battery_mode_schedule` from that selected planner entity. By default
 the graph starts one hour before the current hour and continues to the last

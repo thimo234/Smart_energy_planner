@@ -318,14 +318,25 @@ class DemandForecastSensor(PlannerSensor):
     @property
     def available(self):
         return (getattr(self.coordinator, 'last_update_success', True)
-                and self.coordinator.data.status in ('ready', 'ready_with_warnings'))
+                and self.coordinator.data is not None)
+
+    @property
+    def native_value(self):
+        # Unknown keeps diagnostics visible in HA; never publish pending zero
+        # or an old forecast as a usable prediction.
+        data = self.coordinator.data
+        if not self.available or data.status not in ('ready', 'ready_with_warnings'):
+            return None
+        return data.estimated_total_home_demand_kwh
 
     @property
     def extra_state_attributes(self):
         data = self.coordinator.data
-        return dict(forecast_version=1, forecast_generated_at=data.forecast_generated_at,
-                    estimated_hourly_home_demand=data.estimated_hourly_home_demand,
-                    demand_components=data.demand_components,
+        ready = data.status in ('ready', 'ready_with_warnings')
+        return dict(status=data.status, forecast_version=1,
+                    forecast_generated_at=data.forecast_generated_at if ready else None,
+                    estimated_hourly_home_demand=data.estimated_hourly_home_demand if ready else [],
+                    demand_components=data.demand_components if ready else {},
                     source_status=data.source_status, source_errors=data.source_errors)
 
 

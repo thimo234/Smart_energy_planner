@@ -81,6 +81,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       <ha-card>
         <div class="card">
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
+          ${this.forecastNotice(plannerState)}
           ${this.renderSummary(priceWindows, demandPoints, solarPoints, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
@@ -148,7 +149,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
     };
     collectEnd(plannerState?.attributes?.estimated_hourly_home_demand);
     collectEnd(demandState?.attributes?.estimated_hourly_home_demand);
-    collectEnd(plannerState?.attributes?.estimated_hourly_solar_forecast);
+    collectEnd(this.forecastRows(plannerState, 'solar'));
+    collectEnd(this.forecastRows(plannerState, 'demand'));
     collectEnd(plannerState?.attributes?.planned_battery_mode_windows);
     const latest = Math.max(...candidates, 0);
     return latest > horizonStart.getTime()
@@ -575,11 +577,39 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return intervals.length ? Math.min(...intervals) : 60 * 60 * 1000;
   }
 
+  forecastNotice(plannerState) {
+    const missing = [['demand_entity','Verbruiksvoorspelling','demand'], ['solar_forecast_entity','Zonneprognose','solar']]
+      .filter(([key, , kind]) => this.config?.[key] && !this.forecastRows(plannerState, kind).length)
+      .map(([key, label]) => `${label} niet beschikbaar: ${this.config[key]}`);
+    return missing.length ? `<div role="status" style="padding:8px;font-size:12px">${this.escape(missing.join(' · '))}</div>` : '';
+  }
+
+  forecastRows(plannerState, kind) {
+    const key = kind === 'demand' ? 'demand_entity' : 'solar_forecast_entity';
+    const attr = kind === 'demand' ? 'estimated_hourly_home_demand' : 'estimated_hourly_solar_forecast';
+    const state = this.config?.[key] ? this._hass?.states?.[this.config[key]] : plannerState;
+    if (!state || ['unknown', 'unavailable'].includes(state.state)) return [];
+    const attrs = state.attributes || {};
+    if (Array.isArray(attrs[attr])) return attrs[attr];
+    if (kind !== 'solar') return [];
+    const raw = attrs.detailedForecast || attrs.detailedHourly;
+    if (!Array.isArray(raw)) return [];
+    return raw.map(slot => {
+      const start = this.parseDate(slot.period_start || slot.start);
+      const end = this.parseDate(slot.period_end || slot.end)
+        || (start && new Date(+start + (attrs.detailedForecast ? 1800000 : 3600000)));
+      const kw = this.parseNumber(slot.pv_estimate);
+      return start && end && end > start && kw !== undefined
+        ? {start: start.toISOString(), end: end.toISOString(), estimated_kw: kw} : null;
+    }).filter(Boolean);
+  }
+
   extractDemandPoints(plannerState, demandState, horizonStart, horizonEnd) {
-    const raw = plannerState?.attributes?.estimated_hourly_home_demand
-      || demandState?.attributes?.estimated_hourly_home_demand;
-    if (!Array.isArray(raw)) {
-      return this.fillEnergyPointGaps([], horizonStart, horizonEnd);
+    const raw = this.config?.demand_entity ? this.forecastRows(plannerState, 'demand')
+      : (plannerState?.attributes?.estimated_hourly_home_demand?.length
+        ? plannerState.attributes.estimated_hourly_home_demand : demandState?.attributes?.estimated_hourly_home_demand);
+    if (!Array.isArray(raw) || !raw.length) {
+      return [];
     }
 
     const points = raw
@@ -599,9 +629,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   extractSolarPoints(plannerState, horizonStart, horizonEnd) {
-    const raw = plannerState?.attributes?.estimated_hourly_solar_forecast;
-    if (!Array.isArray(raw)) {
-      return this.fillEnergyPointGaps([], horizonStart, horizonEnd);
+    const raw = this.forecastRows(plannerState, 'solar');
+    if (!Array.isArray(raw) || !raw.length) {
+      return [];
     }
 
     const points = raw
@@ -1532,51 +1562,29 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
   }
 
   render() {
-    if (!this._hass || !this.config) {
-      return;
+    if (!this._hass || !this.config) return;
+    const fields = [['planner_entity', 'Battery Strategy'], ['demand_entity', 'Verbruiksvoorspelling (power forecast, optioneel)'],
+      ['solar_forecast_entity', 'Zonneprognose (solar forecast, optioneel)'], ['price_entity', 'Stroomprijzen (optioneel)']];
+    if (!this.querySelector('ha-entity-picker')) {
+      this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) =>
+        `<ha-entity-picker data-key="${key}" label="${label}"></ha-entity-picker>`).join('')}
+        <ha-textfield label="Titel"></ha-textfield><ha-formfield label="Titel tonen"><ha-switch></ha-switch></ha-formfield></div>`;
+      this.querySelectorAll('ha-entity-picker').forEach(picker => {
+        picker.includeDomains = ['sensor'];
+        picker.addEventListener('value-changed', event => {
+          event.stopPropagation();
+          this.updateConfig({[picker.dataset.key]: event.detail.value || ''});
+        });
+      });
+      this.querySelector('ha-textfield').addEventListener('input', event => this.updateConfig({title: event.target.value}));
+      this.querySelector('ha-switch').addEventListener('change', event => this.updateConfig({show_title: event.target.checked}));
     }
-
-    this.innerHTML = `
-      <div class="editor">
-        <ha-entity-picker
-          label="Planner"
-          domain-filter="sensor"
-          allow-custom-entity
-        ></ha-entity-picker>
-        <ha-textfield
-          label="Titel"
-          .value="${this.escape(this.config.title ?? "")}"
-        ></ha-textfield>
-        <ha-formfield label="Titel tonen">
-          <ha-switch></ha-switch>
-        </ha-formfield>
-      </div>
-      <style>
-        .editor {
-          display: grid;
-          gap: 16px;
-        }
-      </style>
-    `;
-
-    const picker = this.querySelector("ha-entity-picker");
-    picker.hass = this._hass;
-    picker.value = this.config.planner_entity || "";
-    picker.addEventListener("value-changed", (event) => {
-      this.updateConfig({ planner_entity: event.detail.value });
+    this.querySelectorAll('ha-entity-picker').forEach(picker => {
+      picker.hass = this._hass;
+      picker.value = this.config[picker.dataset.key] || '';
     });
-
-    const titleField = this.querySelector("ha-textfield");
-    titleField.value = this.config.title ?? "";
-    titleField.addEventListener("input", (event) => {
-      this.updateConfig({ title: event.target.value });
-    });
-
-    const titleSwitch = this.querySelector("ha-switch");
-    titleSwitch.checked = this.config.show_title !== false;
-    titleSwitch.addEventListener("change", (event) => {
-      this.updateConfig({ show_title: event.target.checked });
-    });
+    this.querySelector('ha-textfield').value = this.config.title ?? '';
+    this.querySelector('ha-switch').checked = this.config.show_title !== false;
   }
 
   updateConfig(changedConfig) {
@@ -1584,8 +1592,6 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
       ...this.config,
       ...changedConfig,
     };
-    delete this.config.price_entity;
-    delete this.config.demand_entity;
     delete this.config.hours_to_show;
     this.dispatchEvent(
       new CustomEvent("config-changed", {
@@ -1775,11 +1781,11 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
         const a = new Date(boundaries[i]), b = new Date(boundaries[i + 1]);
         const future = +a >= +now;
         const history = (this._history[this.config.planner_entity] || []).filter(r => +new Date(r.last_changed || r.last_updated) <= +a).at(-1);
-        const demand = state.attributes.estimated_hourly_home_demand || this._hass.states[this.config.demand_entity]?.attributes?.estimated_hourly_home_demand;
+        const demand = this.forecastRows(state, 'demand');
         slots.push({start: a, end: b, future,
           price: this.weightedAveragePrice(a, b, prices),
           demand: future ? this.forecastPower(demand, a, b) : this.recordedPower(this.config.consumption_entity, a, b),
-          solar: future ? this.forecastPower(state.attributes.estimated_hourly_solar_forecast, a, b, true) : this.recordedPower(this.config.solar_entity, a, b),
+          solar: future ? this.forecastPower(this.forecastRows(state, 'solar'), a, b, true) : this.recordedPower(this.config.solar_entity, a, b),
           mode: future ? schedule.find(s => s.start <= a && s.end > a)?.mode : history?.state});
       }
     }
@@ -1788,7 +1794,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
 
   miniHourlyPower(state, now, start, end) {
     const points = [];
-    const demand = state.attributes.estimated_hourly_home_demand || this._hass.states[this.config.demand_entity]?.attributes?.estimated_hourly_home_demand;
+    const demand = this.forecastRows(state, 'demand');
     for (let t=+start;t<+end;t+=3600000) {
       const boundaries = [t,Math.min(t+3600000,+end)];
       if (+now>t && +now<boundaries[1]) boundaries.splice(1,0,+now);
@@ -1796,7 +1802,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
         const a = new Date(boundaries[i]), b = new Date(boundaries[i+1]), future = a>=now;
         points.push({start:a,end:b,future,
           demand:future ? this.forecastPower(demand,a,b) : this.recordedPower(this.config.consumption_entity,a,b),
-          solar:future ? this.forecastPower(state.attributes.estimated_hourly_solar_forecast,a,b,true) : this.recordedPower(this.config.solar_entity,a,b)});
+          solar:future ? this.forecastPower(this.forecastRows(state, 'solar'),a,b,true) : this.recordedPower(this.config.solar_entity,a,b)});
       }
     }
     return points;
@@ -1872,7 +1878,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       else backgrounds.push({start:slot.start,end:slot.end,mode:slot.mode});
     });
     const curvePaths = {demand:curve('demand'),solar:curve('solar')};
-    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)"><svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
+    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)">${this.forecastNotice(state)}<svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
       <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath>
       <linearGradient id="${clipId}-fade" gradientUnits="userSpaceOnUse" x1="${splitX}" x2="${x(new Date(+now+1800000))}"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity=".6"/></linearGradient>
       <mask id="${clipId}-blend" maskUnits="userSpaceOnUse" x="0" y="0" width="480" height="150"><rect width="480" height="150" fill="url(#${clipId}-fade)"/></mask></defs>
@@ -1922,7 +1928,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
 class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
   render() {
     if (!this._hass || !this.config) return;
-    const fields = [['planner_entity','Planner'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['soc_entity','Accupercentage (%)'], ['price_entity','Stroomprijzen (optioneel)']];
+    const fields = [['planner_entity','Battery Strategy'], ['demand_entity','Verbruiksvoorspelling (power forecast, optioneel)'], ['solar_forecast_entity','Zonneprognose (solar forecast, optioneel)'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['soc_entity','Accupercentage (%)'], ['price_entity','Stroomprijzen (optioneel)']];
     // Home Assistant replaces hass frequently, also while a picker is open.
     // Keep the elements mounted so updates preserve the search and focus.
     if (!this.querySelector('ha-entity-picker')) {

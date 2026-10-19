@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 import voluptuous as vol
 
@@ -406,9 +407,9 @@ def _build_demand_schema(hass, user_input=None):
     return vol.Schema({
         vol.Required(CONF_PLANNER_NAME, default=data.get(CONF_PLANNER_NAME, 'Home Consumption')): selector.TextSelector(),
         vol.Optional(CONF_TOTAL_ENERGY_SENSOR, default=data.get(CONF_TOTAL_ENERGY_SENSOR)):
-            _entity_selector(_filter_energy_sensors(hass), current_value=data.get(CONF_TOTAL_ENERGY_SENSOR)),
+            _demand_meter_selector(hass),
         vol.Required(CONF_DEMAND_ENERGY_SENSORS, default=data.get(CONF_DEMAND_ENERGY_SENSORS, [])):
-            selector.EntitySelector(selector.EntitySelectorConfig(domain='sensor', multiple=True)),
+            _demand_meter_selector(hass, multiple=True),
         vol.Optional(CONF_PRICE_SENSOR, default=data.get(CONF_PRICE_SENSOR)):
             _entity_selector(_filter_price_sensors(hass), current_value=data.get(CONF_PRICE_SENSOR)),
         vol.Required(CONF_PRICE_WINDOW_DURATION_HOURS, default=data.get(CONF_PRICE_WINDOW_DURATION_HOURS, 5)):
@@ -416,6 +417,33 @@ def _build_demand_schema(hass, user_input=None):
         vol.Required(CONF_PRICE_WINDOW_WHOLE_HOUR_START, default=data.get(CONF_PRICE_WINDOW_WHOLE_HOUR_START, True)):
             selector.BooleanSelector(),
     })
+
+
+def _demand_meter_ids(hass):
+    """Only meters with the units and counter semantics accepted by learning."""
+    result = []
+    for state in _sensor_options(hass):
+        if (state.attributes.get('unit_of_measurement') not in ('Wh', 'kWh')
+                or state.attributes.get('state_class') not in ('total', 'total_increasing')):
+            continue
+        try:
+            if not math.isfinite(float(state.state)):
+                continue
+        except (TypeError, ValueError):
+            continue
+        result.append(state.entity_id)
+    return result
+
+
+def _demand_meter_selector(hass, multiple=False):
+    # A closed select also stays closed when no meters match. An empty entity
+    # include_entities list otherwise permits all entities in HA.
+    options = [selector.SelectOptionDict(value=entity, label=(
+        f"{hass.states.get(entity).attributes.get('friendly_name', entity)} ({entity})"))
+        for entity in _demand_meter_ids(hass)]
+    return selector.SelectSelector(selector.SelectSelectorConfig(
+        options=options, multiple=multiple, custom_value=False,
+        mode=selector.SelectSelectorMode.DROPDOWN))
 
 
 class DemandDeviceFlow:
@@ -429,6 +457,9 @@ class DemandDeviceFlow:
         total = data.get(CONF_TOTAL_ENERGY_SENSOR)
         error = ('duplicate_energy_source' if total in self._demand_queue or len(set(self._demand_queue)) != len(self._demand_queue)
                  else 'no_energy_sources' if not total and not self._demand_queue else None)
+        selected = self._demand_queue + ([total] if total else [])
+        if not error and any(entity not in _demand_meter_ids(self.hass) for entity in selected):
+            error = 'unsupported_energy_meter'
         if error:
             return self.async_show_form(step_id=finish_step, data_schema=_build_demand_schema(self.hass, data), errors={'base': error})
         return await self.async_step_device()

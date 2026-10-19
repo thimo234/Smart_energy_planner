@@ -187,3 +187,26 @@ assert.equal(previewState.attributes.planned_battery_mode_schedule[1].mode, 'acc
 delete previewState.attributes.estimated_battery_mode_windows;
 assert.equal(card.extractModeSchedule(previewState, horizonStart, horizonEnd)[1].mode, 'accu_uit');
 console.log("frontend card solar forecast and estimated schedule checks passed");
+
+// Explicit forecast sources override even nonempty planner series.
+const sources = new Card();
+sources.setConfig({planner_entity:'sensor.strategy', demand_entity:'sensor.demand', solar_forecast_entity:'sensor.solcast'});
+const demandRows = [{start:'2026-08-07T12:00:00Z',end:'2026-08-07T13:00:00Z',estimated_kwh:2}];
+sources._hass = {states:{'sensor.demand':{state:'20',attributes:{estimated_hourly_home_demand:demandRows}},
+  'sensor.solcast':{state:'5',attributes:{detailedForecast:[{period_start:'2026-08-07T12:00:00Z',pv_estimate:3}]}}}};
+const oldPlanner = {attributes:{estimated_hourly_home_demand:[{estimated_kwh:99}], estimated_hourly_solar_forecast:[{estimated_kw:99}]}};
+assert.deepEqual(sources.forecastRows(oldPlanner,'demand'),demandRows);
+assert.equal(sources.forecastRows(oldPlanner,'solar')[0].estimated_kw,3);
+assert.equal(sources.forecastRows(oldPlanner,'solar')[0].end,'2026-08-07T12:30:00.000Z');
+sources._hass.states['sensor.demand'].state='unknown';
+assert.deepEqual(sources.forecastRows(oldPlanner,'demand'),[], 'explicit unavailable source must not fall back to planner');
+sources.config.demand_entity='';
+assert.deepEqual(sources.forecastRows(oldPlanner,'demand'),oldPlanner.attributes.estimated_hourly_home_demand);
+global.CustomEvent=class { constructor(type,options) {this.type=type;Object.assign(this,options);} };
+const editor = new (registered.get('smart-energy-planner-card-editor'))();
+editor.config={planner_entity:'sensor.strategy', demand_entity:'sensor.demand', solar_forecast_entity:'sensor.solcast',price_entity:'sensor.price'};
+editor.dispatchEvent=event=>{assert.equal(event.detail.config.demand_entity,'sensor.demand');};
+editor.updateConfig({title:'New title'});
+assert.equal(editor.config.solar_forecast_entity,'sensor.solcast');
+assert.equal(editor.config.price_entity,'sensor.price');
+console.log('Explicit forecast selection and editor persistence checks passed');

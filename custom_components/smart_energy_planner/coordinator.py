@@ -255,6 +255,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             if planner_kind == PLANNER_KIND_DEMAND:
                 from .demand_coordinator import async_demand_result
                 result = await async_demand_result(self, now)
+                errors = tuple(result.source_errors)
+                if errors != getattr(self, '_last_demand_source_errors', ()):
+                    if errors:
+                        _LOGGER.warning("Consumption forecast %s: %s", self.config_entry.entry_id, errors)
+                    self._last_demand_source_errors = errors
                 if result.status in ('ready', 'ready_with_warnings'):
                     self._cancel_source_error_retry()
                 else:

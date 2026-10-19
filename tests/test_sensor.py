@@ -212,7 +212,17 @@ class IndependentDemandSensorTest(unittest.TestCase):
         self.assertEqual(entity.extra_state_attributes['forecast_version'],1)
         self.assertIn('demand_components',entity._unrecorded_attributes)
         data.status='waiting_for_demand_sources'
+        data.source_errors=['pump: insufficient_history']
+        self.assertTrue(entity.available)
+        self.assertIsNone(entity.native_value)
+        attrs=entity.extra_state_attributes
+        self.assertEqual(attrs['status'],'waiting_for_demand_sources')
+        self.assertEqual(attrs['source_errors'],['pump: insufficient_history'])
+        self.assertEqual(attrs['estimated_hourly_home_demand'],[])
+        self.assertIsNone(attrs['forecast_generated_at'])
+        entity.coordinator.last_update_success=False
         self.assertFalse(entity.available)
+        self.assertIsNone(entity.native_value)
 
     def test_missing_external_demand_is_unavailable_in_battery_diagnostic(self):
         from custom_components.smart_energy_planner.sensor import HomeDemandSensor

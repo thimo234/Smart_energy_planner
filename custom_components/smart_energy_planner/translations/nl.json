@@ -65,7 +65,8 @@
       "duplicate_energy_source": "Dezelfde meter is meermaals geselecteerd.",
       "no_energy_sources": "Selecteer een totaalmeter of apparaatmeters.",
       "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
-      "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling."
+      "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
+      "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing."
     }
   },
   "options": {
@@ -125,7 +126,8 @@
       "duplicate_energy_source": "Dezelfde meter is meermaals geselecteerd.",
       "no_energy_sources": "Selecteer een totaalmeter of apparaatmeters.",
       "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
-      "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling."
+      "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
+      "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing."
     }
   }
 }
