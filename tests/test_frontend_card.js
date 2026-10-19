@@ -212,3 +212,16 @@ for (const name of ['smart-energy-planner-card-editor','smart-energy-planner-min
   assert.equal(editor.config.solar_entity,'sensor.actual');
 }
 console.log('Planner-only source and editor migration checks passed');
+
+const actualSnapshot=require('./fixtures/battery_2026_10_19_chart_units.json');
+const actualState={state:'accu_uit',attributes:actualSnapshot};
+const at=new Date('2026-10-19T13:00:00+02:00'), until=new Date('2026-10-19T14:00:00+02:00');
+const bigDemand=card.extractDemandPoints(actualState,undefined,at,until);
+const bigSolar=card.extractSolarPoints(actualState,at,until);
+assert.equal(card.selectionValues(at,[],bigDemand,bigSolar).demand,2.604);
+assert.equal(card.periodValues(at,until,[],bigDemand,bigSolar).demand,mini.forecastPower(actualSnapshot.estimated_hourly_home_demand,at,until));
+assert.equal(card.periodValues(at,until,[],bigDemand,bigSolar).solar,mini.forecastPower(actualSnapshot.estimated_hourly_solar_forecast,at,until,true));
+const quarterSolar=card.extractSolarPoints({attributes:{estimated_hourly_solar_forecast:[{start:at.toISOString(),end:new Date(+at+900000).toISOString(),estimated_kwh:.5}]}},at,new Date(+at+900000));
+assert.equal(quarterSolar[0].value,2);
+assert.equal(card.modeAtTime(card.modeBands(card.extractModeSchedule(actualState,at,until),at,until),at),'accu_uit');
+console.log('Actual snapshot: large/mini demand 2.604 kW, solar 2.79056 kW and mode agree');

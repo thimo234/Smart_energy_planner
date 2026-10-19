@@ -305,6 +305,34 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde kaartcorrectie: gelijke vermogenseenheden — 19 oktober
+
+- Gebruiker meldt verschillende grafieken. De aangeleverde Battery Strategy
+  bevestigt 0,651 kWh per kwartier van 13:00 tot 14:00, oftewel 2,604 kW.
+  De grote kaart toonde kwartierenergie naast zonvermogen; de minikaart rekende
+  verbruik al om naar kW. Gewenst: vergelijkbare eenheden voor beide curves.
+- Lokaal aangepast: grote kaart rekent energie met de werkelijke slotduur om
+  naar kW en vermeldt kW bij verbruik, zon en de as. Periodewaarden zijn
+  tijdgewogen vermogens. Zonvermogen wordt direct gebruikt indien beschikbaar;
+  zonne-energie wordt anders eveneens met de slotduur omgerekend.
+- Regressie met de echte sensoruitvoer: beide kaarten geven voor 13:00–14:00
+  2,604 kW verbruik, 2,79056 kW zon en accu_uit. Geen plannerwijziging.
+  Tijdshorizon en resolutie blijven verschillend; de minikaart kan bovendien
+  gemeten historie tonen, terwijl de grote kaart prognoses weergeeft.
+- Frontendregressies en browsercontrole op desktop- en telefoonbreedte geslaagd.
+  De bestaande kaartpreview toont beide kaarten met dezelfde aangeleverde
+  plannerreeksen. Gemeten historie is niet aangeleverd en ontbreekt in de preview.
+- De gebruiker heeft de preview op 19 oktober goedgekeurd voor push, na uitleg
+  over de ontbrekende avondontlading. De nieuwe meting herkent de piek om 18:45
+  (EUR 0,477/kWh), maar houdt bij 61% SOC de reserve van 60% vast zonder
+  geselecteerde laadmogelijkheid. Slechts 0,10 kWh blijft vrij. De bestaande
+  startvoorwaarde voor ontladen blokkeert bovendien een nieuwe cyclus bij deze
+  stand zonder lopende cyclus of volgende laadfase. Die voorwaarde is in deze
+  kaartcorrectie niet aangepast. De sensoruitvoer specificeert niet waarom
+  alle laadmogelijkheden zijn afgewezen.
+- Nog open: live kaartcontrole en eventueel nader onderzoek naar laadselectie
+  en de ontlaadstartvoorwaarde.
+
 ### Goedgekeurde correctie: afwijkende apparaatmetingen blokkeren niet alles — 19 oktober
 
 - Live fout: appliance_energy_exceeds_total; de accuplanner wacht daardoor op

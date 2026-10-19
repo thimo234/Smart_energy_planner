@@ -7,6 +7,25 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   fs.mkdirSync(output, {recursive:true});
   const browser = await chromium.launch({headless:true, executablePath:process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe'});
   const page = await browser.newPage({viewport:{width:480,height:210}});
+  if (process.argv[3]) {
+    const snapshot=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
+    await page.setViewportSize({width:1100,height:900});
+    await page.setContent('<body style="font-family:Arial;background:#fafafa"><p>Aangeleverde plannerdata · dezelfde bron voor beide kaarten · gemeten historie niet meegeleverd</p><smart-energy-planner-card></smart-energy-planner-card><smart-energy-planner-mini-card></smart-energy-planner-mini-card></body>');
+    await page.addScriptTag({path:path.resolve(__dirname,'../custom_components/smart_energy_planner/frontend/smart-energy-planner-card.js')});
+    await page.evaluate(snapshot => {
+      const NativeDate=Date, stamp=snapshot.planned_battery_mode_windows[0].start;
+      window.Date=class extends NativeDate {constructor(...args){super(...(args.length?args:[stamp]));}static now(){return +new NativeDate(stamp);}};
+      const hass={states:{'sensor.planner':{state:'accu_uit',attributes:snapshot}},callApi:async()=>[]};
+      for(const tag of ['smart-energy-planner-card','smart-energy-planner-mini-card']) {
+        const card=document.querySelector(tag);card.setConfig({planner_entity:'sensor.planner'});card._hass=hass;card.render();
+      }
+    },snapshot);
+    await page.screenshot({path:path.join(output,'comparison-1100.png'),fullPage:true});
+    fs.writeFileSync(path.join(output,'comparison.html'),await page.content());
+    await page.setViewportSize({width:380,height:900});
+    await page.screenshot({path:path.join(output,'comparison-380.png'),fullPage:true});
+    await browser.close();console.log('Actual snapshot comparison rendered at desktop/mobile widths');return;
+  }
   await page.setContent('<body style="margin:0;background:#fafafa;font-family:Arial"><div style="padding:8px;font-size:11px">Nord Pool-prijzen · verbruik/zon synthetisch · nu 14:07</div><smart-energy-planner-mini-card></smart-energy-planner-mini-card></body>');
   await page.addScriptTag({path:path.resolve(__dirname,'../custom_components/smart_energy_planner/frontend/smart-energy-planner-card.js')});
   const priceFixture = JSON.parse(fs.readFileSync(path.resolve(__dirname,'../tests/fixtures/nspanel_nordpool_2026_10_02.json'),'utf8'));

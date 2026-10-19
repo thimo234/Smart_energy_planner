@@ -212,11 +212,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <strong data-selected-price>${this.formatSelectedValue(currentValues.price)}</strong>
         </div>
         <div class="metric">
-          <span>Verbruik</span>
+          <span>Verbruik (kW)</span>
           <strong data-selected-demand>${this.formatSelectedValue(currentValues.demand)}</strong>
         </div>
         <div class="metric">
-          <span>Zon</span>
+          <span>Zon (kW)</span>
           <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
         </div>
       </div>
@@ -300,7 +300,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
               <text x="${x(tick)}" y="${height - 45}" class="axis label-center">${this.formatTime(tick)}</text>
             `).join("")}
             <text x="${pad.left - 48}" y="${height - 20}" class="axis axis-muted label-right">&euro;</text>
-            <text x="${pad.left - 40}" y="${height - 20}" class="axis axis-muted">kWh</text>
+            <text x="${pad.left - 40}" y="${height - 20}" class="axis axis-muted">kW</text>
             ${displayPriceWindows.map((window) => {
               const xStart = x(window.start);
               const xEnd = x(window.end);
@@ -622,10 +622,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
       .map((slot) => {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
-        const value = this.parseNumber(slot.estimated_kwh);
-        if (!start || !end || value === undefined) {
+        const energy = this.parseNumber(slot.estimated_kwh);
+        if (!start || !end || end <= start || energy === undefined) {
           return undefined;
         }
+        const value = energy * 3600000 / (end - start);
         const midpoint = new Date((start.getTime() + end.getTime()) / 2);
         return { start, end, time: midpoint, value };
       })
@@ -644,10 +645,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
       .map((slot) => {
         const start = this.parseDate(slot.start);
         const end = this.parseDate(slot.end);
-        const value = this.parseNumber(
-          slot.estimated_kw ?? slot.estimated_kwh ?? slot.forecast_kwh ?? slot.pv_estimate,
-        );
-        if (!start || !end || value === undefined) {
+        const energy = this.parseNumber(slot.estimated_kwh ?? slot.forecast_kwh);
+        const value = this.parseNumber(slot.estimated_kw ?? slot.pv_estimate)
+          ?? (start && end > start && energy !== undefined ? energy * 3600000 / (end - start) : undefined);
+        if (!start || !end || end <= start || value === undefined) {
           return undefined;
         }
         // Solcast's detailed forecast is timestamped at period_start.  Plot
@@ -899,8 +900,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
   periodValues(start, end, priceWindows, demandPoints, solarPoints) {
     return {
       price: this.weightedAveragePrice(start, end, priceWindows),
-      demand: this.totalPointValue(start, end, demandPoints),
-      solar: this.totalPointValue(start, end, solarPoints),
+      demand: this.averagePointPower(start, end, demandPoints),
+      solar: this.averagePointPower(start, end, solarPoints),
     };
   }
 
@@ -920,14 +921,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return totalMs > 0 ? weightedPrice / totalMs : undefined;
   }
 
-  totalPointValue(start, end, points) {
-    return points.reduce((total, point) => {
-      const pointStart = point.start || point.time;
-      const pointEnd = point.end || point.time;
-      const slotMs = Math.max(pointEnd.getTime() - pointStart.getTime(), 1);
-      const overlapMs = this.overlapMs(start, end, pointStart, pointEnd);
-      return total + (point.value * (overlapMs / slotMs));
-    }, 0);
+  averagePointPower(start, end, points) {
+    let weighted = 0, covered = 0;
+    for (const point of points) {
+      const overlap = this.overlapMs(start, end, point.start || point.time, point.end || point.time);
+      weighted += point.value * overlap;
+      covered += overlap;
+    }
+    return covered ? weighted / covered : undefined;
   }
 
   overlapMs(start, end, otherStart, otherEnd) {
@@ -938,6 +939,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
   }
 
   nearestPoint(points, time) {
+    const containing = points.find(point => point.start <= time && time < point.end);
+    if (containing) return containing;
     const maxDistance = 45 * 60 * 1000;
     let nearest;
     let nearestDistance = Number.POSITIVE_INFINITY;
