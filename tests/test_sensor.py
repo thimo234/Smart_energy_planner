@@ -97,7 +97,14 @@ class BatteryRecorderAttributesTest(unittest.TestCase):
                 for window in forecast["planned_battery_mode_windows"]
             ],
         )
-        coordinator = types.SimpleNamespace(data=data)
+        data.status='ready'
+        source=types.SimpleNamespace(state='12',attributes={
+            'status':'ready','forecast_generated_at':'2026-09-24T08:00:00+02:00',
+            'source_status':{'sensor.dishwasher':'ok'},'source_errors':[]})
+        coordinator = types.SimpleNamespace(data=data,
+            _config={'demand_forecast_sensor':'sensor.forecast',
+                     'solcast_tomorrow_sensor':{'entity_id':'sensor.sun_tomorrow'}},
+            hass=types.SimpleNamespace(states=types.SimpleNamespace(get=lambda entity:source)))
         entry = types.SimpleNamespace(entry_id="battery-entry", title="Battery")
         entities = [
             BatteryStrategySensor(coordinator, entry),
@@ -105,6 +112,15 @@ class BatteryRecorderAttributesTest(unittest.TestCase):
         for entity in entities:
             with self.subTest(sensor=type(entity).__name__):
                 live = entity.extra_state_attributes
+                self.assertEqual(live['status'],'ready')
+                self.assertEqual(live['source_entities']['solcast_tomorrow_sensor'],'sensor.sun_tomorrow')
+                self.assertEqual(live['demand_forecast_source']['status'],'ready')
+                for key in ('upcoming_energy_price_windows','estimated_hourly_home_demand','estimated_hourly_solar_forecast'):
+                    self.assertEqual(live[key],forecast[key])
+                source.state='unknown'
+                source.attributes.update(status='waiting_for_demand_sources',source_errors=['dishwasher: insufficient_history'])
+                self.assertEqual(entity.extra_state_attributes['demand_forecast_source']['source_errors'],
+                                 ['dishwasher: insufficient_history'])
                 self.assertGreater(len(json.dumps(live).encode("utf-8")), 16384)
                 # Mirror Recorder's attribute-name exclusion, without changing
                 # the live state consumed by Lovelace and automations.

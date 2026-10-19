@@ -7,7 +7,7 @@ import unittest
 from test_support import install_package_stub
 install_package_stub()
 from custom_components.smart_energy_planner.demand_forecast import (
-    build_demand_forecast, component_forecast, meter_hours, read_forecast,
+    build_demand_forecast, component_forecast, meter_hours, read_forecast, statistics_hours,
 )
 from custom_components.smart_energy_planner.price_models import PlannerWindow
 
@@ -37,6 +37,33 @@ def fixtures():
 
 
 class DemandForecastTest(unittest.TestCase):
+    def test_hourly_statistics_restore_idle_appliance_history_without_double_counting(self):
+        now, histories, prices, devices = fixtures()
+        statistics = {}
+        for entity, states in histories.items():
+            hours = meter_hours(states, now=now)
+            counter=0
+            rows=[dict(start=(min(hours)-timedelta(hours=1)).timestamp(),sum=counter)]
+            for at,value in sorted(hours.items()):
+                counter+=value
+                rows.append(dict(start=at.timestamp(),sum=counter))
+            statistics[entity]=rows
+        sparse={e:[rows[0],rows[-1]] for e,rows in histories.items()}
+        with self.assertRaisesRegex(ValueError,'insufficient_history'):
+            build_demand_forecast(sparse,devices,total_entity='house',now=now,prices=prices)
+        expected=build_demand_forecast(histories,devices,total_entity='house',now=now,prices=prices)
+        for raw in (sparse,histories):
+            actual=build_demand_forecast(raw,devices,total_entity='house',now=now,prices=prices,hourly_statistics=statistics)
+            self.assertEqual(actual,expected)
+
+    def test_statistics_gaps_corrections_and_unfinished_hours_are_not_zero(self):
+        now, _, _, _=fixtures()
+        start=now-timedelta(hours=8)
+        rows=[dict(start=(start+timedelta(hours=h)).timestamp(),sum=v)
+              for h,v in [(0,10),(1,10),(2,11),(4,15),(5,14),(6,None),(7,20),(8,21)]]
+        result=statistics_hours(rows,now=now)
+        self.assertEqual(result,{start+timedelta(hours=1):0,start+timedelta(hours=2):1})
+
     def test_sum_residual_and_scheduled_peaks(self):
         now, histories, prices, devices = fixtures()
         forecast, components, notes = build_demand_forecast(histories, devices,

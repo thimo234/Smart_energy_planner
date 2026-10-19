@@ -1,3 +1,9 @@
+function plannerOnlyConfig(config) {
+  const result = {...config};
+  for (const key of ['price_entity', 'demand_entity', 'solar_forecast_entity', 'solar_forecast_tomorrow_entity']) delete result[key];
+  return result;
+}
+
 class SmartEnergyPlannerCard extends HTMLElement {
   static getConfigElement() {
     return document.createElement("smart-energy-planner-card-editor");
@@ -26,7 +32,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
       title: "Energieprijs planning",
       show_title: true,
       show_legend: true,
-      ...config,
+      ...plannerOnlyConfig(config),
     };
     this._lastHtml = "";
     this._selectedTimestamp = undefined;
@@ -1552,7 +1558,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
 class SmartEnergyPlannerCardEditor extends HTMLElement {
   setConfig(config) {
-    this.config = { ...config };
+    this.config = plannerOnlyConfig(config);
     this.render();
   }
 
@@ -1563,8 +1569,7 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
 
   render() {
     if (!this._hass || !this.config) return;
-    const fields = [['planner_entity', 'Battery Strategy'], ['demand_entity', 'Verbruiksvoorspelling (power forecast, optioneel)'],
-      ['solar_forecast_entity', 'Zonneprognose (solar forecast, optioneel)'], ['price_entity', 'Stroomprijzen (optioneel)']];
+    const fields = [['planner_entity', 'Battery Strategy']];
     if (!this.querySelector('ha-entity-picker')) {
       this.innerHTML = `<div style="display:grid;gap:16px">${fields.map(([key,label]) =>
         `<ha-entity-picker data-key="${key}" label="${label}"></ha-entity-picker>`).join('')}
@@ -1592,6 +1597,7 @@ class SmartEnergyPlannerCardEditor extends HTMLElement {
       ...this.config,
       ...changedConfig,
     };
+    this.config = plannerOnlyConfig(this.config);
     delete this.config.hours_to_show;
     this.dispatchEvent(
       new CustomEvent("config-changed", {
@@ -1928,7 +1934,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
 class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
   render() {
     if (!this._hass || !this.config) return;
-    const fields = [['planner_entity','Battery Strategy'], ['demand_entity','Verbruiksvoorspelling (power forecast, optioneel)'], ['solar_forecast_entity','Zonneprognose (solar forecast, optioneel)'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['soc_entity','Accupercentage (%)'], ['price_entity','Stroomprijzen (optioneel)']];
+    const fields = [['planner_entity','Battery Strategy'], ['consumption_entity','Huisverbruik (W, kW, Wh of kWh)'], ['solar_entity','Zon (W, kW, Wh of kWh)'], ['soc_entity','Accupercentage (%)']];
     // Home Assistant replaces hass frequently, also while a picker is open.
     // Keep the elements mounted so updates preserve the search and focus.
     if (!this.querySelector('ha-entity-picker')) {
@@ -1949,7 +1955,7 @@ class SmartEnergyPlannerMiniCardEditor extends SmartEnergyPlannerCardEditor {
     });
   }
   updateConfig(changes) {
-    this.config = {...this.config, ...changes};
+    this.config = plannerOnlyConfig({...this.config, ...changes});
     this.dispatchEvent(new CustomEvent('config-changed', {bubbles:true, composed:true, detail:{config:this.config}}));
   }
 }

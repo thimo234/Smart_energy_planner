@@ -32,6 +32,16 @@ def demand_plan():
 
 
 class DemandIntegrationTest(unittest.TestCase):
+    def test_recorder_statistics_query_requests_hourly_reset_adjusted_kwh(self):
+        now, _, _, _=fixtures()
+        query=Mock(return_value={'sensor.meter':[]})
+        with patch.dict(sys.modules, {'homeassistant.components.recorder.statistics':
+                                     SimpleNamespace(statistics_during_period=query)}):
+            result=demand_coordinator.load_hourly_statistics('hass',['sensor.meter'],now)
+        query.assert_called_once_with('hass',now-timedelta(days=28,hours=1),now,
+                                      {'sensor.meter'},'hour',{'energy':'kWh'},{'sum'})
+        self.assertEqual(result,{'sensor.meter':[]})
+
     def test_selected_forecast_skips_internal_learning_in_coordinator(self):
         now, histories, prices, devices = fixtures()
         forecast, _, _ = build_demand_forecast(histories, devices, total_entity='house', now=now, prices=prices)
@@ -89,6 +99,7 @@ class DemandIntegrationTest(unittest.TestCase):
         async def load(job):
             return job()
         with patch.object(demand_coordinator, 'get_instance', return_value=SimpleNamespace(async_add_executor_job=load)), \
+             patch.object(demand_coordinator, 'load_hourly_statistics', return_value={}), \
              patch.object(demand_coordinator.history, 'get_significant_states', return_value=histories, create=True) as query:
             first = asyncio.run(async_demand_result(c, now))
             again = asyncio.run(async_demand_result(c, now+timedelta(minutes=15)))

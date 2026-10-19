@@ -12,6 +12,12 @@ from .demand_forecast import build_demand_forecast
 from .price_helpers import extract_price_windows
 
 
+def load_hourly_statistics(hass, entities, now):
+    from homeassistant.components.recorder.statistics import statistics_during_period
+    return statistics_during_period(hass, now-timedelta(days=28, hours=1), now,
+                                    set(entities), 'hour', {'energy': 'kWh'}, {'sum'})
+
+
 async def async_demand_result(coordinator, now):
     config, hass = coordinator._config, coordinator.hass
     devices = config.get(CONF_DEMAND_DEVICES, [])
@@ -33,13 +39,15 @@ async def async_demand_result(coordinator, now):
     signature = tuple(entities)
     if not cache or cache[0] != signature or (now-cache[1]).total_seconds() >= 3600:
         def load():
-            return history.get_significant_states(hass, now-timedelta(days=28), now,
+            states = history.get_significant_states(hass, now-timedelta(days=28), now,
                 entities, include_start_time_state=True, significant_changes_only=False,
                 no_attributes=False)
-        histories = await get_instance(hass).async_add_executor_job(load)
-        coordinator._demand_history_cache = (signature, now, histories)
+            return states, load_hourly_statistics(hass, entities, now)
+        histories, hourly_statistics = await get_instance(hass).async_add_executor_job(load)
+        coordinator._demand_history_cache = (signature, now, histories, hourly_statistics)
     else:
         histories = cache[2]
+        hourly_statistics = cache[3]
     price_entity = coordinator._config_entity_id(CONF_PRICE_SENSOR)
     price_state = hass.states.get(price_entity) if price_entity else None
     prices = extract_price_windows(price_state.attributes if price_state else {}, None,
@@ -49,7 +57,8 @@ async def async_demand_result(coordinator, now):
             {e: histories.get(e, []) for e in entities}, devices, total_entity=total,
             now=now, prices=prices,
             duration=float(config.get(CONF_PRICE_WINDOW_DURATION_HOURS, 5)),
-            whole_hour=bool(config.get(CONF_PRICE_WINDOW_WHOLE_HOUR_START, True)))
+            whole_hour=bool(config.get(CONF_PRICE_WINDOW_WHOLE_HOUR_START, True)),
+            hourly_statistics=hourly_statistics)
     except ValueError as err:
         result.source_status['demand_history'] = str(err)
         result.source_errors = coordinator._collect_source_errors(result.source_status)

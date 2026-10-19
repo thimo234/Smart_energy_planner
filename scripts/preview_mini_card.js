@@ -205,14 +205,14 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     editor.hass={states:{}};
     let count=0;
     editor.addEventListener('config-changed',()=>count++);
-    for (const [key,value] of [['planner_entity','sensor.strategy'],['demand_entity','sensor.demand'],['solar_forecast_entity','sensor.solcast']]) {
+    for (const [key,value] of [['planner_entity','sensor.strategy']]) {
       const picker=editor.querySelector(`[data-key="${key}"]`);
       picker.dispatchEvent(new CustomEvent('value-changed',{detail:{value},bubbles:true}));
     }
-    const picker=editor.querySelector('[data-key="demand_entity"]');
+    const picker=editor.querySelector('[data-key="planner_entity"]');
     editor.hass={states:{}};
-    const ok=count===3 && editor.config.planner_entity==='sensor.strategy' && editor.config.demand_entity==='sensor.demand'
-      && editor.config.solar_forecast_entity==='sensor.solcast' && picker===editor.querySelector('[data-key="demand_entity"]');
+    const ok=count===1 && editor.config.planner_entity==='sensor.strategy' && editor.querySelectorAll('ha-entity-picker').length===1
+      && picker===editor.querySelector('[data-key="planner_entity"]');
     editor.remove();return ok;
   });
   if (!largeEditorCheck) throw Error('Large card editor source selection failed');

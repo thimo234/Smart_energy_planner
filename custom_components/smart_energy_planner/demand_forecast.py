@@ -10,6 +10,32 @@ from .battery_forecast import _optional_window_price
 from .price_helpers import select_contiguous_price_window
 
 
+def statistics_hours(rows, *, now):
+    """Convert consecutive Recorder hourly sums (requested in kWh) to energy.
+
+    Recorder sums already account for meter resets. Missing hours and negative
+    corrections are not silently spread across idle hours or treated as zero.
+    """
+    result = {}
+    previous = None
+    for row in sorted(rows, key=lambda r: r['start']):
+        try:
+            start = datetime.fromtimestamp(float(row['start']), timezone.utc)
+            value = float(row['sum'])
+            if not math.isfinite(value):
+                raise ValueError
+        except (KeyError, TypeError, ValueError, OverflowError):
+            previous = None
+            continue
+        if previous:
+            at, old = previous
+            delta = value-old
+            if start-at == timedelta(hours=1) and start+timedelta(hours=1) <= now and delta >= -.001:
+                result[start] = max(0.0, delta)
+        previous = (start, value)
+    return result
+
+
 def meter_hours(states, *, now):
     """Integrate signed total / reset-aware total_increasing meters into UTC hours.
 
@@ -77,7 +103,7 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
     """
     history = _days(hours, now.tzinfo)
     if len(history) < 2:
-        raise ValueError('insufficient_history')
+        raise ValueError(f'insufficient_history: {len(history)} complete days from {len(hours)} hourly values; at least 2 complete days required')
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     # UTC grid preserves physical duration across DST changes.
     finish = start+timedelta(days=days)
@@ -152,11 +178,13 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
 
 
 def build_demand_forecast(histories, devices, *, total_entity, now, prices,
-                          duration=5, whole_hour=True):
+                         duration=5, whole_hour=True, hourly_statistics=None):
     ids = [r['entity_id'] for r in devices]
     if len(ids) != len(set(ids)) or total_entity in ids:
         raise ValueError('duplicate_energy_source')
     hours = {entity: meter_hours(states, now=now) for entity, states in histories.items()}
+    for entity, rows in (hourly_statistics or {}).items():
+        hours.setdefault(entity, {}).update(statistics_hours(rows, now=now))
     rules = list(devices)
     if total_entity:
         total = hours[total_entity]

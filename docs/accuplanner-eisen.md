@@ -305,6 +305,47 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: uurstatistieken en centrale debuguitvoer — 19 oktober
+
+- Gebruiker bevestigt: de grote kaarteditor werkte na herladen. De extra lokale
+  vervanging door native velden is vervallen en wordt niet gepubliceerd.
+- Laatste gebruikersverzoek vervangt de nog lokale aparte kaartkeuze voor zon
+  morgen: gebruik Battery Strategy als centrale uitvoer met de gebruikte prijs-,
+  zon- en verbruiksvoorspelling. De kaart hoeft alleen planner_entity te krijgen.
+  De aparte verbruiksplanner blijft onafhankelijk rekenen; de accuplanner neemt
+  de gekozen voorspelling over en past zijn marge eenmaal toe. Zon vandaag en
+  morgen worden in de accuplanner ingesteld en in één tijdreeks gepubliceerd.
+- Bestaande reeksen in Battery Strategy behouden en getest op volledige gelijkheid
+  aan de planneruitvoer. Toegevoegd: status, source_entities en compacte
+  demand_forecast_source met status, generatietijd en onderliggende bronfouten.
+  Daarmee kan de gebruiker ook een wachtende forecast via Battery Strategy delen.
+  Grote tijdreeksen blijven live beschikbaar en uitgesloten van Recorder.
+- Aanvullend verzoek: verwijder overbodige velden uit beide kaarteditors.
+  Geïmplementeerd: alleen Battery Strategy voor prijzen/voorspellingen; aparte
+  price_entity, demand_entity en solar_forecast_entity vervallen. Oude waarden
+  worden bij laden genegeerd en bij opslaan verwijderd. De minikaart behoudt
+  consumption_entity, solar_entity en soc_entity voor werkelijk gemeten historie.
+  Frontendregressies en browsercontrole van beide editors/kaarten geslaagd.
+- Live bronstatus: alle energiemeters ok, maar vaatwasser insufficient_history.
+  Gebruiker bevestigt voldoende historie. Vastgesteld in code/regressie: losse
+  tellerupdates met meer dan 75 minuten tussentijd leveren geen volledige dagen,
+  ook als er wel volledige Recorder-uurstatistieken beschikbaar zijn.
+- Geïmplementeerd: haal ook 28 dagen uurstatistieken op, expliciet omgerekend naar
+  kWh. Verschillen van opeenvolgende sum-waarden geven het uurverbruik, inclusief
+  opgeslagen nulverbruik en de door Recorder verwerkte tellerresets. Statistieken
+  gaan per uur voor op ruwe tellerdelta's; ze worden nooit dubbel opgeteld.
+  Gaten, ongeldige waarden, negatieve correcties en onvoltooide uren worden niet
+  naar nul of verzonnen verbruik vertaald. De foutmelding noemt nu aantallen
+  volledige dagen en uurwaarden wanneer nog onvoldoende gegevens bestaan.
+- Lokaal: 31 gerichte Python-tests geslaagd. De kaart gebruikt nu uitsluitend de
+  plannerbron; de eerdere lokale morgenkeuze is vervallen. De sparse historie
+  geeft met uurstatistieken exact dezelfde prognose als de volledige testhistorie.
+  Controlegrafiek opnieuw met bestaande generator en synthetische apparaatdata.
+- De gebruiker heeft op 19 oktober de historiecorrectie, centrale debuguitvoer
+  en vereenvoudigde kaartconfiguratie goedgekeurd en opdracht gegeven te pushen.
+- Nog open: installatie en live verificatie met de daadwerkelijke
+  Recorderstatistieken; die zijn niet opgenomen in de aangeleverde statusgegevens.
+
 ### Goedgekeurde kaartcorrectie: bronselectie via de UI — 19 oktober
 
 - Gebruiker meldt een defecte dashboardkaart en vraagt UI-selectie van power

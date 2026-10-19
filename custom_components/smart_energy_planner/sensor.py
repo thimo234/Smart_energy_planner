@@ -346,6 +346,31 @@ class BatteryStrategySensor(BatteryPlannerSensor):
     _attr_device_class = "enum"
     _attr_options = _BATTERY_STRATEGY_OPTIONS
 
+    @property
+    def extra_state_attributes(self):
+        attributes = super().extra_state_attributes
+        config = getattr(self.coordinator, '_config', {})
+        keys = ('price_sensor', 'export_price_sensor', 'solcast_today_sensor',
+                'solcast_tomorrow_sensor', 'total_energy_sensor', 'demand_forecast_sensor',
+                'battery_soc_sensor')
+        sources = {key: (value.get('entity_id') if isinstance(value, dict) else value)
+                   for key in keys if (value := config.get(key))}
+        attributes.update(status=getattr(self.coordinator.data, 'status', None),
+                          source_entities=sources)
+        source = sources.get('demand_forecast_sensor')
+        hass = getattr(self.coordinator, 'hass', None)
+        state = hass.states.get(source) if source and hass else None
+        if source:
+            details = state.attributes if state else {}
+            attributes['demand_forecast_source'] = {
+                'entity_id': source, 'state': state.state if state else 'missing',
+                'status': details.get('status'),
+                'forecast_generated_at': details.get('forecast_generated_at'),
+                'source_status': details.get('source_status', {}),
+                'source_errors': details.get('source_errors', []),
+            }
+        return attributes
+
     def __init__(
         self,
         coordinator: SmartEnergyPlannerCoordinator,
