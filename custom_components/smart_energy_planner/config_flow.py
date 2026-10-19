@@ -464,15 +464,22 @@ class DemandDeviceFlow:
             return self.async_show_form(step_id=finish_step, data_schema=_build_demand_schema(self.hass, data), errors={'base': error})
         return await self.async_step_device()
 
+    async def _save_demand_device(self, rule):
+        rule['entity_id'] = self._demand_queue.pop(0)
+        self._demand_rules.append(rule)
+        return await self.async_step_device()
+
     async def async_step_device(self, user_input=None):
         errors = {}
         if user_input is not None:
-            if user_input['timing'] == 'cheap' and not self._demand_data.get(CONF_PRICE_SENSOR):
+            timing = user_input['timing']
+            if timing == 'cheap' and not self._demand_data.get(CONF_PRICE_SENSOR):
                 errors['base'] = 'price_sensor_required'
+            elif timing == 'learned':
+                return await self._save_demand_device({'timing': timing})
             else:
-                rule = {**user_input, 'entity_id': self._demand_queue.pop(0)}
-                rule['weekdays'] = [int(d) for d in rule['weekdays']]
-                self._demand_rules.append(rule)
+                self._demand_timing = timing
+                return await self.async_step_device_schedule()
         if not self._demand_queue:
             self._demand_data[CONF_DEMAND_DEVICES] = self._demand_rules
             self._demand_devices_complete = True
@@ -487,14 +494,32 @@ class DemandDeviceFlow:
                     selector.SelectOptionDict(value='fixed', label='Fixed start time'),
                     selector.SelectOptionDict(value='cheap', label='Start relative to cheapest block')],
                     mode=selector.SelectSelectorMode.DROPDOWN)),
-            vol.Required('start_time', default=defaults.get('start_time', '17:30:00')): selector.TimeSelector(),
-            vol.Required('offset_hours', default=defaults.get('offset_hours', 0)): selector.NumberSelector(
-                selector.NumberSelectorConfig(min=0, max=23, step=.25, mode=selector.NumberSelectorMode.BOX)),
-            vol.Required('weekdays', default=[str(d) for d in defaults.get('weekdays', range(7))]): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=[selector.SelectOptionDict(value=str(i), label=d)
-                    for i,d in enumerate(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])], multiple=True)),
         })
         return self.async_show_form(step_id='device', data_schema=schema, errors=errors,
+                                   description_placeholders={'entity': entity})
+
+    async def async_step_device_schedule(self, user_input=None):
+        timing = self._demand_timing
+        if user_input is not None:
+            if timing == 'fixed':
+                rule = dict(timing=timing, start_time=user_input['start_time'],
+                            weekdays=[int(d) for d in user_input['weekdays']])
+            else:
+                rule = dict(timing=timing, offset_hours=user_input['offset_hours'])
+            return await self._save_demand_device(rule)
+        entity = self._demand_queue[0]
+        defaults = next((r for r in self._demand_data.get(CONF_DEMAND_DEVICES, [])
+                         if r['entity_id'] == entity), {})
+        fields = {}
+        if timing == 'fixed':
+            fields[vol.Required('start_time', default=defaults.get('start_time', '17:30:00'))] = selector.TimeSelector()
+            fields[vol.Required('weekdays', default=[str(d) for d in defaults.get('weekdays', range(7))])] = selector.SelectSelector(
+                selector.SelectSelectorConfig(options=[selector.SelectOptionDict(value=str(i), label=d)
+                    for i,d in enumerate(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])], multiple=True))
+        else:
+            fields[vol.Required('offset_hours', default=defaults.get('offset_hours', 0))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=23, step=.25, mode=selector.NumberSelectorMode.BOX))
+        return self.async_show_form(step_id='device_schedule', data_schema=vol.Schema(fields),
                                    description_placeholders={'entity': entity})
 
 

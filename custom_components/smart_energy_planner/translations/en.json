@@ -51,7 +51,13 @@
         "title": "Appliance consumption",
         "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
         "data": {
-          "timing": "Timing",
+          "timing": "Timing"
+        }
+      },
+      "device_schedule": {
+        "title": "Appliance consumption",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "data": {
           "start_time": "Fixed start time",
           "offset_hours": "Hours after cheapest block starts",
           "weekdays": "Active weekdays"
@@ -112,7 +118,13 @@
         "title": "Appliance consumption",
         "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
         "data": {
-          "timing": "Timing",
+          "timing": "Timing"
+        }
+      },
+      "device_schedule": {
+        "title": "Appliance consumption",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "data": {
           "start_time": "Fixed start time",
           "offset_hours": "Hours after cheapest block starts",
           "weekdays": "Active weekdays"

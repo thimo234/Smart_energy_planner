@@ -305,6 +305,21 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: alleen relevante apparaatinstellingen — 19 oktober
+
+- Nieuw verzoek: starttijd en weekdagen uitsluitend bij vaste start; uren na
+  het begin uitsluitend bij relatieve start. Geen extra velden bij leren.
+- Geïmplementeerd voor toevoegen en opties: eerst de startwijze kiezen.
+  Leren slaat direct op; vaste start opent starttijd en weekdagen; relatieve
+  start opent alleen de offset. Bestaande relevante waarden blijven defaults.
+  Alleen velden van de gekozen startwijze worden opgeslagen, zodat verborgen
+  oude weekdagen of offsets niet blijven doorwerken. Relatieve start geldt
+  na opslaan dagelijks; dit vervangt de eerdere weekdagkeuze voor prijsregels.
+- Acht gerichte configuratietests geslaagd, inclusief meerdere apparaten,
+  wisselen van startwijze en ontbreken van een benodigde prijsbron.
+- De gebruiker heeft deze concrete formulierwerking op 19 oktober goedgekeurd
+  en opdracht gegeven te pushen. Nog open: live Home Assistant-controle.
+
 ### Goedgekeurde kaartcorrectie: gelijke vermogenseenheden — 19 oktober
 
 - Gebruiker meldt verschillende grafieken. De aangeleverde Battery Strategy

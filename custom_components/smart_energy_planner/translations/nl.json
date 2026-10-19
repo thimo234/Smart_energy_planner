@@ -51,7 +51,13 @@
         "title": "Apparaatverbruik",
         "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
         "data": {
-          "timing": "Startwijze",
+          "timing": "Startwijze"
+        }
+      },
+      "device_schedule": {
+        "title": "Apparaatverbruik",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "data": {
           "start_time": "Vaste starttijd",
           "offset_hours": "Uren na begin goedkoopste blok",
           "weekdays": "Actieve weekdagen"
@@ -112,7 +118,13 @@
         "title": "Apparaatverbruik",
         "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
         "data": {
-          "timing": "Startwijze",
+          "timing": "Startwijze"
+        }
+      },
+      "device_schedule": {
+        "title": "Apparaatverbruik",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "data": {
           "start_time": "Vaste starttijd",
           "offset_hours": "Uren na begin goedkoopste blok",
           "weekdays": "Actieve weekdagen"

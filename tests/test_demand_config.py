@@ -21,6 +21,10 @@ class DemandConfigTest(unittest.IsolatedAsyncioTestCase):
         start = load_function('config_flow.py','_start_demand_devices',
                               _build_demand_schema=lambda hass,data: data,
                               _demand_meter_ids=lambda hass: ['house','dish','pump','cook'])
+        save = load_function('config_flow.py', '_save_demand_device')
+        schedule = load_function('config_flow.py', 'async_step_device_schedule', vol=vol, selector=selector)
+        flow._save_demand_device = lambda rule: save(flow, rule)
+        flow.async_step_device_schedule = lambda value=None: schedule(flow, value)
         flow.async_step_device = lambda value=None: step(flow,value)
         return flow, lambda: start(flow,data,'configure')
 
@@ -28,11 +32,28 @@ class DemandConfigTest(unittest.IsolatedAsyncioTestCase):
         flow, start = self.make_flow(dict(total_energy_sensor='house', demand_energy_sensors=['dish','pump'],price_sensor='prices'))
         form = await start()
         self.assertEqual(form['description_placeholders']['entity'],'dish')
-        form = await flow.async_step_device(dict(timing='cheap',offset_hours=0,start_time='17:30:00',weekdays=['0','1']))
+        self.assertEqual(set(form['data_schema']), {'timing'})
+        form = await flow.async_step_device(dict(timing='cheap'))
+        self.assertEqual(set(form['data_schema']), {'offset_hours'})
+        form = await flow.async_step_device_schedule(dict(offset_hours=0))
         self.assertEqual(form['description_placeholders']['entity'],'pump')
-        saved = await flow.async_step_device(dict(timing='cheap',offset_hours=2,start_time='17:30:00',weekdays=['0','1']))
+        await flow.async_step_device(dict(timing='cheap'))
+        saved = await flow.async_step_device_schedule(dict(offset_hours=2))
         self.assertEqual([r['offset_hours'] for r in saved['demand_devices']],[0,2])
-        self.assertEqual(saved['demand_devices'][1]['weekdays'],[0,1])
+        self.assertNotIn('weekdays', saved['demand_devices'][1])
+
+    async def test_fixed_fields_and_switch_to_learned_remove_stale_rules(self):
+        flow, start = self.make_flow(dict(demand_energy_sensors=['cook'],
+            demand_devices=[dict(entity_id='cook',timing='cheap',offset_hours=2)]))
+        await start()
+        form = await flow.async_step_device(dict(timing='fixed'))
+        self.assertEqual(set(form['data_schema']), {'start_time','weekdays'})
+        saved = await flow.async_step_device_schedule(dict(start_time='17:30:00',weekdays=['1']))
+        self.assertEqual(saved['demand_devices'], [dict(entity_id='cook',timing='fixed',start_time='17:30:00',weekdays=[1])])
+        flow, start = self.make_flow(saved)
+        await start()
+        saved = await flow.async_step_device(dict(timing='learned'))
+        self.assertEqual(saved['demand_devices'], [dict(entity_id='cook',timing='learned')])
 
     async def test_total_and_appliance_cannot_be_same_meter(self):
         _, start = self.make_flow(dict(total_energy_sensor='house',demand_energy_sensors=['house']))
