@@ -266,20 +266,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     self._schedule_source_error_retry()
                 return result
             external_demand = None
+            demand_error = None
             forecast_sensor = self._config_entity_id(CONF_DEMAND_FORECAST_SENSOR)
             if planner_kind == PLANNER_KIND_BATTERY and forecast_sensor:
                 try:
                     external_demand = read_forecast(self.hass.states.get(forecast_sensor), now=now,
                         horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=2))
                 except ValueError as err:
-                    return self._build_pending_result('waiting_for_demand_forecast', planner_kind,
-                        {'demand_forecast_sensor': str(err)}, [f'demand_forecast_sensor: {err}'])
-            price_sensor = self._config_entity_id(CONF_PRICE_SENSOR) or str(self._config[CONF_PRICE_SENSOR])
+                    demand_error = str(err)
+            price_sensor = self._config_entity_id(CONF_PRICE_SENSOR) or str(self._config.get(CONF_PRICE_SENSOR, ''))
             export_price_sensor = self._config_entity_id(CONF_EXPORT_PRICE_SENSOR)
             solar_sensor = self._config_entity_id(CONF_SOLCAST_TODAY_SENSOR)
             solar_tomorrow_sensor = self._config_entity_id(CONF_SOLCAST_TOMORROW_SENSOR)
             total_energy_sensor = self._config_entity_id(CONF_TOTAL_ENERGY_SENSOR)
-            if external_demand is not None:
+            if forecast_sensor:
                 total_energy_sensor = None
             battery_soc_sensor = self._config_entity_id(CONF_BATTERY_SOC_SENSOR)
 
@@ -318,6 +318,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 planner_kind=planner_kind,
             )
             source_errors = self._collect_source_errors(source_status)
+            if demand_error:
+                source_status['demand_forecast_sensor'] = demand_error
+                source_errors = self._collect_source_errors(source_status)
             if source_errors:
                 _LOGGER.warning("Smart Energy Planner source errors: %s", source_errors)
                 self._schedule_source_error_retry()
@@ -476,6 +479,30 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 source_status["solcast_tomorrow_sensor"] = "no_solcast_forecast_data"
             elif solar_tomorrow_state and solar_tomorrow_forecast is None:
                 source_status["solcast_tomorrow_sensor"] = "invalid_solcast_value"
+
+            if demand_error:
+                # Keep source diagnostics visible while withholding battery commands.
+                result = self._build_pending_result('waiting_for_demand_forecast', planner_kind,
+                    source_status, self._collect_source_errors(source_status))
+                result.current_price = current_price
+                result.current_export_price = export_current_price
+                result.battery_soc_percent = battery_soc_percent
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                end = battery_price_horizon_end
+                result.upcoming_energy_price_windows = self._serialize_price_windows(
+                    all_windows, horizon_start=start, horizon_end=end)
+                result.upcoming_export_price_windows = self._serialize_price_windows(
+                    all_export_windows, horizon_start=start, horizon_end=end)
+                result.estimated_hourly_solar_forecast = self._serialize_solar_windows(
+                    all_solar_windows, horizon_start=start, horizon_end=end)
+                capacity = float(self._config.get(CONF_BATTERY_CAPACITY_KWH, DEFAULT_BATTERY_CAPACITY_KWH))
+                if battery_soc_percent is not None:
+                    result.battery_total_energy_kwh = round(capacity*battery_soc_percent/100, 3)
+                    result.battery_remaining_capacity_kwh = max(0, round(capacity-result.battery_total_energy_kwh, 3))
+                    result.battery_energy_available_kwh = max(0, round(result.battery_total_energy_kwh
+                        - capacity*result.battery_min_soc_percent/100, 3))
+                self._schedule_source_error_retry()
+                return result
 
             total_energy_daily_average = (
                 await self._async_get_average_daily_usage(total_energy_sensor)

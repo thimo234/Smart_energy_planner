@@ -18,8 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from visualize_battery import plot_data
 
 
-def demand_plan():
+def demand_plan(*, inconsistent_meters=False):
     now, histories, prices, devices = fixtures()
+    if inconsistent_meters:
+        for entity, states in histories.items():
+            if entity != 'house':
+                for state in states:
+                    state.state = str(float(state.state)*2)
     forecast, _, _ = build_demand_forecast(histories, devices, total_entity='house', now=now, prices=prices)
     data = dict(estimated_hourly_home_demand=forecast, upcoming_energy_price_windows=[
         dict(start=p.start.isoformat(), end=p.end.isoformat(), price=p.price, price_known=True) for p in prices],
@@ -32,6 +37,35 @@ def demand_plan():
 
 
 class DemandIntegrationTest(unittest.TestCase):
+    def test_waiting_forecast_preserves_other_live_sources_without_commands(self):
+        now, _, prices, _=fixtures()
+        c=coordinator()
+        c.config_entry=SimpleNamespace(entry_id='battery',options={},data=dict(
+            planner_kind='battery',demand_forecast_sensor='forecast',price_sensor='prices',
+            solcast_today_sensor='sun',battery_soc_sensor='soc',battery_capacity_kwh=10,
+            battery_min_soc_percent=20))
+        states={'forecast':SimpleNamespace(state='unknown',attributes={}),
+                'soc':SimpleNamespace(state='65',attributes={}),
+                'sun':SimpleNamespace(state='2',attributes={'detailedHourly':[
+                    dict(period_start=(now+timedelta(hours=12)).isoformat(),pv_estimate=2)]}),
+                'prices':SimpleNamespace(state='.4',attributes={'raw_today':[
+                    dict(start=p.start.isoformat(),end=p.end.isoformat(),value=p.price) for p in prices]})}
+        c.hass=SimpleNamespace(states=SimpleNamespace(get=states.get,async_all=lambda:[]))
+        c._schedule_source_error_retry=Mock()
+        c._cancel_source_error_retry=Mock()
+        c._async_get_average_daily_usage=AsyncMock(side_effect=AssertionError('must not learn on wait'))
+        with patch.object(c._async_update_data.__globals__['dt_util'],'now',return_value=now):
+            result=asyncio.run(c._async_update_data())
+        self.assertEqual(result.status,'waiting_for_demand_forecast',result.source_errors)
+        self.assertEqual(result.battery_soc_percent,65)
+        self.assertEqual(result.battery_total_energy_kwh,6.5)
+        self.assertEqual(result.current_price,.4)
+        self.assertTrue(result.upcoming_energy_price_windows)
+        self.assertTrue(result.estimated_hourly_solar_forecast)
+        self.assertFalse(result.estimated_hourly_home_demand)
+        self.assertFalse(result.planned_battery_mode_windows)
+        c._async_get_average_daily_usage.assert_not_called()
+
     def test_recorder_statistics_query_requests_hourly_reset_adjusted_kwh(self):
         now, _, _, _=fixtures()
         query=Mock(return_value={'sensor.meter':[]})
@@ -85,11 +119,14 @@ class DemandIntegrationTest(unittest.TestCase):
     def test_missing_selected_forecast_waits_instead_of_zero_demand(self):
         c = coordinator()
         c.config_entry = SimpleNamespace(data={'demand_forecast_sensor':'sensor.missing'}, options={})
-        c.hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity: None))
-        result = asyncio.run(c._async_update_data())
+        c.hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity: None, async_all=lambda: []))
+        c._schedule_source_error_retry=Mock()
+        c._cancel_source_error_retry=Mock()
+        with patch.object(c._async_update_data.__globals__['dt_util'],'now',return_value=fixtures()[0]):
+            result = asyncio.run(c._async_update_data())
         self.assertEqual(result.status, 'waiting_for_demand_forecast')
         self.assertFalse(result.planned_battery_mode_windows)
-        self.assertIn('forecast_unavailable', result.source_errors[0])
+        self.assertTrue(any('forecast_unavailable' in e for e in result.source_errors))
 
     def test_predictor_uses_recorder_and_caches_history(self):
         now, histories, prices, devices = fixtures()

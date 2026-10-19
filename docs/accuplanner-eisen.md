@@ -305,6 +305,37 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde correctie: afwijkende apparaatmetingen blokkeren niet alles — 19 oktober
+
+- Live fout: appliance_energy_exceeds_total; de accuplanner wacht daardoor op
+  de forecast en publiceerde ook geen beschikbare prijzen, zon of SOC meer.
+  De status bewijst een overschrijding in minimaal één historisch uur, niet of
+  die door overlap, meetvertraging, een tellerwijziging of een verkeerde bron komt.
+- Goedgekeurd en geïmplementeerd: dagen met apparaatoverschrijding groter
+  dan de bestaande tolerantie van 0,05 kWh uitsluiten voor alle componenten samen.
+  Bij minimaal twee volledige consistente dagen leert de apparaatprognose daaruit.
+  Dit vervangt het blokkeren op één afwijkend uur in de gehele historie.
+- Als te weinig consistente dagen overblijven, gebruik alleen de door de gebruiker
+  als volledig huisverbruik bevestigde totaalmeter. Voeg geen apparaten toe en
+  pas geen apparaatregels toe. Geef ready_with_warnings met household_total_only,
+  aantallen afwijkende uren/dagen, maximale overschrijding en tijdstip. Deze
+  terugval verliest tijdelijk apparaatpieken maar verzint geen extra energie.
+  De totaalmeter moet nog steeds voldoende bruikbare historie hebben; ontbrekende
+  data blijven onbekend. Geen automatische terugval naar nulverbruik.
+- Bij een wachtende forecast leest de accuplanner de andere bronnen wel uit.
+  Prijzen, zonprognoses, SOC en berekende accu-inhoud blijven als diagnostiek
+  beschikbaar, met lege opdrachten en accu_uit. Geen wijziging van cyclusstatus
+  en geen interne verbruiksleeractie tijdens deze wachttoestand.
+- 34 gerichte tests geslaagd: losse historische afwijking, structurele afwijking,
+  onvoldoende totaalmeterhistorie, bronbehoud tijdens wachten en regressies.
+  Controlegrafiek demand-total-fallback gebruikt synthetisch verdubbelde
+  apparaatmetingen, ongewijzigde totaalmeter, 10 kWh accu, 60% SOC, 3 kW,
+  20% vraagmarge en geen zon. Geen exacte reconstructie van de live historie.
+- De gebruiker heeft op 19 oktober deze terugval en grafiek goedgekeurd en
+  opdracht gegeven de correctie naar main te pushen.
+- Nog open: installatie, live controle en onderzoek naar de werkelijk afwijkende
+  meters/meeturen.
+
 ### Goedgekeurde correctie: uurstatistieken en centrale debuguitvoer — 19 oktober
 
 - Gebruiker bevestigt: de grote kaarteditor werkte na herladen. De extra lokale

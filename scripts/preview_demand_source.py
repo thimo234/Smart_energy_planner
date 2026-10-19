@@ -13,13 +13,19 @@ from visualize_battery import render
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--inconsistent-meters', action='store_true',
+                        help='Synthetic excessive appliance readings; forecast falls back to household total')
     args = parser.parse_args()
-    _, _, result = demand_plan()
+    _, _, result = demand_plan(inconsistent_meters=args.inconsistent_meters)
     data = asdict(result)
     data.update(battery_capacity_kwh=10, battery_min_soc_percent=20,
                 scenario_note='Synthetic appliance measurements and prices; no solar; '
                 'dishwasher 11:00, heat pump 13:00, cooking 17:30; '
                 '60% initial SOC, 10 kWh, 3 kW, 20% battery demand margin.')
+    if args.inconsistent_meters:
+        data['scenario_note'] = ('Synthetic inconsistent appliance meters; household-total-only forecast. '
+            'No device scheduling; measured household daily energy retained. '
+            'No solar; 60% initial SOC, 10 kWh, 3 kW, 20% battery demand margin.')
     args.output.mkdir(parents=True, exist_ok=True)
     snapshot = args.output/'planning.json'
     snapshot.write_text(json.dumps(data, indent=2), encoding='utf-8')

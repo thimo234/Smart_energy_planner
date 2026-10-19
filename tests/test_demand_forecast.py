@@ -84,8 +84,27 @@ class DemandForecastTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'duplicate'):
                 build_demand_forecast(histories, bad, total_entity='house', now=now, prices=prices)
         histories['house'] = histories['dish']
-        with self.assertRaisesRegex(ValueError, 'exceeds_total'):
-            build_demand_forecast(histories, devices, total_entity='house', now=now, prices=prices)
+        forecast, components, warnings = build_demand_forecast(histories, devices, total_entity='house', now=now, prices=prices)
+        self.assertEqual(set(components),{'house'})
+        self.assertAlmostEqual(sum(w['estimated_kwh'] for w in forecast[:96]),1.3)
+        self.assertIn('household_total_only',warnings['energy_accounting'][0])
+
+    def test_one_inconsistent_day_does_not_disable_forecast(self):
+        now, histories, prices, devices=fixtures()
+        expected=build_demand_forecast(histories,devices,total_entity='house',now=now,prices=prices)[0]
+        # A historical meter jump makes that day inconsistent, not every day.
+        for state in histories['dish'][25:]:
+            state.state=str(float(state.state)+10)
+        forecast, components, warnings=build_demand_forecast(histories,devices,total_entity='house',now=now,prices=prices)
+        self.assertEqual(forecast,expected)
+        self.assertIn('remaining_home',components)
+        self.assertIn('inconsistent days excluded',warnings['energy_accounting'][0])
+
+    def test_inconsistent_devices_do_not_allow_unknown_total_to_become_zero(self):
+        now,histories,prices,devices=fixtures()
+        histories['house']=histories['dish'][:25]
+        with self.assertRaisesRegex(ValueError,'insufficient_history'):
+            build_demand_forecast(histories,devices,total_entity='house',now=now,prices=prices)
 
     def test_unknown_history_does_not_mean_zero(self):
         now, histories, prices, devices = fixtures()

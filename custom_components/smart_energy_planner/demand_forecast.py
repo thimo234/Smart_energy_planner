@@ -186,20 +186,46 @@ def build_demand_forecast(histories, devices, *, total_entity, now, prices,
     for entity, rows in (hourly_statistics or {}).items():
         hours.setdefault(entity, {}).update(statistics_hours(rows, now=now))
     rules = list(devices)
+    accounting_warning = None
+    total_only = False
     if total_entity:
         total = hours[total_entity]
         common = set(total)
         for entity in ids:
             common &= hours[entity].keys()
         residual = {t: total[t]-sum(hours[entity][t] for entity in ids) for t in common}
-        # Inconsistent or overlapping meters are not silently clipped away.
-        if any(v < -.05 for v in residual.values()):
-            raise ValueError('appliance_energy_exceeds_total')
-        hours['remaining_home'] = {t: max(0, v) for t, v in residual.items()}
-        rules.append({'entity_id': 'remaining_home', 'timing': 'learned'})
+        bad = {t: v for t, v in residual.items() if v < -.05}
+        bad_days = {t.astimezone(now.tzinfo).date() for t in bad}
+        if bad:
+            worst = min(bad, key=bad.get)
+            accounting_warning = (f'appliance_energy_exceeds_total: {len(bad)} hours across '
+                f'{len(bad_days)} days; maximum excess {-bad[worst]:.3f} kWh at {worst.isoformat()}')
+            # Reject whole days across all components: never mix device samples
+            # from an inconsistent day with a residual learned from another day.
+            consistent = {t: v for t, v in residual.items()
+                          if t.astimezone(now.tzinfo).date() not in bad_days}
+            valid_days = set(_days(consistent, now.tzinfo))
+            if len(valid_days) >= 2:
+                hours = {entity: {t: v for t, v in values.items()
+                                 if t.astimezone(now.tzinfo).date() in valid_days}
+                         for entity, values in hours.items()}
+                residual = {t: v for t, v in consistent.items()
+                            if t.astimezone(now.tzinfo).date() in valid_days}
+                accounting_warning += '; inconsistent days excluded from all components'
+            else:
+                # The confirmed whole-house meter already includes all devices.
+                # Use it alone, preserving measured demand without double counting.
+                rules = [{'entity_id': total_entity, 'timing': 'learned'}]
+                total_only = True
+                accounting_warning += '; household_total_only fallback; device schedules omitted'
+        if not total_only:
+            hours['remaining_home'] = {t: max(0, v) for t, v in residual.items()}
+            rules.append({'entity_id': 'remaining_home', 'timing': 'learned'})
     if not rules:
         raise ValueError('no_energy_sources')
     components, aggregate, warnings = {}, defaultdict(float), {}
+    if accounting_warning:
+        warnings['energy_accounting'] = [accounting_warning]
     for rule in rules:
         entity = rule['entity_id']
         try:
