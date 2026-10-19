@@ -8,6 +8,27 @@ from test_price_peaks import plan, prices, NOW, PlannerWindow, plan_price_peaks
 
 
 class EarlyEndTest(unittest.TestCase):
+    def test_startup_replaces_locked_small_peak_then_locks_large_peak(self):
+        raw=json.loads((Path(__file__).parent/'fixtures/price_peaks_2026_10_18.json').read_text())
+        windows=[PlannerWindow(datetime.fromisoformat(w['start']),datetime.fromisoformat(w['end']),w['price']) for w in raw]
+        saved={'last_finished_end':'2026-10-18T10:00:00+02:00',
+               'last_end':'2026-10-18T16:00:00+02:00', 'windows':[
+                   {'start':'2026-10-18T15:45:00+02:00','end':'2026-10-18T16:00:00+02:00'}]}
+        args=dict(now=datetime.fromisoformat('2026-10-18T13:00:00+02:00'),
+                  duration_hours=5,whole_hour_start=False,minimum_gap_hours=5)
+        missing=plan_price_peaks([],saved=saved,reselect_pending=True,**args)
+        self.assertFalse(missing['startup_reselected'])
+        self.assertEqual(missing['windows'][0]['start'],saved['windows'][0]['start'])
+        partial=plan_price_peaks(windows[1:],saved=missing,reselect_pending=True,**args)
+        self.assertFalse(partial['startup_reselected'])
+        result=plan_price_peaks(windows,saved=partial,reselect_pending=True,**args)
+        self.assertTrue(result['startup_reselected'])
+        self.assertEqual([(w['start'][11:16],w['end'][11:16]) for w in result['windows']],
+                         [('17:15','22:15')])
+        self.assertEqual(result['last_finished_end'],saved['last_finished_end'])
+        restored=plan_price_peaks(windows,saved=result,**args)
+        self.assertEqual(restored['windows'],result['windows'])
+
     def test_large_evening_peak_wins_over_small_afternoon_peak(self):
         raw=json.loads((Path(__file__).parent/'fixtures/price_peaks_2026_10_18.json').read_text())
         windows=[PlannerWindow(datetime.fromisoformat(w['start']),datetime.fromisoformat(w['end']),w['price']) for w in raw]

@@ -79,13 +79,16 @@ are skipped. The cheapest-window mode keeps its existing daily selection.
 **Minimum off time between price peak blocks (hours)** is separate from the block
 duration: default 1 hour, configurable from 0.25 to 48 hours in quarter-hour steps.
 Blocks never overlap or touch. The binary sensor turns off at the locked end time,
-without waiting for another planner update. Locked blocks survive restarts and
-temporary price-sensor outages; their list is exposed as `planned_price_peak_windows`.
-**Remove small peak blocks that have not started** (default on) also removes
+without waiting for another planner update. At startup, future blocks are selected
+again from all available prices, then locked. This waits for complete daily prices;
+until then restored blocks survive temporary price-sensor outages. Active blocks
+and the actual last end remain protected so a restart cannot bypass the minimum
+pause. The list is exposed as `planned_price_peak_windows`.
+Small peak blocks that have not started are always removed, including
 previously locked future blocks that no longer contain a sufficiently prominent
-peak. Rechecking requires complete daily prices; missing data never cancels a
-block. Turning this option off preserves existing blocks, but still allows early
-ending when the price normalizes. Active and future blocks can also end early;
+peak. The former cleanup switch has been removed; saved disabled settings are
+ignored. Rechecking requires complete daily prices; missing data never cancels a
+block. Active and future blocks can also end early;
 an active block whose normal-price boundary has already passed stops now, without
 backdating its end. Missing tariffs cannot trigger an early end. Lowering the maximum
 duration can shorten blocks as before; increasing it never extends a locked block.

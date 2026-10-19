@@ -61,12 +61,13 @@ class PeakProminenceTest(unittest.TestCase):
         self.assertEqual([(w['start'],w['end']) for w in result[:2]],
                          [(w['start'],w['end']) for w in replay()['windows']])
 
-    def test_cleanup_keeps_large_block_times_and_can_be_disabled(self):
+    def test_cleanup_always_keeps_only_large_block_times(self):
         saved = legacy_state()
         filtered = replay(saved=saved)['windows']
         self.assertEqual(len(filtered),2)
         self.assertEqual(filtered, [saved['windows'][1],saved['windows'][3]])
-        self.assertEqual(replay(saved=saved, remove_small_pending=False)['windows'], saved['windows'])
+        restored = replay(saved=json.loads(json.dumps(replay(saved=saved))))
+        self.assertEqual(restored['windows'], filtered)
 
     def test_cleanup_preserves_active_block_and_never_extends_it(self):
         saved = legacy_state()
@@ -95,14 +96,42 @@ class PeakProminenceTest(unittest.TestCase):
 
 
 class PeakSettingsTest(unittest.IsolatedAsyncioTestCase):
-    async def test_saved_ui_options_reach_planner_including_zero_and_false(self):
+    async def test_startup_waits_for_prices_then_only_reselects_once(self):
+        raw = supplied_prices()
+        now = raw[0].start
+        source = SimpleNamespace(state='.15', attributes={'raw_today': [
+            {'start': w.start.isoformat(), 'end': w.end.isoformat(), 'value': w.price} for w in raw
+        ]})
+        instance = coordinator()
+        instance.config_entry = SimpleNamespace(entry_id='peaks', options={}, data={
+            'planner_kind':'price_window','price_sensor':'sensor.prices',
+            'price_window_type':'most_expensive','price_window_duration_hours':3,
+            'price_peak_min_gap_hours':2})
+        instance.hass = SimpleNamespace(data={RUNTIME_STATE:{'peaks':{'price_peak_state':legacy_state()}}},
+            states=SimpleNamespace(get=lambda key: None, async_all=lambda:[]))
+        instance._schedule_source_error_retry=Mock()
+        instance._cancel_source_error_retry=Mock()
+        instance._async_persist_runtime_state=AsyncMock()
+        namespace=instance._async_update_data.__globals__
+        planner=Mock(wraps=plan_price_peaks)
+        with patch.object(namespace['dt_util'],'now',return_value=now), patch.dict(namespace,plan_price_peaks=planner):
+            await instance._async_update_data()
+            self.assertFalse(getattr(instance,'_price_peaks_initialized',False))
+            instance.hass.states.get=lambda key: source if key=='sensor.prices' else None
+            result=await instance._async_update_data()
+            self.assertTrue(instance._price_peaks_initialized,result.source_errors)
+            updated=await instance._async_update_data()
+            self.assertEqual(updated.planned_price_peak_windows,result.planned_price_peak_windows)
+        self.assertEqual([call.kwargs['reselect_pending'] for call in planner.call_args_list], [True,True,False])
+
+    async def test_legacy_false_option_cannot_disable_cleanup(self):
         raw = supplied_prices()
         now = raw[0].start-timedelta(hours=1)
         source = SimpleNamespace(state='.15', attributes={'raw_today': [
             {'start': w.start.isoformat(), 'end': w.end.isoformat(), 'value': w.price} for w in raw
         ]})
         old = legacy_state()
-        for percentage, cleanup, expected in [(0,True,4),(10,False,4),(10,True,2),(50,True,0)]:
+        for percentage, cleanup, expected in [(0,True,4),(10,False,2),(10,True,2),(50,True,0)]:
             instance = coordinator()
             instance.config_entry = SimpleNamespace(entry_id='peaks', data={
                 'planner_kind':'price_window', 'price_sensor':'sensor.prices',

@@ -36,14 +36,12 @@
           "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
           "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)",
           "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
-          "price_peak_remove_small_pending": "Kleine nog niet gestarte piekblokken verwijderen",
           "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
           "demand_energy_sensors": "Energiemeters per apparaat"
         },
         "data_description": {
           "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
           "price_peak_min_prominence_percent": "Hoogte boven de omliggende dalen, als percentage van de hoogste minus laagste bekende dagprijs. 10% filtert kleine schommelingen; 0 schakelt dit filter uit. Alleen voor dure prijspieken.",
-          "price_peak_remove_small_pending": "Verwijder vastgezette toekomstige blokken zonder voldoende hoge piek. Actieve blokken blijven staan. Bij onvolledige dagprijzen wordt niets verwijderd.",
           "price_window_duration_hours": "Bij dure pieken is dit de maximale tijd hoog. Na de piek stopt het blok eerder zodra de prijs terug is bij het omliggende dal plus de ingestelde piekdrempel. Goedkope blokken behouden hun vaste duur.",
           "demand_forecast_sensor": "Kies een zelfstandige verbruiksvoorspelling. Deze vervangt de interne verbruiksberekening; de veiligheidsmarge wordt daarna één keer toegepast.",
           "demand_energy_sensors": "Selecteer Wh/kWh-tellers (total of total_increasing), geen vermogenssensoren. De optionele totaalmeter omvat deze apparaten; alleen het restverbruik wordt erbij geteld."
@@ -97,7 +95,6 @@
           "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)",
           "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)",
           "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
-          "price_peak_remove_small_pending": "Kleine nog niet gestarte piekblokken verwijderen",
           "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
           "demand_energy_sensors": "Energiemeters per apparaat"
         },
@@ -105,7 +102,6 @@
           "export_price_tax_deduction": "Alleen bij een lege terugleversensor of dezelfde sensor als de importprijs: terugleverprijs = importprijs min dit bedrag. 0,11 betekent 11 cent/kWh; 0 schakelt de aftrek uit. Gebruik een importprijs inclusief belasting. Een aparte terugleversensor wordt niet aangepast.",
           "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
           "price_peak_min_prominence_percent": "Hoogte boven de omliggende dalen, als percentage van de hoogste minus laagste bekende dagprijs. 10% filtert kleine schommelingen; 0 schakelt dit filter uit. Alleen voor dure prijspieken.",
-          "price_peak_remove_small_pending": "Verwijder vastgezette toekomstige blokken zonder voldoende hoge piek. Actieve blokken blijven staan. Bij onvolledige dagprijzen wordt niets verwijderd.",
           "price_window_duration_hours": "Bij dure pieken is dit de maximale tijd hoog. Na de piek stopt het blok eerder zodra de prijs terug is bij het omliggende dal plus de ingestelde piekdrempel. Goedkope blokken behouden hun vaste duur.",
           "demand_forecast_sensor": "Kies een zelfstandige verbruiksvoorspelling. Deze vervangt de interne verbruiksberekening; de veiligheidsmarge wordt daarna één keer toegepast.",
           "demand_energy_sensors": "Selecteer Wh/kWh-tellers (total of total_increasing), geen vermogenssensoren. De optionele totaalmeter omvat deze apparaten; alleen het restverbruik wordt erbij geteld."

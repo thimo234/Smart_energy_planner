@@ -305,6 +305,34 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde wijziging: kleine geplande pieken altijd opruimen — 19 oktober
+
+- Nieuw verzoek: verwijder de instelling waarmee kleine pieken bewaard kunnen
+  blijven; ruim ze standaard op, ook wanneer ze eerder zijn ingepland.
+  Dit vervangt de optionele opschoning uit de afspraak van 16 oktober.
+- Geïmplementeerd: toekomstige blokken zonder voldoende hoge piek worden altijd
+  verwijderd bij volledige dagprijzen. Ook een oude opgeslagen uitgeschakelde
+  optie wordt genegeerd. De schakelaar en vertalingen zijn verwijderd;
+  het sensorattribuut meldt altijd dat opschoning actief is.
+- De bestaande instelbare piekhoogtedrempel blijft gelden. Actieve blokken houden
+  de bestaande vervroegde stop bij terugkeer naar de normale prijs; ontbrekende
+  tarieven worden niet als bewijs voor een kleine piek gebruikt.
+- Aanvullend gebruikersverzoek: bij opstarten alle beschikbare tarieven bekijken,
+  opnieuw pieken bepalen en daarna vastzetten. Geïmplementeerd: herselecteer de
+  toekomstige blokken één keer per start zodra de betreffende dagprijzen volledig
+  zijn. Wacht bij ontbrekende prijzen met herselecteren en behoud de oude planning.
+  De actieve start en het werkelijke laatste einde blijven beschermd. Dit vervangt
+  de eerdere afspraak om toekomstige starttijden ook na herstart vast te houden.
+- Lokaal: 42 gerichte regressies geslaagd, inclusief oude uitgeschakelde optie,
+  herstart, ontbrekende/onvolledige prijzen, eenmalige herselectie en pauze.
+  Vergelijkingsgrafiek met tarieven 18 oktober: oud opgeslagen klein blok
+  15:45–16:00 vervalt voor 17:15–22:15. Aangenomen laatste einde 10:00,
+  herstart 13:00, maximum 5 uur, pauze 5 uur, piekdrempel 10%.
+  Dit is een scenario met echte tarieven, geen reconstructie van live opslag.
+- De gebruiker heeft op 19 oktober deze wijziging en vergelijkingsgrafiek
+  goedgekeurd en opdracht gegeven naar main te pushen.
+- Nog open: installatie en live controle in Home Assistant.
+
 ### Goedgekeurde wijziging: zelfstandige verbruiksplanner — 18 oktober
 
 - Nieuw plannertype `demand`, zonder accu- of Solcastvereiste. Selecteer een

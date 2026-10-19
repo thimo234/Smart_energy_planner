@@ -59,12 +59,13 @@ def _significant_peaks(groups, known, local_zone, minimum_percent):
 
 
 def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_gap_hours=1.0,
-                     minimum_prominence_percent=10.0, remove_small_pending=True, saved=None):
+                     minimum_prominence_percent=10.0, saved=None, reselect_pending=False):
     """Return persisted state; only complete known peaks can create new blocks.
 
     A flat summit is one peak, confirmed by lower prices on both sides.
     Prefer more prominent peaks when new blocks compete for the required pause.
-    Existing commitments remain fixed; return new blocks in time order.
+    Startup can reselect future commitments; active blocks retain their start.
+    Otherwise keep qualifying commitments fixed and return blocks in time order.
     The configured OFF time (at least 15 minutes) prevents concatenated ON time.
     """
     saved = saved if isinstance(saved, dict) else {}
@@ -117,17 +118,30 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
                 return False
             day += timedelta(days=1)
         return True
+    # At startup wait for full daily tariffs before replacing restored plans.
+    reselected = reselect_pending and complete_days(now, now + timedelta(microseconds=1))
+    if reselected:
+        for item in saved.get("windows", []):
+            if not isinstance(item, dict):
+                continue
+            start, end = parse(item.get("start")), parse(item.get("end"))
+            if start and end and start > now and not complete_days(start, end):
+                reselected = False
+                break
     committed = []
     last_end = parse(saved.get("last_end"))
     last_finished = parse(saved.get("last_finished_end"))
     if last_end and last_end <= now:
         last_finished = max(last_finished, last_end) if last_finished else last_end
-    removed = False
+    removed = reselected
     for item in saved.get("windows", []):
         if not isinstance(item, dict):
             continue
         start, end = parse(item.get("start")), parse(item.get("end"))
         if start is None or end is None or end <= start:
+            continue
+        if reselected and start > now:
+            removed = True
             continue
         # Changing the maximum may shorten a commitment; it can never extend it.
         end = min(end, start + duration)
@@ -154,7 +168,7 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
                 item["average_price"] = round(average, 6)
         if end <= now:
             last_finished = max(last_finished, end) if last_finished else end
-        elif (remove_small_pending and start > now and complete_days(start, end)
+        elif (start > now and complete_days(start, end)
               and not any(start <= at < end for at in peak_times)):
             removed = True
             continue
@@ -165,7 +179,8 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
     if removed:
         # Old versions saved only the final future end. Conservatively wait a
         # full gap from now when their last completed block cannot be recovered.
-        last_end = max([parse(w["end"]) for w in committed] + [last_finished or now])
+        last_end = max([parse(w["end"]) for w in committed] +
+                       [last_finished or (now-gap if reselected else now)])
     # Starting at an interval boundary also makes the maximum reproducible at each refresh.
     starts = sorted({w.start for w in known
                      if not whole_hour_start or (w.start.astimezone(local_zone).minute == 0 and w.start.second == 0)})
@@ -205,5 +220,6 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
         committed.append(block)
         last_end = max(last_end, end) if last_end else end
     return {"windows": sorted(committed, key=lambda w: datetime.fromisoformat(w["start"]).timestamp()),
+            "startup_reselected": bool(reselected),
             "last_end": stamp(last_end) if last_end else None,
             "last_finished_end": stamp(last_finished) if last_finished else None}

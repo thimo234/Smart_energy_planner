@@ -108,7 +108,6 @@ from .price_peaks import STATE_KEY as PRICE_PEAK_STATE_KEY, plan_price_peaks
 from .const import (
     CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
     CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
-    CONF_PRICE_PEAK_REMOVE_SMALL_PENDING, DEFAULT_PRICE_PEAK_REMOVE_SMALL_PENDING,
 )
 from .price_models import PlannerWindow
 from .planner_result import PlannerResult
@@ -1312,11 +1311,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     minimum_prominence_percent=float(self._config.get(
                         CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
                     )),
-                    remove_small_pending=bool(self._config.get(
-                        CONF_PRICE_PEAK_REMOVE_SMALL_PENDING, DEFAULT_PRICE_PEAK_REMOVE_SMALL_PENDING,
-                    )),
                     saved=runtime_state.get(PRICE_PEAK_STATE_KEY),
+                    reselect_pending=not getattr(self, "_price_peaks_initialized", False),
                 )
+                if peak_state.get("startup_reselected"):
+                    self._price_peaks_initialized = True
                 runtime_state[PRICE_PEAK_STATE_KEY] = peak_state
                 peak_windows = peak_state["windows"]
                 most_expensive_price_window = next(
