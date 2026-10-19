@@ -6,7 +6,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const output = path.resolve(process.argv[2] || 'mini-card-preview');
   fs.mkdirSync(output, {recursive:true});
   const browser = await chromium.launch({headless:true, executablePath:process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe'});
-  const page = await browser.newPage({viewport:{width:480,height:210}});
+  const page = await browser.newPage({viewport:{width:480,height:210}, ...(process.argv[3] ? {timezoneId:"Europe/Amsterdam",locale:"nl-NL"} : {})});
   if (process.argv[3]) {
     const snapshot=JSON.parse(fs.readFileSync(process.argv[3],'utf8'));
     await page.setViewportSize({width:1100,height:900});
@@ -20,10 +20,24 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
         const card=document.querySelector(tag);card.setConfig({planner_entity:'sensor.planner'});card._hass=hass;card.render();
       }
     },snapshot);
+    if (process.argv[4] === 'select-charge') {
+      await page.locator('smart-energy-planner-card .mode-box[data-mode="laden_met_zonne_energie"]').first().click();
+      const values = await page.locator('smart-energy-planner-card').evaluate(card => ({
+        demand:card.querySelector('[data-selected-demand]').textContent,
+        solar:card.querySelector('[data-selected-solar]').textContent,
+        label:card.querySelector('[data-demand-label]').textContent,
+      }));
+      if (values.demand !== '5.83' || values.solar !== '13.93' || values.label !== 'Verbruik (kWh)') throw new Error(JSON.stringify(values));
+    }
     await page.screenshot({path:path.join(output,'comparison-1100.png'),fullPage:true});
     fs.writeFileSync(path.join(output,'comparison.html'),await page.content());
     await page.setViewportSize({width:380,height:900});
     await page.screenshot({path:path.join(output,'comparison-380.png'),fullPage:true});
+    if (process.argv[4] === 'select-charge') {
+      await page.locator('smart-energy-planner-card .price-bar[data-selection-time]').first().click();
+      const label = await page.locator('[data-demand-label]').textContent();
+      if (label !== 'Verbruik (kW)') throw new Error('Point selection did not restore kW');
+    }
     await browser.close();console.log('Actual snapshot comparison rendered at desktop/mobile widths');return;
   }
   await page.setContent('<body style="margin:0;background:#fafafa;font-family:Arial"><div style="padding:8px;font-size:11px">Nord Pool-prijzen · verbruik/zon synthetisch · nu 14:07</div><smart-energy-planner-mini-card></smart-energy-planner-mini-card></body>');

@@ -225,3 +225,17 @@ const quarterSolar=card.extractSolarPoints({attributes:{estimated_hourly_solar_f
 assert.equal(quarterSolar[0].value,2);
 assert.equal(card.modeAtTime(card.modeBands(card.extractModeSchedule(actualState,at,until),at,until),at),'accu_uit');
 console.log('Actual snapshot: large/mini demand 2.604 kW, solar 2.79056 kW and mode agree');
+
+const periodSnapshot=require('./fixtures/battery_2026_10_19_period_energy.json');
+const charging=periodSnapshot.planned_battery_mode_windows.find(w=>w.mode==='laden_met_zonne_energie');
+const from=new Date(charging.start), to=new Date(charging.end);
+const periodState={attributes:periodSnapshot};
+const periodDemand=card.extractDemandPoints(periodState,undefined,from,to);
+const periodSolar=card.extractSolarPoints(periodState,from,to);
+const energy=card.periodValues(from,to,[],periodDemand,periodSolar);
+assert.equal(energy.demand.toFixed(2),'5.83');
+assert.equal(energy.solar.toFixed(2),'13.93');
+assert.equal(card.pointEnergy(from,to,[]),undefined);
+assert.equal(card.pointEnergy(from,to,periodDemand.slice(1)),undefined);
+assert.equal(card.selectionValues(from,[],periodDemand,periodSolar).solar,3.42368);
+console.log('Selected charging window totals: demand 5.83 kWh and solar 13.93 kWh');

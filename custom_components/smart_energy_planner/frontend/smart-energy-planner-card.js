@@ -212,11 +212,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
           <strong data-selected-price>${this.formatSelectedValue(currentValues.price)}</strong>
         </div>
         <div class="metric">
-          <span>Verbruik (kW)</span>
+          <span data-demand-label>Verbruik (kW)</span>
           <strong data-selected-demand>${this.formatSelectedValue(currentValues.demand)}</strong>
         </div>
         <div class="metric">
-          <span>Zon (kW)</span>
+          <span data-solar-label>Zon (kW)</span>
           <strong data-selected-solar>${this.formatSelectedValue(currentValues.solar, "0.00")}</strong>
         </div>
       </div>
@@ -385,8 +385,9 @@ class SmartEnergyPlannerCard extends HTMLElement {
                   data-selection-time="${this.escape(`${this.formatTime(start)} - ${this.formatTime(end)}`)}"
                   data-selection-ms="${start.getTime()}"
                   data-selected-price="${this.formatSelectedValue(values.price)}"
-                  data-selected-demand="${this.formatSelectedValue(values.demand, "0.00")}"
-                  data-selected-solar="${this.formatSelectedValue(values.solar, "0.00")}"
+                  data-energy-unit="kWh"
+                  data-selected-demand="${this.formatSelectedValue(values.demand)}"
+                  data-selected-solar="${this.formatSelectedValue(values.solar)}"
                   data-selected-mode="${this.escape(this.modeLabel(band.mode) + (this.isPreviewTime(plannerState, start) ? ' (vooruitblik)' : ''))}"
                   data-mode-start-ms="${start.getTime()}"
                   data-mode-end-ms="${end.getTime()}"
@@ -900,8 +901,8 @@ class SmartEnergyPlannerCard extends HTMLElement {
   periodValues(start, end, priceWindows, demandPoints, solarPoints) {
     return {
       price: this.weightedAveragePrice(start, end, priceWindows),
-      demand: this.averagePointPower(start, end, demandPoints),
-      solar: this.averagePointPower(start, end, solarPoints),
+      demand: this.pointEnergy(start, end, demandPoints),
+      solar: this.pointEnergy(start, end, solarPoints),
     };
   }
 
@@ -921,14 +922,15 @@ class SmartEnergyPlannerCard extends HTMLElement {
     return totalMs > 0 ? weightedPrice / totalMs : undefined;
   }
 
-  averagePointPower(start, end, points) {
-    let weighted = 0, covered = 0;
+  pointEnergy(start, end, points) {
+    let energy = 0, covered = 0;
     for (const point of points) {
       const overlap = this.overlapMs(start, end, point.start || point.time, point.end || point.time);
-      weighted += point.value * overlap;
+      energy += point.value * overlap / 3600000;
       covered += overlap;
     }
-    return covered ? weighted / covered : undefined;
+    // An incomplete forecast is not a complete period total.
+    return end > start && Math.abs(covered - (end - start)) < 1 ? energy : undefined;
   }
 
   overlapMs(start, end, otherStart, otherEnd) {
@@ -1163,6 +1165,11 @@ class SmartEnergyPlannerCard extends HTMLElement {
         this._selectedRangeStart = undefined;
         this._selectedRangeEnd = undefined;
       }
+      const unit = dataset.energyUnit || "kW";
+      const demandLabel = this.querySelector("[data-demand-label]");
+      const solarLabel = this.querySelector("[data-solar-label]");
+      if (demandLabel) demandLabel.textContent = `Verbruik (${unit})`;
+      if (solarLabel) solarLabel.textContent = `Zon (${unit})`;
       selectedTime.textContent = dataset.selectionTime || dataset.nowTime || "Nu";
       selectedPrice.textContent = dataset.selectedPrice || dataset.nowPrice || "-";
       selectedDemand.textContent = dataset.selectedDemand || dataset.nowDemand || "-";

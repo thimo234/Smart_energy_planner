@@ -305,6 +305,23 @@ geverifieerd is. Lees ook de open punten onderaan.
 
 ## Werkstatus bij laatste bijwerking
 
+### Goedgekeurde kaartwijziging: energie bij selectie van een venster — 19 oktober
+
+- Gebruiker wil totalen in de bestaande velden, geen extra velden. Bij een
+  geselecteerd modusvenster tonen Verbruik en Zon voortaan kWh over dat venster.
+  Bij selectie van een tijdstip blijven beide kW; de curve-as blijft altijd kW.
+  Dit vervangt de gemiddelde vermogens in de venstersamenvatting.
+- Geïmplementeerd: integreer vermogen over de werkelijke overlappende slotduur,
+  inclusief gedeeltelijke kwartieren/uren. Onvolledige dekking geeft onbekend,
+  geen volledig totaal op basis van slechts een deel van het venster.
+- Met de aangeleverde planning van 19 oktober 14:26: venster morgen 11:00 tot
+  14:44 toont 5,83 kWh verbruik en 13,93 kWh zon. Plannerberekening ongewijzigd.
+- Frontendregressies en browsercontrole op desktop/mobiel geslaagd, inclusief
+  terugschakelen naar kW bij selectie van een tijdstip. Preview period-energy
+  gebruikt de echte plannerreeksen; gemeten historie is niet meegeleverd.
+- De gebruiker heeft deze concrete kaartpreview op 19 oktober goedgekeurd en
+  opdracht gegeven te pushen. Nog open: installatie en live controle.
+
 ### Goedgekeurde wijziging: alleen relevante apparaatinstellingen — 19 oktober
 
 - Nieuw verzoek: starttijd en weekdagen uitsluitend bij vaste start; uren na
