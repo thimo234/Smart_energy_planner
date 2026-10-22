@@ -4,7 +4,8 @@ from datetime import timedelta
 
 def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
                            max_discharge_kw, minimum_profit, existing_energy=0.,
-                           allow_export=False, historical_cost=None):
+                           allow_export=False, historical_cost=None,
+                           discharge_budget_kwh=None):
     by_start = {slot['start']: slot for slot in slots}
     imports = []
     for item in selected:
@@ -34,7 +35,10 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
     remaining = needed
     existing = max(0., existing_energy)
     value = 0.
+    budget = float('inf') if discharge_budget_kwh is None else max(0., discharge_budget_kwh)
     for price, capacity in sorted(demand, reverse=True):
+        capacity = min(capacity, budget)
+        budget -= capacity
         used = min(existing, capacity)
         existing -= used
         take = min(remaining, capacity-used)
@@ -45,5 +49,7 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
                 discharge_value=value,
                 average_profit=(value-cost)/needed if needed > 1e-9 else 0.,
                 # A zero-import command cannot bypass the solar-profit check.
-                profitable=needed > 1e-9 and remaining <= 1e-6
+                # Retained reserve has no realized value. The available sales
+                # must cover the cost AND margin of the entire purchase.
+                profitable=needed > 1e-9 and (remaining <= 1e-6 or discharge_budget_kwh is not None)
                 and value-cost + 1e-9 >= needed*minimum_profit)

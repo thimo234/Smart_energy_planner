@@ -7,9 +7,9 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 
 
 class ChargeWindowStabilityTest(unittest.TestCase):
-    def plan(self, instance, now, soc=20, snapshot="2026_09_26_drifting"):
+    def plan(self, instance, now, soc=20, snapshot="2026_09_26_drifting", reserve=60):
         return replay_full_plan(
-            snapshot=snapshot, timestamp=now.isoformat(), soc=soc, reserve=60,
+            snapshot=snapshot, timestamp=now.isoformat(), soc=soc, reserve=reserve,
             tax_deduction=.11, instance=instance, isolated_cycles=True,
         )
 
@@ -71,7 +71,9 @@ class ChargeWindowStabilityTest(unittest.TestCase):
         now = datetime.fromisoformat("2026-09-19T13:16:06+02:00")
         energy = 2.0
         for _ in range(6):
-            _, slots, result = self.plan(instance, now, energy * 10, "2026_09_19_morning")
+            # With 60% retained, this full purchase no longer earns its margin.
+            # Test execution timing with all usable energy available to sell.
+            _, slots, result = self.plan(instance, now, energy * 10, "2026_09_19_morning", reserve=20)
             self.assertEqual(result.battery_strategy, "laden_van_net")
             until = now + timedelta(minutes=5)
             windows = [{**w, "end": min(datetime.fromisoformat(w["end"]), until).isoformat()}

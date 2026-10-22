@@ -104,6 +104,16 @@ geverifieerd is. Lees ook de open punten onderaan.
   en gesimuleerde energie; neem 100% niet aan zonder bijbehorende lading.
 - Het huidige rekenmodel gebruikt tariefverschillen. Omzettingsverliezen en
   slijtage zijn niet daarin verwerkt; verander die definitie niet ongemerkt.
+- Verduidelijking 22 oktober: beoordeel vooraf ontladen, goedkoop volladen en
+  latere ontlading samen. Het doorgetrokken daggemiddelde mag ook de latere
+  ontlading economisch onderbouwen. Tel geen verkoop/besparing toe aan energie
+  die wegens het ontbreken van een volgend laadvenster in de extra reserve
+  moet blijven. De beschikbare afname moet kosten plus minimumwinst over de
+  volledige netaanvulling dragen; achterblijvende voorraad krijgt geen opbrengst.
+- Expliciete keuze 22 oktober: houd niet bewust meer energie vast vóór het
+  laden om een kleinere cyclus rendabel te maken. Sla de volledige cyclus over
+  als volledig ontladen en volladen niet rendabel is. De bestaande uitzondering
+  voor een werkelijk onvermijdelijk restant blijft ongewijzigd.
 
 ## 3. Niet pendelen tussen laden en ontladen
 
@@ -1490,4 +1500,34 @@ geverifieerd is. Lees ook de open punten onderaan.
   grotere verschillen, winstgrens, herhaalde herberekeningen en energiebalans.
 - De gebruiker heeft deze concrete grafiek op 1 oktober goedgekeurd en opdracht
   gegeven de wijziging naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+### Controle 22 oktober: vooraf plannen en reserve in winstberekening
+
+- Netaanvulling gebruikt dezelfde geschiktheid vóór ontlading als de primaire
+  laadselectie. De bestaande fysieke simulatie moet daarna bevestigen dat de
+  accu op tijd kan ontladen; de berekende leeglooptijd door uitsluitend
+  huisverbruik mag een gemengde zon/netcyclus niet vooraf uitsluiten.
+- Zonder gevonden volgend goedkoper laadmoment begrenst de winstberekening
+  de afname met de ingestelde extra reserve. De achterblijvende energie krijgt
+  geen fictieve verkoopopbrengst. Ook na het bundelen geldt die controle.
+- Meting 22 oktober 11:00, SOC 90%: geen volledige rendabele netcyclus bij
+  60% reserve. Een ochtendberekening met dezelfde prognoses zou circa 7,69 kWh
+  inkopen voor EUR 1,78, tegenover slechts circa EUR 1,67 huisbesparing na
+  het laden; bewust kleiner cycleren is door de gebruiker afgewezen.
+- Synthetisch controlescenario: dezelfde prognoses, avondimportprijzen vanaf
+  16:00 verdubbeld, 90% SOC om 06:00 aangenomen (geen historische meting).
+  Ontladen vóór middagladen blijft bij 42 updates van 15 minuten behouden.
+  Onafhankelijke integratie controleert 20–100% SOC en minimumwinst zonder
+  opbrengst van ochtendexport of behouden voorraad aan netlading toe te rekenen.
+- Replays: 10 kWh, 2,5 kW laden, 3 kW ontladen, geen extra marge bovenop de
+  aangeleverde prognoses. Historische inkoopprijs ontbreekt in deze meting.
+- Controle: brede suite 288 tests, 283 direct geslaagd. Vijf oude verwachtingen
+  rekenden met verkoop van de 60%-reserve. Economische afwijzing is nu expliciet
+  getest; dezelfde timing-/capaciteitstests draaien bij 20% reserve. Daarna
+  alle 10 gerichte tests geslaagd, inclusief de vijf betrokken tests en nieuwe
+  regressies. Productiecode bleef tijdens deze testaanpassingen gelijk.
+- Grafiek gebruikt de bestaande generator/template; geen frontendwijziging.
+- De gebruiker heeft de concrete grafiek op 22 oktober goedgekeurd en opdracht
+  gegeven deze wijziging naar main te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.

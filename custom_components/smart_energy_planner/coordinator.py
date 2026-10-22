@@ -1552,6 +1552,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             battery_min_profit=battery_min_profit,
             # Solar uncertainty is already included in the energy balance.
             charge_safety_margin=0.0,
+            no_charge_reserve_kwh=no_charge_reserve_kwh,
         )
         next_planned_solar_charge_start = min(
             (
@@ -2090,6 +2091,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         max_discharge_kw: float,
         battery_min_profit: float,
         charge_safety_margin: float = 0.0,
+        no_charge_reserve_kwh: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2535,7 +2537,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 else 0.0
             )
             regular_grid_topup_allowed = (
-                first_grid_charge_start is not None
+                # Match primary eligibility: the physical simulation also
+                # considers export before a refill, not just home depletion.
+                (self._cycle_export_enabled or first_grid_charge_start is not None)
                 and projected_usable_soc_percent < 95.0
             )
             if charged_kwh < target_kwh and (regular_grid_topup_allowed or active_charge_cycle_needs_topup):
@@ -2549,8 +2553,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     candidate for candidate in cycle_candidates
                     if candidate["kind"] == "grid" and float(candidate["cost"]) >= 0
                     and _is_profitable_charge(candidate)
-                    and first_grid_charge_start is not None
-                    and max(now, cast(datetime, candidate["start"])) >= first_grid_charge_start
+                    and (self._cycle_export_enabled or (
+                        first_grid_charge_start is not None
+                        and max(now, cast(datetime, candidate["start"])) >= first_grid_charge_start
+                    ))
                     and cast(datetime, candidate["start"]) < valley_block_end
                 ]
                 used_grid_starts = {
@@ -2671,6 +2677,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
                     existing_energy=existing_energy, allow_export=self._cycle_export_enabled,
                     historical_cost=historical_cost,
+                    discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
+                        no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
                 )
                 # A small profitable peak cannot justify buying a full cycle.
                 # The daily-mean forecast may support the economic estimate;
@@ -2796,6 +2804,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
                     existing_energy=existing_energy, allow_export=self._cycle_export_enabled,
                     historical_cost=historical_cost,
+                    discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
+                        no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
                 )
                 if not bundled_profit["profitable"]:
                     selected_for_cycle = selection_before_bundling
@@ -3872,6 +3882,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             slots=future, now=start, usable_capacity_kwh=capacity,
             current_remaining_capacity_kwh=max(0., capacity-energy),
             max_charge_kw=max_charge, max_discharge_kw=max_discharge, battery_min_profit=min_profit,
+            no_charge_reserve_kwh=reserve,
         )
         modes, _ = preview._build_mode_windows_from_hourly_plan(
             slots=future, now=start, planned_solar_charge_windows=solar, planned_grid_charge_windows=grid,

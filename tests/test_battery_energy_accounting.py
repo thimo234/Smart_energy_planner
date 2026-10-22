@@ -165,7 +165,7 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertEqual(history[0][1].battery_strategy, "laden_met_zonne_energie")
         self.assertGreaterEqual(max(energy for _, _, energy in history), 9.95)
 
-    def run_feedback_updates(self, snapshot, timestamp, soc, count, minutes=5):
+    def run_feedback_updates(self, snapshot, timestamp, soc, count, minutes=5, reserve=60):
         """Execute successive commands, update SOC, and reuse persisted state."""
         c = coordinator()
         now = datetime.fromisoformat(timestamp)
@@ -173,7 +173,7 @@ class EnergyAccountingTest(unittest.TestCase):
         history = []
         for _ in range(count):
             _, slots, result = replay_full_plan(
-                snapshot, now.isoformat(), soc=energy * 10, reserve=60,
+                snapshot, now.isoformat(), soc=energy * 10, reserve=reserve,
                 max_charge=2.5, instance=c,
             )
             until = now + timedelta(minutes=minutes)
@@ -226,7 +226,9 @@ class EnergyAccountingTest(unittest.TestCase):
 
     def test_committed_grid_refill_does_not_cancel_itself_halfway(self):
         _, history = self.run_feedback_updates(
-            "2026_09_19_morning", "2026-09-19T12:30:00+02:00", 20, 60,
+            # October 22: reserve stock cannot earn revenue. Keep this timing
+            # test economically valid without the additional 60% reserve.
+            "2026_09_19_morning", "2026-09-19T12:30:00+02:00", 20, 60, reserve=20,
         )
         self.assertTrue(all(r.battery_strategy == "laden_van_net" for _, r, _ in history[2:36]))
         # The integration treats >=99.5% as full to avoid SOC sensor chatter.
@@ -259,7 +261,9 @@ class EnergyAccountingTest(unittest.TestCase):
     def test_small_solar_window_gets_grid_topup_and_later_solar_respects_capacity(self):
         now, slots, result = replay_full_plan(
             "2026_09_19_morning", "2026-09-19T08:00:10.907547+02:00",
-            soc=44, discharging=True, reserve=60, max_charge=2.5,
+            # This test checks physical capacity; the 60% reserve rejection
+            # for this same input is covered by PreplannedRefillTest.
+            soc=44, discharging=True, reserve=20, max_charge=2.5,
         )
         grid = result.planned_grid_charge_windows
         self.assertEqual(len(grid), 1)

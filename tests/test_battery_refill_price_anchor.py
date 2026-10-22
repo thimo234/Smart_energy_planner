@@ -10,7 +10,9 @@ class RefillPriceAnchorTest(unittest.TestCase):
     def replay(self, timestamp='2026-09-27T16:54:07.006343+02:00', soc=100, instance=None):
         return replay_full_plan(
             '2026_09_27_late_refill', timestamp, soc=soc, discharging=True,
-            reserve=60, max_charge=2.5, tax_deduction=.11,
+            # The full purchase earns its margin only if the extra reserve is
+            # released. Separate regression coverage rejects it at 60%.
+            reserve=20, max_charge=2.5, tax_deduction=.11,
             isolated_cycles=True, instance=instance,
         )
 
