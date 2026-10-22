@@ -59,7 +59,7 @@ def _significant_peaks(groups, known, local_zone, minimum_percent):
 
 
 def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_gap_hours=1.0,
-                     minimum_prominence_percent=10.0, saved=None, reselect_pending=False):
+                     minimum_prominence_percent=10.0, minimum_duration_minutes=60.0, saved=None, reselect_pending=False):
     """Return persisted state; only complete known peaks can create new blocks.
 
     A flat summit is one peak, confirmed by lower prices on both sides.
@@ -74,6 +74,7 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
     def stamp(value):
         return value.astimezone(local_zone).isoformat()
     duration = timedelta(hours=duration_hours)
+    minimum_duration = timedelta(minutes=max(0.0, minimum_duration_minutes))
     gap = timedelta(hours=max(0.25, minimum_gap_hours))
     if duration <= timedelta(0):
         return {"windows": [], "last_end": saved.get("last_end")}
@@ -94,19 +95,70 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
             groups.append(window)
     peaks = _significant_peaks(groups, known, local_zone, minimum_prominence_percent)
     peak_times = [top.start+(top.end-top.start)/2 for top, _, _ in peaks]
+    def following_valley(peak_at):
+        """Follow a falling group until half its drop has been recovered.
+
+        A tiny rebound is a shoulder, not a new basin. Stop at missing data;
+        never borrow the valley of a later independent peak.
+        """
+        index = next((i for i, w in enumerate(known)
+                      if w.start <= peak_at < w.end), None)
+        if index is None:
+            return None
+        summit = known[index]
+        prominence = next((height for top, height, _ in peaks
+                           if top.start <= peak_at < top.end), 0.0)
+        valley = summit
+        previous = summit
+        for window in known[index + 1:]:
+            if previous.end != window.start:
+                break
+            drop = summit.price - valley.price
+            if (drop > 1e-10 and drop >= prominence / 2 - 1e-10
+                    and window.price >= valley.price + drop / 2 - 1e-10):
+                break
+            if window.price < valley.price:
+                valley = window
+            previous = window
+        return valley
+
     def normal_price(peak, prominence, span):
-        return peak.price-prominence+span*max(0.0, min(100.0, minimum_prominence_percent))/100
+        valley = following_valley(peak.start + (peak.end-peak.start)/2)
+        floor = valley.price if valley is not None else peak.price-prominence
+        return floor + (peak.price-floor)*max(0.0, min(100.0, minimum_prominence_percent))/100
 
     def early_end(start, end, peak_at, threshold):
         if peak_at is None or threshold is None or not start <= peak_at < end:
             return end
-        # Never infer a return to normal across missing or overlapping tariffs.
-        for window in known:
-            if peak_at < window.start < end and window.price <= threshold + 1e-10:
-                if _average(known, start, window.start) is not None:
-                    return window.start
-                return end
-        return end
+        summit = next((w for w in known if w.start <= peak_at < w.end), None)
+        valley = following_valley(peak_at)
+        if summit is None or valley is None or _average(known, start, end) is None:
+            return end
+        # Keep later qualifying shoulders in the same block, bridging small dips.
+        qualifying = [w.end for w in known
+                      if summit.start <= w.start < min(end, valley.start)
+                      and (w.price > threshold + 1e-10 or w.price == summit.price)]
+        return min(end, max(qualifying, default=summit.end))
+
+    def late_start(start, end, peak_at, threshold):
+        """Trim the rising flank too, while retaining the summit and alignment."""
+        if peak_at is None or threshold is None or not start <= peak_at < end:
+            return start
+        if _average(known, start, end) is None:
+            return start
+        summit = next((w.price for w in known if w.start <= peak_at < w.end), None)
+        if summit is None:
+            return start
+        boundary = max((w.end for w in known
+                        if start < w.end <= peak_at and w.price <= threshold + 1e-10
+                        and w.price < summit - 1e-10),
+                       default=start)
+        # With whole-hour starts, round back rather than past the summit.
+        return max((w.start for w in known if start <= w.start <= boundary
+                    and w.start <= peak_at
+                    and (not whole_hour_start or (
+                        w.start.astimezone(local_zone).minute == 0 and w.start.second == 0))),
+                   default=start)
 
     def complete_days(start, end):
         day = start.astimezone(local_zone).date()
@@ -140,6 +192,10 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
         start, end = parse(item.get("start")), parse(item.get("end"))
         if start is None or end is None or end <= start:
             continue
+        if (start > now and item.get("peak_group_version") != 1
+                and complete_days(start, end)):
+            removed = True
+            continue
         if reselected and start > now:
             removed = True
             continue
@@ -160,12 +216,17 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
             removed = True  # Rebuild the search boundary from actual ends.
             end = shortened
         item = {**item}
+        if start > now and complete_days(start, end):
+            start = late_start(start, end, peak_at, threshold)
         if threshold is not None and end != parse(item.get("end")):
             item["normal_price_threshold"] = threshold
-        if end != parse(item.get("end")):
+        if end != parse(item.get("end")) or start != parse(item.get("start")):
             average = _average(known, start, end)
             if average is not None:
                 item["average_price"] = round(average, 6)
+        if start > now and end-start < minimum_duration and complete_days(start, end):
+            removed = True
+            continue
         if end <= now:
             last_finished = max(last_finished, end) if last_finished else end
         elif (start > now and complete_days(start, end)
@@ -173,7 +234,7 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
             removed = True
             continue
         else:
-            committed.append({**item, "end": stamp(end),
+            committed.append({**item, "start": stamp(start), "end": stamp(end),
                               "duration_hours": (end-start).total_seconds()/3600})
         last_end = max(last_end, end) if last_end else end
     if removed:
@@ -202,11 +263,15 @@ def plan_price_peaks(windows, *, now, duration_hours, whole_hour_start, minimum_
         average, start, end = max(candidates, key=lambda c: (c[0], -c[1].timestamp()))
         threshold = normal_price(peak, prominence, span)
         end = early_end(start, end, peak_at, threshold)
+        start = late_start(start, end, peak_at, threshold)
+        if end-start < minimum_duration:
+            continue
         average = _average(known, start, end)
         proposals.append((prominence, start, end, {"start": stamp(start), "end": stamp(end),
                           "average_price": round(average, 6),
                           "duration_hours": (end-start).total_seconds()/3600,
                           "normal_price_threshold": threshold,
+                          "peak_group_version": 1,
                           "peak_at": stamp(peak_at), "peak_price": peak.price,
                           "peak_prominence": round(prominence, 6),
                           "day_price_spread": round(span, 6)}))

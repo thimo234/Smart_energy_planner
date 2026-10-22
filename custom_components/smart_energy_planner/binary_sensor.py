@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_PRICE_WINDOW_TYPE,
+    CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES,
     CONF_PRICE_PEAK_MIN_GAP_HOURS,
     DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
     CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
@@ -133,6 +134,8 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
             "average_price": window.get("average_price"),
             "duration_hours": window.get("duration_hours"),
             "planned_price_peak_windows": self._peak_windows,
+            "minimum_peak_duration_minutes": merged.get(
+                CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES),
             "minimum_gap_hours": merged.get(CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS),
             "minimum_peak_prominence_percent": merged.get(
                 CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT,

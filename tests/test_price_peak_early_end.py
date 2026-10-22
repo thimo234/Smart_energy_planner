@@ -46,11 +46,12 @@ class EarlyEndTest(unittest.TestCase):
     def test_returns_to_valley_plus_percentage_not_daily_average(self):
         raw = prices((.1, .3, .6, .3, .15, .1, .1, .1))
         block = plan(raw, duration_hours=5)['windows'][0]
-        self.assertEqual(block['start'], NOW.isoformat())
+        # Both flanks are shortened; the cheap lead-in is no longer retained.
+        self.assertEqual(block['start'], (NOW+timedelta(hours=1)).isoformat())
         self.assertEqual(block['end'], (NOW+timedelta(hours=4)).isoformat())
         self.assertAlmostEqual(block['normal_price_threshold'], .15)
-        self.assertAlmostEqual(block['average_price'], .325)
-        self.assertEqual(block['duration_hours'], 4)
+        self.assertAlmostEqual(block['average_price'], .4)
+        self.assertEqual(block['duration_hours'], 3)
 
     def test_shortened_end_survives_restart_missing_prices_and_higher_duration(self):
         raw = prices((.1, .3, .6, .3, .15, .1, .1, .1))
@@ -101,7 +102,7 @@ class EarlyEndTest(unittest.TestCase):
                                  whole_hour_start=False)['windows']
         morning = next(w for w in result if w['peak_at'][11:16]=='10:07')
         self.assertEqual(morning['end'][11:16],'10:30')
-        self.assertAlmostEqual(morning['normal_price_threshold'],.359)
+        self.assertAlmostEqual(morning['normal_price_threshold'],.3554)
 
     def test_missing_tariffs_do_not_shorten_saved_block(self):
         raw = prices((.1, .3, .6, .3, .15, .1, .1, .1))

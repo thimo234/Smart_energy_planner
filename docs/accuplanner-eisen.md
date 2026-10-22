@@ -655,6 +655,45 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Samen met de voorrang voor grote pieken goedgekeurd op 18 oktober.
 - Nog open: installatie en live verificatie.
 
+### Lokale wijziging: piekgroepen en minimale duur - 22 oktober
+
+- Goedgekeurde wens: neem lagere latere toppen in dezelfde piekgroep mee.
+  Gebruik voor de venstergrens het volgende dal plus het ingestelde percentage
+  van het verschil tussen dat dal en de hoofdtop. 50% is halverwege.
+  Dit vervangt de eerdere dagdrempel voor het inkorten van het venster.
+  De bestaande selectie van significante hoofdtoppen op dagverschil blijft.
+- Geimplementeerd: kort beide flanken in binnen het duurste maximale blok.
+  Overbrug tussendips tot de laatste kwalificerende top voor het volgende dal.
+  De hoofdtop blijft inbegrepen, ook een vlakke top bij 100%.
+  Hele-uurstarts ronden terug; maximumduur en minimale pauze blijven gelden.
+- De dalherkenning volgt de daling tot een herstel van minstens de helft van
+  die daling, nadat minstens de helft van de gemeten prominentie is gedaald.
+  Kleine rimpels breken de groep daardoor niet op. Stop bij ontbrekende data.
+  Deze structurele herkenningsregel is een implementatiekeuze, geen extra
+  gebruikersinstelling.
+- Nieuwe expliciete keuze: instelbare minimale piekduur, standaard 60 minuten.
+  Sla kortere toekomstige blokken over; verleng ze niet. 0 schakelt het
+  duurfilter uit. Bij een minimum boven het maximum passen geen nieuwe blokken.
+  Een actief blok wordt niet wegens deze minimumduur afgebroken.
+- Bestaande toekomstige blokken uit de oude versie worden eenmalig opnieuw
+  gekozen zodra volledige dagprijzen beschikbaar zijn. Actieve en historische
+  starts blijven vast; geen herselectie op ontbrekende of overlappende prijzen.
+- Echte tarieven van 22/23 oktober, 50%, maximaal 5 uur, 5 uur pauze,
+  kwartierstarts en minimum 60 minuten: avond 17:15-21:45, ochtend 06:30-10:15.
+  Ochtendtop EUR 0,398, volgend middagdal EUR 0,239, grens EUR 0,3185/kWh.
+  De lagere toppen om 09:00 en 10:00 blijven binnen hetzelfde ochtendblok.
+  De avond eindigt met de nieuwe regel 30 minuten eerder dan de oude planning.
+- Controle: 45 gerichte prijspiektests geslaagd. Inclusief echte tarieven,
+  tussendips, afzonderlijke dalen, minimale duur, exacte grens, uitschakelen
+  van het filter, herstart, oude/opgeslagen/actieve blokken en prijsuitval.
+  Syntax en Nederlandse/Engelse instellingsteksten gecontroleerd.
+  Oude drempelverwachtingen zijn aangepast aan deze expliciete nieuwe regel.
+- Grafiek hergebruikt scripts/visualize_battery.py en de bestaande template.
+  De gebruiker heeft op 22 oktober de definitieve vergelijking inclusief de
+  kortere avond en minimumduur goedgekeurd en opdracht gegeven naar main
+  te committen en pushen.
+  Nog open: installatie/live controle in Home Assistant.
+
 ### Goedgekeurde wijziging: dure piekblokken eerder stoppen — 18 oktober
 
 - Gebruikersverzoek: ingestelde lengte (hier 5 uur) is een maximum. Stop na

@@ -37,7 +37,8 @@ class PeakProminenceTest(unittest.TestCase):
         self.assertEqual([w['peak_prominence'] for w in result], [.061,.072])
 
     def test_percentage_is_configurable_and_zero_restores_small_peaks(self):
-        self.assertEqual(len(replay(minimum_prominence_percent=0)['windows']), 5)
+        # Disable minimum duration to isolate the prominence filter.
+        self.assertEqual(len(replay(minimum_prominence_percent=0, minimum_duration_minutes=0)['windows']), 5)
         self.assertEqual(len(replay(minimum_prominence_percent=10)['windows']), 2)
         self.assertEqual(len(replay(minimum_prominence_percent=50)['windows']), 0)
 
@@ -65,7 +66,8 @@ class PeakProminenceTest(unittest.TestCase):
         saved = legacy_state()
         filtered = replay(saved=saved)['windows']
         self.assertEqual(len(filtered),2)
-        self.assertEqual(filtered, [saved['windows'][1],saved['windows'][3]])
+        self.assertEqual([(w['start'], w['end']) for w in filtered],
+                         [(w['start'], w['end']) for w in (saved['windows'][1], saved['windows'][3])])
         restored = replay(saved=json.loads(json.dumps(replay(saved=saved))))
         self.assertEqual(restored['windows'], filtered)
 
@@ -122,6 +124,7 @@ class PeakSettingsTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(instance._price_peaks_initialized,result.source_errors)
             updated=await instance._async_update_data()
             self.assertEqual(updated.planned_price_peak_windows,result.planned_price_peak_windows)
+        self.assertTrue(all(call.kwargs['minimum_duration_minutes'] == 60 for call in planner.call_args_list))
         self.assertEqual([call.kwargs['reselect_pending'] for call in planner.call_args_list], [True,True,False])
 
     async def test_legacy_false_option_cannot_disable_cleanup(self):

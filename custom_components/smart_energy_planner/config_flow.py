@@ -16,6 +16,7 @@ from .const import (PLANNER_KIND_DEMAND, CONF_DEMAND_DEVICES, CONF_DEMAND_ENERGY
                     CONF_DEMAND_FORECAST_SENSOR)
 
 from .const import (
+    CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES,
     CONF_PRICE_PEAK_MIN_GAP_HOURS,
     DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
     CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
@@ -346,6 +347,12 @@ def _build_price_window_schema(hass: HomeAssistant, user_input: dict[str, Any] |
                 default=user_input.get(CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=100, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Required(
+                CONF_PRICE_PEAK_MIN_DURATION_MINUTES,
+                default=user_input.get(CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=1440, step=15, mode=selector.NumberSelectorMode.BOX)
             ),
             vol.Required(
                 CONF_PRICE_PEAK_MIN_GAP_HOURS,

@@ -106,6 +106,7 @@ from .price_helpers import (
 )
 from .price_peaks import STATE_KEY as PRICE_PEAK_STATE_KEY, plan_price_peaks
 from .const import (
+    CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES,
     CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
     CONF_PRICE_PEAK_MIN_PROMINENCE_PERCENT, DEFAULT_PRICE_PEAK_MIN_PROMINENCE_PERCENT,
 )
@@ -1337,6 +1338,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 peak_state = plan_price_peaks(
                     all_windows if source_status.get("price_sensor") == "ok" else [],
                     now=now, duration_hours=duration_hours, whole_hour_start=whole_hour_start,
+                    minimum_duration_minutes=float(self._config.get(
+                        CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES,
+                    )),
                     minimum_gap_hours=float(self._config.get(
                         CONF_PRICE_PEAK_MIN_GAP_HOURS, DEFAULT_PRICE_PEAK_MIN_GAP_HOURS,
                     )),

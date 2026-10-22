@@ -51,7 +51,7 @@ class PeakPlanningTest(unittest.TestCase):
 
     def test_negative_prices_and_quarter_hour_contract(self):
         result = plan(prices((-.5, -.4, -.1, -.2, -.4, -.5), step=.25),
-                      duration_hours=.5, whole_hour_start=False)["windows"]
+                      duration_hours=.5, whole_hour_start=False, minimum_duration_minutes=30)["windows"]
         self.assertEqual(result[0]["start"], (NOW+timedelta(minutes=30)).isoformat())
         self.assertAlmostEqual(result[0]["average_price"], -.15)
 
