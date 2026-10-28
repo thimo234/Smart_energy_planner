@@ -1,4 +1,4 @@
-"""Select the refill before releasing reserve; never sell retained stock on paper."""
+"""Select a refill before releasing reserve; retained stock stays at cost."""
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,15 +32,19 @@ class PreplannedRefillTest(unittest.TestCase):
                 window['price'] *= 2
         return data
 
-    def test_supplied_day_does_not_buy_stock_that_must_remain_reserved(self):
+    def test_reserve_stock_allows_early_refill_but_cannot_fix_a_late_start(self):
         for at in ('2026-10-22T06:00:00+02:00', '2026-10-22T11:00:23.157288+02:00'):
             with self.subTest(at=at):
                 now, slots, result = self.replay(self.data, at)
-                self.assertFalse(result.planned_grid_charge_windows)
-                self.assertTrue(result.battery_no_charge_reserve_active)
+                # October 25: reserve is carried at cost. The early full
+                # refill now earns the margin on the dischargeable portion.
+                early = now.hour == 6
+                self.assertEqual(bool(result.planned_grid_charge_windows), early)
+                self.assertEqual(result.battery_no_charge_reserve_active, not early)
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=9, max_charge=2.5)
-                self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995 if early else 5.995)
+                self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_profitable_full_refill_is_planned_before_household_depletion(self):
         now, slots, result = self.replay(self.profitable_scenario())
@@ -69,17 +73,21 @@ class PreplannedRefillTest(unittest.TestCase):
         # Do not include morning exports or put a value on retained stock.
         self.assertGreaterEqual(saved-cost, imported*.10)
 
-    def test_older_full_purchase_examples_cannot_sell_the_sixty_percent_reserve(self):
+    def test_older_refills_can_keep_the_sixty_percent_reserve_at_cost(self):
         for snapshot, timestamp, soc in (
             ('2026_09_19_morning', '2026-09-19T08:00:10.907547+02:00', 44),
             ('2026_09_27_late_refill', '2026-09-27T16:54:07.006343+02:00', 100),
         ):
             with self.subTest(snapshot=snapshot):
-                _, _, result = replay_full_plan(snapshot, timestamp, soc=soc,
+                now, slots, result = replay_full_plan(snapshot, timestamp, soc=soc,
                     discharging=True, reserve=60, max_charge=2.5, tax_deduction=.11,
                     isolated_cycles=True)
-                self.assertFalse(result.planned_grid_charge_windows)
-                self.assertTrue(result.battery_no_charge_reserve_active)
+                self.assertTrue(result.planned_grid_charge_windows)
+                self.assertFalse(result.battery_no_charge_reserve_active)
+                trace = energy_trace(now, slots, result.planned_battery_mode_windows,
+                                     initial=soc/10, max_charge=2.5)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+                self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_repeated_updates_discharge_then_fill_without_losing_window(self):
         data = self.profitable_scenario()
@@ -117,4 +125,7 @@ class PreplannedRefillTest(unittest.TestCase):
                     slots=slots, after=slots[1]['start'], before=slots[-1]['end'],
                     max_charge_kw=3, max_discharge_kw=3, minimum_profit=.10)
         self.assertTrue(grid_supplement_profit(**args, discharge_budget_kwh=3)['profitable'])
-        self.assertFalse(grid_supplement_profit(**args, discharge_budget_kwh=2)['profitable'])
+        partial = grid_supplement_profit(**args, discharge_budget_kwh=2)
+        self.assertTrue(partial['profitable'])
+        self.assertAlmostEqual(partial['retained_import_cost'], .20)
+        self.assertAlmostEqual(partial['average_profit'], .16)

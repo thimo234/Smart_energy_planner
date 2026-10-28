@@ -74,7 +74,8 @@ geverifieerd is. Lees ook de open punten onderaan.
   energie bij een herberekening als al aanwezige voorraad wordt afgetrokken.
 - Ga niet bij ieder toekomstig laadvenster opnieuw uit van een lege accu:
   simuleer resterende energie en respecteer de werkelijke beschikbare ruimte.
-- Gewijzigd op 8 oktober: start een nieuwe netlaadcyclus alleen wanneer de
+- Historische eis 8 oktober (reserveboekhouding vervangen op 25 oktober):
+  start een nieuwe netlaadcyclus alleen wanneer de
   verwachte rendabele afname de volledige benodigde netaanvulling kan dragen.
   Een kleine hoeveelheid rendabele afname rechtvaardigt geen volle lading
   of kleine losse bijlaadcyclus. Dit vervangt de eerdere toestemming om het
@@ -82,7 +83,8 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Een werkelijk lopende netlaadcyclus mag nog worden afgemaakt; reeds geladen
   energie mag de eigen laadbeslissing niet bij iedere update terugdraaien.
   De opbrengst blijft een prognose, geen garantie voor iedere geladen kWh.
-- Nader afgesproken op 10 oktober: toets de ingestelde minimumwinst als
+- Nader afgesproken op 10 oktober (grondslag voor gereserveerde netenergie
+  gewijzigd op 25 oktober): toets de ingestelde minimumwinst als
   energiegewogen gemiddeld voordeel over de volledige netaanvulling. Een
   individueel inkoop- of afnamekwartier hoeft die marge niet afzonderlijk te
   halen. Gebruik de werkelijk gekozen importhoeveelheden en hun tarieven,
@@ -104,7 +106,8 @@ geverifieerd is. Lees ook de open punten onderaan.
   en gesimuleerde energie; neem 100% niet aan zonder bijbehorende lading.
 - Het huidige rekenmodel gebruikt tariefverschillen. Omzettingsverliezen en
   slijtage zijn niet daarin verwerkt; verander die definitie niet ongemerkt.
-- Verduidelijking 22 oktober: beoordeel vooraf ontladen, goedkoop volladen en
+- Verduidelijking 22 oktober (kostentoerekening vervangen op 25 oktober):
+  beoordeel vooraf ontladen, goedkoop volladen en
   latere ontlading samen. Het doorgetrokken daggemiddelde mag ook de latere
   ontlading economisch onderbouwen. Tel geen verkoop/besparing toe aan energie
   die wegens het ontbreken van een volgend laadvenster in de extra reserve
@@ -114,6 +117,27 @@ geverifieerd is. Lees ook de open punten onderaan.
   laden om een kleinere cyclus rendabel te maken. Sla de volledige cyclus over
   als volledig ontladen en volladen niet rendabel is. De bestaande uitzondering
   voor een werkelijk onvermijdelijk restant blijft ongewijzigd.
+
+- Gewijzigd en expliciet bevestigd op 25 oktober: toets de minimumwinst op
+  de netenergie die naar verwachting werkelijk wordt gebruikt of verkocht.
+  Deel de werkelijke gewogen netinkoopkosten naar hoeveelheid toe: verbruikte
+  energie krijgt haar aandeel als kosten; achterblijvende reserve blijft voorraad
+  tegen diezelfde inkoopprijs. Voorraad krijgt geen fictieve verkoopopbrengst
+  of winst. Dit vervangt het direct afboeken van de volledige aankoop tegenover
+  uitsluitend de ontlaadbare energie uit de afspraken van 8, 10 en 22 oktober.
+- Aanvulling 25 oktober: aanwezige voorraad op 60% mag een volgend rendabel
+  laadblok niet blokkeren. De oude voorraad die als reserve blijft staan mag
+  de rendabele afname voor nieuwe netlading niet verbruiken in de winsttoets.
+  Geef reserve vóór een geselecteerde rendabele aanvulling vrij waar nuttige
+  ontlading mogelijk is. Kan het restant niet nuttig worden ontladen, vul alleen
+  de vrije ruimte volgens de bestaande restantuitzondering; forceer geen export.
+- Eigen verbruik blijft besparing tegen het importtarief, verkoop gebruikt het
+  teruglevertarief en behoudt de historische inkoopprijsbescherming. Resterende
+  voorraad is geen garantie op latere winst. De veilige ondergrens, reserve
+  zonder aanvulling en volledige laadcycli blijven gelden. Alleen reservering
+  mag kosten uitstellen; ontbrekende afname of een losse kleine piek is geen
+  nieuwe reden om de rest van een volle lading als reserve aan te merken.
+  Extra volledige arbitragecycli behouden hun bestaande afnametoets.
 
 ## 3. Niet pendelen tussen laden en ontladen
 
@@ -314,6 +338,53 @@ geverifieerd is. Lees ook de open punten onderaan.
   Live controle na installatie/herstart staat nog open.
 
 ## Werkstatus bij laatste bijwerking
+
+### Goedgekeurde wijziging: reservevoorraad tegen inkoopprijs — 25 oktober
+
+- Gewenst en bevestigd: winst toetsen op de verwachte gebruikte/verkochte
+  netenergie; overblijvende reserve tegen de gewogen inkoopprijs bewaren.
+  Een bestaande 60%-voorraad mag een rendabele aanvulling niet blokkeren.
+- Lokaal geïmplementeerd: verdeel netinkoopkosten over ontlaadbaar en behouden
+  deel. Trek alleen de ontlaadbare bestaande voorraad van latere afname af.
+  De winsttoets werkt ook na het bundelen van laadkwartieren. Eigen verbruik
+  gebruikt importprijzen; export houdt zijn afzonderlijke prijsbescherming.
+- Reserve kan vóór een geselecteerde rendabele lading worden vrijgegeven.
+  De fysieke simulatie begrenst een aanvulling met onvermijdelijk restant tot
+  de werkelijk vrije capaciteit. Geen nieuwe kleine cycli of reserveverlaging.
+  Historische inkoopprijsbescherming blijft opgeslagen en wordt bij herstart
+  hersteld; er is geen nieuwe euro-boekhouding in de sensor toegevoegd.
+- Replay van de aangeleverde meting 25 oktober 17:49: 60% SOC, 10 kWh,
+  veilige grens 20%, reserve 60%, minimumwinst 10 cent, laden 2,5 kW,
+  ontladen 3 kW, aangeleverde exportprijzen (12 cent aftrek) en prognoses
+  zonder extra marges. Historische inkoopprijs ontbreekt in de meting.
+  Ontladen tot circa 21:02, nachtladen in vier blokken van 23:15 tot 04:15;
+  daarna huisontlading in ochtend/avond tot circa 60%. Het deel vanaf 04:15
+  is vooruitblik. Er wordt geen export of extra middagcyclus geselecteerd.
+- Deze wijziging vervangt de reservekostentoerekening; de volgorde waarin
+  kandidaatvensters worden gezocht blijft behouden. De eerder besproken
+  volledige nacht/ochtend/middag/avondreeks volgt niet uit deze replay.
+- Controle: nieuwe regressies voor gewogen voorraadkosten, onderscheid tussen
+  huisbesparing en export, geen winst uit alleen voorraad, bestaande reserve,
+  werkelijk beperkte aanvulling en herstart tijdens 48 kwartierupdates.
+  De vaste grafiekgenerator controleert onafhankelijk circa 20–100% SOC.
+- Aanvullend hersteld bij koude start: als de eerste berekening de ontlaadrichting
+  vaststelt, reken direct eenmaal opnieuw met die richting. Zo wordt de benodigde
+  aanvulling na voorafgaande ontlading volledig gepland in plaats van alleen de
+  vrije ruimte bij de oorspronkelijke SOC. Ontbrekende SOC wijzigt geen status.
+- Controle afgerond: alle 308 huidige Python-tests geslaagd over de brede en
+  gerichte rondes; laatste gerichte ronde 24 tests geslaagd na de koude-startfix.
+  Acht oude regressieverwachtingen zijn aangepast aan de expliciete nieuwe
+  kostentoerekening, zonder hun bronmetingen te wijzigen. De onrendabele
+  hoge-winstgrensscenario's en exportprijsbescherming blijven getest.
+- Windows blokkeert de lokale socket waarmee de standaard async-testrunner
+  start. De betrokken testlichamen zijn met hun direct voltooide async mocks
+  uitgevoerd zonder netwerk-eventloop; een werkelijk wachtende coroutine zou
+  daarbij expliciet falen. De opslagtest schreef/herlas een bestand binnen de
+  repository. Dit vervangt geen live controle met Home Assistants eventloop.
+  Weergavecode/template zijn ongewijzigd; geen herhaalde browsercontrole.
+- De gebruiker heeft op 25 oktober de concrete wijziging en grafiek goedgekeurd
+  en opdracht gegeven naar `main` te committen en pushen.
+  Nog open: installatie en live verificatie.
 
 ### Goedgekeurde kaartwijziging: energie bij selectie van een venster — 19 oktober
 

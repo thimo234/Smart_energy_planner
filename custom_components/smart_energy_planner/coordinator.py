@@ -1163,8 +1163,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._discharge_session_started = True
         previous_export_planning = getattr(self, "_cycle_export_planning", False)
         self._cycle_export_planning = True
+        direction_undecided = (not getattr(self, "_charge_session_started", False)
+                               and not self._discharge_session_started)
         try:
             result = self._build_plan_for_horizon(**inputs)
+            if direction_undecided and self._discharge_session_started:
+                # A cold start can first establish discharge while selecting
+                # a refill sized for the pre-discharge free capacity. Replan
+                # once with that direction so the published refill reaches full.
+                result = self._build_plan_for_horizon(**inputs)
         finally:
             self._cycle_export_planning = previous_export_planning
         cutoff = self._two_cycle_end(result.planned_battery_mode_windows) or tomorrow
@@ -2683,6 +2690,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     historical_cost=historical_cost,
                     discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
                         no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
+                    retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
                 )
                 # A small profitable peak cannot justify buying a full cycle.
                 # The daily-mean forecast may support the economic estimate;
@@ -2810,6 +2818,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     historical_cost=historical_cost,
                     discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
                         no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
+                    retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
                 )
                 if not bundled_profit["profitable"]:
                     selected_for_cycle = selection_before_bundling

@@ -48,12 +48,13 @@ class IdleBundlingTest(unittest.TestCase):
                                           max_discharge_kw=1)
         self.assertEqual(list(plan), [slots[2]['start']])
 
-    def test_real_snapshot_below_reserve_does_not_buy_an_unprofitable_full_cycle(self):
+    def test_real_snapshot_below_reserve_can_refill_with_stock_held_at_cost(self):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = True
         now = datetime.fromisoformat('2026-10-01T08:34:19.167332+02:00')
-        energy = 3.9
+        energy = peak = 3.9
+        saw_grid = False
         for _ in range(96):
             _, slots, result = replay_full_plan('2026_10_01_restart', now.isoformat(),
                 soc=energy*10, instance=c, reserve=60, max_charge=2.5,
@@ -66,6 +67,10 @@ class IdleBundlingTest(unittest.TestCase):
             self.assertTrue(trace)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
+            saw_grid |= any(w['mode'] == 'laden_van_net' for w in commands)
+            peak = max(peak, *(e for _, e, _ in trace))
             energy = trace[-1][1]
             now = until
-        self.assertAlmostEqual(energy, 3.9, delta=.005)  # 8 October: no profitable full refill.
+        # October 25: reserve stays at cost; the discharged part earns its margin.
+        self.assertTrue(saw_grid)
+        self.assertGreaterEqual(peak, 9.95)

@@ -1,11 +1,11 @@
-"""Energy-weighted profitability of the complete grid supplement."""
+"""Weighted margin on discharged imports, with reserve stock held at cost."""
 from datetime import timedelta
 
 
 def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
                            max_discharge_kw, minimum_profit, existing_energy=0.,
                            allow_export=False, historical_cost=None,
-                           discharge_budget_kwh=None):
+                           discharge_budget_kwh=None, retained_reserve_kwh=0.):
     by_start = {slot['start']: slot for slot in slots}
     imports = []
     for item in selected:
@@ -33,7 +33,10 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
                 and float(slot['export_price']) + 1e-9 >= export_cost + minimum_profit):
             demand.append((float(slot['export_price']), max(0., power-home)))
     remaining = needed
-    existing = max(0., existing_energy)
+    # Existing stock retained as reserve does not consume the later demand
+    # that must justify the new import. Only its dischargeable part competes.
+    existing = max(0., existing_energy - retained_reserve_kwh)
+    existing_dischargeable = existing
     value = 0.
     budget = float('inf') if discharge_budget_kwh is None else max(0., discharge_budget_kwh)
     for price, capacity in sorted(demand, reverse=True):
@@ -45,11 +48,17 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
         value += take * price
         remaining -= take
     covered = needed-remaining
+    average_cost = cost / needed if needed > 1e-9 else 0.
+    discharged_cost = covered * average_cost
+    # Only the reserve may defer its purchase cost. Missing demand must not
+    # turn an arbitrary small peak into support for a complete new fill.
+    required_coverage = needed if discharge_budget_kwh is None else min(
+        needed, max(0., discharge_budget_kwh - existing_dischargeable))
     return dict(net_kwh=needed, import_cost=cost, covered_kwh=covered,
-                discharge_value=value,
-                average_profit=(value-cost)/needed if needed > 1e-9 else 0.,
-                # A zero-import command cannot bypass the solar-profit check.
-                # Retained reserve has no realized value. The available sales
-                # must cover the cost AND margin of the entire purchase.
-                profitable=needed > 1e-9 and (remaining <= 1e-6 or discharge_budget_kwh is not None)
-                and value-cost + 1e-9 >= needed*minimum_profit)
+                discharge_value=value, discharged_import_cost=discharged_cost,
+                retained_kwh=remaining, retained_import_cost=cost-discharged_cost,
+                average_profit=(value-discharged_cost)/covered if covered > 1e-9 else 0.,
+                # Stock at cost contributes no profit and cannot justify a
+                # fill without useful discharge. Export retains its own gate.
+                profitable=covered > 1e-9 and covered + 1e-6 >= required_coverage
+                and value-discharged_cost + 1e-9 >= covered*minimum_profit)
