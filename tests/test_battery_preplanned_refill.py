@@ -32,18 +32,19 @@ class PreplannedRefillTest(unittest.TestCase):
                 window['price'] *= 2
         return data
 
-    def test_reserve_stock_allows_early_refill_but_cannot_fix_a_late_start(self):
+    def test_reserve_stock_and_earlier_completion_allow_both_refills(self):
         for at in ('2026-10-22T06:00:00+02:00', '2026-10-22T11:00:23.157288+02:00'):
             with self.subTest(at=at):
                 now, slots, result = self.replay(self.data, at)
-                # October 25: reserve is carried at cost. The early full
-                # refill now earns the margin on the dischargeable portion.
-                early = now.hour == 6
-                self.assertEqual(bool(result.planned_grid_charge_windows), early)
-                self.assertEqual(result.battery_no_charge_reserve_active, not early)
+                # October 28: retrying an earlier completion also finds a
+                # full profitable fill after the late start (11.25 ct/kWh).
+                self.assertTrue(result.planned_grid_charge_windows)
+                self.assertFalse(result.battery_no_charge_reserve_active)
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=9, max_charge=2.5)
-                self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995 if early else 5.995)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+                self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+                self.assertAlmostEqual(trace[-1][1], 10., delta=.005)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_profitable_full_refill_is_planned_before_household_depletion(self):

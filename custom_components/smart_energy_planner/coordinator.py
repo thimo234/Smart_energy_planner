@@ -2339,6 +2339,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     used_starts.add(candidate["start"])
             return charged_kwh
 
+        retry_charge_deadlines: dict[datetime, datetime] = {}
         cursor = first_charge_not_before
         cycle_index = 0
         previous_charge_end: datetime | None = None
@@ -2420,9 +2421,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 charge_deadline = min((slot["start"] for slot in future_slots
                     if slot["start"].date() > best_candidate["start"].date()
                     and float(slot.get("solar_kwh", 0.0)) > 1e-9), default=horizon_end)
-            cycle_candidates = [item for item in cycle_candidates if item["end"] <= charge_deadline]
+            selection_deadline = min(charge_deadline, retry_charge_deadlines.get(cursor, charge_deadline))
+            cycle_candidates = [item for item in cycle_candidates if item["end"] <= selection_deadline]
             profitable_primary_candidates = [item for item in profitable_primary_candidates
-                                             if item["end"] <= charge_deadline]
+                                             if item["end"] <= selection_deadline]
 
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
             for candidate in cycle_candidates:
@@ -2692,6 +2694,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
                     retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
                 )
+                # A cheap late top-up can move completion past the valuable
+                # discharge hours. Retry the same solar-led opportunity without
+                # its last slot before rejecting the whole fill. Each retry
+                # strictly shortens the selection; all profit, full-capacity and
+                # physical checks below still apply to the rebuilt cycle.
+                if (not profit["profitable"] and not continuing_grid_cycle
+                        and not (cursor <= now and getattr(self, "_charge_session_started", False))
+                        and best_candidate["kind"] == "solar" and bridge is None):
+                    earlier_end = max(item["start"] for item in selected_for_cycle)
+                    if best_candidate["end"] <= earlier_end < selection_deadline:
+                        retry_charge_deadlines[cursor] = earlier_end
+                        continue
                 # A small profitable peak cannot justify buying a full cycle.
                 # The daily-mean forecast may support the economic estimate;
                 # starting a new charge still requires known purchase prices.

@@ -139,6 +139,12 @@ geverifieerd is. Lees ook de open punten onderaan.
   nieuwe reden om de rest van een volle lading als reserve aan te merken.
   Extra volledige arbitragecycli behouden hun bestaande afnametoets.
 
+- Verduidelijking 28 oktober: wijs een gemengde zon/netlaadcyclus niet af
+  uitsluitend doordat een goedkoper laat laadkwartier de voltooiing voorbij
+  de rendabele afname schuift. Onderzoek eerst een eerdere volledige aanvulling
+  binnen dezelfde laadmogelijkheid. Minimumwinst, afzonderlijke netkostentoets,
+  cyclusvergrendeling, reserve en fysieke accugrenzen blijven ongewijzigd.
+
 ## 3. Niet pendelen tussen laden en ontladen
 
 - Streef naar zoveel mogelijk een volledige laad- en ontlaadcyclus.
@@ -1640,4 +1646,33 @@ geverifieerd is. Lees ook de open punten onderaan.
 - Grafiek gebruikt de bestaande generator/template; geen frontendwijziging.
 - De gebruiker heeft de concrete grafiek op 22 oktober goedgekeurd en opdracht
   gegeven deze wijziging naar main te committen en pushen.
+- Nog open: installatie en live verificatie in Home Assistant.
+
+### Goedgekeurde correctie: eerder voltooien van gemengde lading — 28 oktober
+
+- Geïmplementeerd: wanneer een nieuwe zongeleide aanvulling de netwinsttoets
+  niet haalt, probeert de selectie opnieuw met een strikt eerdere eindgrens.
+  De horizon voor latere afname blijft intact; de volledige laadcyclus en
+  bestaande veiligheidscontroles worden opnieuw getoetst. Lopende lading
+  behoudt de bestaande bescherming.
+- Aanleiding: meting 28 oktober 15:57, 100% SOC, 10 kWh, minimum 20%, reserve
+  60%, laden 2,5 kW, ontladen 3 kW en minimumvoordeel EUR 0,10/kWh. De oude
+  selectie koos voor het laatste beetje netstroom 29 oktober 23:30 en miste
+  daardoor de avondbesparing. De correctie vindt voltooiing om 15:30.
+- De aangeleverde vraag- en zonprognoses bevatten hun marges al; de replay
+  past deze niet opnieuw toe. Import en export gebruiken de aangeleverde tarieven.
+- Gecontroleerd: de nieuwe meting ontlaadt tot 20%, laadt op 29 oktober tussen
+  09:30 en 15:30 met zon en net weer vol en gebruikt daarna energie voor het
+  huis tot circa 60%. De afzonderlijke netwinsttoets komt uit op 27,84 cent/kWh.
+  De onafhankelijke grafiekintegratie geeft 20,001–100,010% en eindigt op 60,021%
+  (kleine verschillen door afgeronde prognoses). Ook 96 kwartierupdates met
+  SOC-terugkoppeling en een herstart tijdens de aanvulling slagen.
+- De oude regressie van 22 oktober om 11:00 vindt door dezelfde correctie een
+  volledige aanvulling tot 17:27 met 11,25 cent/kWh voordeel; de afwijzingsverwachting
+  is expliciet vervangen door controles op reservevrijgave en veilig volladen.
+- Alle 311 actuele tests zijn over de gerichte en brede controlerondes geslaagd.
+  De bescherming van lopende zonnelading is na twee gevonden regressies hersteld
+  en opnieuw gecontroleerd, samen met de nieuwe middagcyclus en SOC-terugkoppeling.
+- De gebruiker heeft op 28 oktober de concrete wijziging en grafiek goedgekeurd
+  en opdracht gegeven naar `main` te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.
