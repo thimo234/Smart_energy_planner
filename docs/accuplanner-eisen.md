@@ -145,6 +145,14 @@ geverifieerd is. Lees ook de open punten onderaan.
   binnen dezelfde laadmogelijkheid. Minimumwinst, afzonderlijke netkostentoets,
   cyclusvergrendeling, reserve en fysieke accugrenzen blijven ongewijzigd.
 
+- Verduidelijking 2 november: de zoektocht naar een rendabele eerdere voltooiing
+  moet ook bij volledig netladen werken, zonder afhankelijkheid van zonneoverschot.
+- Een klein vroeg laaddeel mag een ontlaadcyclus niet onnodig vóór een duurder
+  afnamemoment afbreken en zo vroeg verkopen afdwingen. Behoud bestaande energie
+  voor de waardevolle afname vóór de latere aanvulling wanneer vóór die afname
+  geen volledige laadcyclus past. Een uitvoerbare volledige eerdere cyclus blijft
+  toegestaan; lopende lading en de minimumwinst voor export blijven beschermd.
+
 ## 3. Niet pendelen tussen laden en ontladen
 
 - Streef naar zoveel mogelijk een volledige laad- en ontlaadcyclus.
@@ -1676,3 +1684,41 @@ geverifieerd is. Lees ook de open punten onderaan.
 - De gebruiker heeft op 28 oktober de concrete wijziging en grafiek goedgekeurd
   en opdracht gegeven naar `main` te committen en pushen.
 - Nog open: installatie en live verificatie in Home Assistant.
+
+### Goedgekeurde correctie: ochtendwaarde behouden en netladen zonder zon — 2 november
+
+- Live gelezen: broncode op de server is gelijk aan de gepushte versie. Recorder
+  bevestigt `ontladen_naar_net` om 04:00 en 04:25, met toen een laadstart om 05:45.
+  Om 04:43 werd de laadstart 10:00. Recorder bewaart de volledige prognosereeksen
+  niet; een exacte historische replay is daarom niet mogelijk.
+- De aangeleverde meting van 07:12 is gereconstrueerd vanaf 04:00 met de toen
+  eveneens geregistreerde 36% SOC. Dit reproduceert de vroege verkoop en het
+  losse laadkwartier om 05:45, gevolgd door vasthouden tijdens de ochtendpiek en
+  voltooiing van dezelfde lading pas in de middag.
+- Geïmplementeerd: geen onvolledig vroeg laaddeel vóór waardevolle huisafname
+  als daar geen volledige lading past en de latere mogelijkheid voldoende
+  capaciteit heeft. Toets voor zon en net op dezelfde manier. De zoektocht naar
+  eerdere voltooiing geldt nu ook voor zuivere netcycli. Een bovengrens op de
+  mogelijke tariefmarge voorkomt zinloze herhaling bij vlakke/dure tarieven.
+- Nieuwe simulatie: bewaren tot de ochtendpiek, ontladen tot 20%, daarna
+  aanvullen met zon/net (of net alleen in het nulzon-scenario) tot 100%.
+- De SOC-bronsensor staat volgens Recorder sinds 1 november 17:26 op 36%.
+  Dit bewijst geen defecte sensor, maar verkoopcommando's bewijzen hierdoor
+  evenmin hoeveel energie de accu werkelijk heeft afgegeven. Geen wijziging
+  aan inverter, bronintegratie of automatisering uitgevoerd.
+- Gecontroleerd: alle 314 actuele tests geslaagd over de gerichte en brede
+  controlerondes. De laatste 30 regressies controleren ook afmaken van lopend
+  netladen, negatieve prijzen en bescherming van lopende zonnelading.
+  De nieuwe test doorloopt 44 kwartierupdates met SOC-terugkoppeling en herstart.
+- De nulzon- en 0,001 kWh-overschotvarianten zijn synthetisch: dezelfde echte
+  prijzen en vraag, uitsluitend de zon aangepast. Beide vinden zelfstandig
+  rendabel netladen. Een hogere minimumwinst wordt nog steeds gerespecteerd.
+- Onafhankelijke grafiekintegratie van de reconstructie: circa 20–100% SOC,
+  eindigend op circa 60% (19,995–99,997%, einde 60,007% door afgeronde prognoses).
+  Nieuwe timing: eigen verbruik rond 07:45–09:15; zon vanaf 10:00, net vanaf
+  11:00, klaar om 14:45; avondverbruik vanaf 16:15. Zonder zon begint netladen
+  eveneens om 11:00 en wordt de accu voor de avond vol.
+- De gebruiker heeft op 2 november de concrete wijziging en grafiek goedgekeurd
+  en opdracht gegeven naar `main` te committen en pushen.
+- Nog open: installatie en live verificatie. De draaiende Home Assistant is
+  niet gewijzigd.

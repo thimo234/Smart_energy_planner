@@ -2426,6 +2426,34 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             profitable_primary_candidates = [item for item in profitable_primary_candidates
                                              if item["end"] <= selection_deadline]
 
+            # Do not begin a partial refill before an intervening valuable
+            # discharge period. That would force existing stock out early and
+            # lock charging through the peak. A full earlier cycle remains
+            # eligible; this applies equally to grid-only and mixed refills.
+            if (bridge is None and self._discharge_session_started
+                    and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
+                    and previous_charge_end is None):
+                anchor_import = next((float(item["profit_cost"]) for item in cycle_candidates
+                    if item["kind"] == "grid" and item["start"] == best_candidate["start"]), None)
+                peaks = [slot for slot in future_slots
+                    if anchor_import is not None and cursor <= slot["start"] < best_candidate["start"]
+                    and float(slot["net_solar_kwh"]) < -1e-9
+                    and float(slot["import_price"]) >= anchor_import + battery_min_profit]
+                if peaks:
+                    peak_start, peak_end = peaks[0]["start"], peaks[-1]["end"]
+                    def capacity_between(start, end):
+                        capacity = {}
+                        for item in profitable_primary_candidates:
+                            if start <= item["start"] and item["end"] <= end:
+                                capacity[item["start"]] = max(capacity.get(item["start"], 0.),
+                                                             float(item["charge_kwh"]))
+                        return sum(capacity.values())
+                    if (capacity_between(cursor, peak_start) + 1e-6 < usable_capacity_kwh
+                            and capacity_between(peak_end, selection_deadline) + 1e-6 >= usable_capacity_kwh):
+                        cycle_candidates = [item for item in cycle_candidates if item["start"] >= peak_end]
+                        profitable_primary_candidates = [item for item in profitable_primary_candidates
+                                                         if item["start"] >= peak_end]
+
             candidates_by_start: dict[datetime, list[dict[str, Any]]] = {}
             for candidate in cycle_candidates:
                 candidates_by_start.setdefault(cast(datetime, candidate["start"]), []).append(candidate)
@@ -2695,13 +2723,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
                 )
                 # A cheap late top-up can move completion past the valuable
-                # discharge hours. Retry the same solar-led opportunity without
+                # discharge hours. Retry the same charging opportunity without
                 # its last slot before rejecting the whole fill. Each retry
                 # strictly shortens the selection; all profit, full-capacity and
                 # physical checks below still apply to the rebuilt cycle.
-                if (not profit["profitable"] and not continuing_grid_cycle
-                        and not (cursor <= now and getattr(self, "_charge_session_started", False))
-                        and best_candidate["kind"] == "solar" and bridge is None):
+                cheapest_import = min(float(item["profit_cost"]) for item in cycle_candidates
+                                      if item["kind"] == "grid")
+                retry_has_margin = any(
+                    slot["end"] > best_candidate["end"]
+                    and max(float(slot["import_price"]),
+                            float(slot["export_price"]) if self._cycle_export_enabled else float("-inf"))
+                        + 1e-9 >= cheapest_import + battery_min_profit
+                    for slot in future_slots)
+                if (not profit["profitable"] and retry_has_margin and not continuing_grid_cycle
+                        and not (cursor <= now and getattr(self, "_charge_session_started", False)
+                                 and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
+                                 and self._active_charge_phase_mode != "laden_van_net")
+                        and not all(float(item["profit_cost"]) < 0 for item in grid_selected)
+                        and bridge is None):
                     earlier_end = max(item["start"] for item in selected_for_cycle)
                     if best_candidate["end"] <= earlier_end < selection_deadline:
                         retry_charge_deadlines[cursor] = earlier_end
