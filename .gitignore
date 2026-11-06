@@ -1,2 +1,8 @@
 __pycache__/
 *.py[cod]
+
+# Test data
+test_planning_*.json
+
+# Local config
+local_config.json

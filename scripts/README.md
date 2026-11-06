@@ -35,3 +35,29 @@ tarief-/energiesystematiek als de planner, zonder omzettingsverliezen.
 Ontbrekende prognose-uren of overlappende modusvensters geven een foutmelding in
 plaats van stilzwijgend een verzonnen planning. Bij 0% SOC moet de invoer ook
 `battery_capacity_kwh` bevatten. De grafiek gebruikt D3 vanaf een CDN.
+
+## Validatie Script
+
+`validate_planning.py` controleert de planning op logica en consistentie.
+
+### Gebruik
+```bash
+python3 scripts/validate_planning.py --config planning.json --verbose
+```
+
+### Opties
+- `--config` - Pad naar planning JSON (vereist)
+- `--output` - Pad naar output JSON (optioneel)
+- `--verbose` - Toon gedetailleerde JSON output
+
+### Validatie Regels
+1. **SOC Violatie** - Batterij zakt onder minimum tijdens ontladen
+2. **Overlapping Windows** - Twee windows tegelijk (kan niet)
+3. **Timeline Errors** - Planning niet chronologisch
+4. **Solar Mismatch** - Zon laad planning > voorspelling
+5. **Over Discharge** - Totale ontlading > beschikbare energie
+
+### Test Data
+- `test_planning_realistic.json` - Geldige planning (laadt eerst op via zon)
+- `test_planning_invalid.json` - Ongeldige planning (SOC onder minimum)
+- `test_planning_overlap.json` - Overlappende windows
