@@ -3900,6 +3900,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         preview._active_charge_phase_end = None
         preview._active_charge_phase_mode = "accu_uit"
         preview._battery_cycle_state_restored_recent = False
+        last_energy_mode = None
+        last_energy_window_end = None
         for window in actual_windows:
             begin, end = datetime.fromisoformat(window["start"]), datetime.fromisoformat(window["end"])
             if begin >= start:
@@ -3915,6 +3917,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "ontladen": -min(max_discharge, max(0., -net_kw)),
                         "ontladen_naar_net": -max_discharge, "accu_uit": 0.}[mode]
                 energy = max(0., min(capacity, energy + hours*rate))
+                if rate != 0:
+                    last_energy_mode = mode
+                    last_energy_window_end = end
                 if rate > 0:
                     preview._charge_session_started = True
                     preview._discharge_session_started = False
@@ -3931,6 +3936,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     preview._discharge_session_started = True
                 if energy <= _BATTERY_DEPLETION_EPSILON_KWH:
                     preview._battery_grid_charge_price = None
+        # The executable two-family plan has finished this accepted charge
+        # phase. Do not carry its charging latch into a separate cheap refill
+        # later today: that would hold stored energy through the evening peak.
+        # A preview clipped inside a charge window must still finish that fill.
+        if (include_known_prices and preview_start is not None
+                and energy < capacity - 0.05
+                and last_energy_mode in ("laden_van_net", "laden_met_zonne_energie")
+                and last_energy_window_end <= start):
+            preview._charge_session_started = False
+            preview._discharge_session_started = True
+            preview._active_charge_phase_mode = "accu_uit"
         # Treat estimates as inputs only within this isolated preview. The
         # published prices stay unknown and no live reserve is released by it.
         future = []
