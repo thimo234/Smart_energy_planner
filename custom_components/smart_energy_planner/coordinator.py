@@ -3394,8 +3394,49 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 blocked = [w for w in charge_windows
                            if slot_end > cast(datetime, w["start"])
                            and slot_start < cast(datetime, w["end"])]
-                # A lack of profitable outlets pauses a discharge cycle; it
-                # cannot complete it or authorize a refill above minimum SOC.
+                if blocked:
+                    # Keep an economically useful refill when the old cycle
+                    # cannot discharge any further during this charge phase.
+                    # Do not force an unprofitable export just to reach empty.
+                    # The charge integrator below uses the actual remaining
+                    # capacity, rather than assuming an empty battery.
+                    phase_end = max((cluster["end"] for cluster in charge_phase_clusters
+                        if cluster["start"] < slot_end and cluster["end"] > slot_start),
+                        default=max(cast(datetime, w["end"]) for w in blocked))
+                    refill_capacity_kwh = 0.0
+                    completion_time = phase_end
+                    missing_kwh = max(0.0, usable_capacity_kwh - sim_usable_energy_kwh)
+                    for candidate in sorted(charge_windows, key=lambda window: cast(datetime, window["start"])):
+                        if cast(datetime, candidate["start"]) >= phase_end:
+                            break
+                        budget_kwh = float(candidate.get("charge_kwh", 0.0))
+                        for forecast in slots:
+                            begin = max(now, slot_start, cast(datetime, candidate["start"]), forecast["start"])
+                            finish = min(phase_end, cast(datetime, candidate["end"]), forecast["end"])
+                            if finish <= begin or budget_kwh <= 0:
+                                continue
+                            power = max_charge_kw if candidate["mode"] == "laden_van_net" else min(
+                                max_charge_kw, max(0.0, float(forecast["net_solar_kwh"])) / max(float(forecast["hours"]), 1e-9),
+                            )
+                            amount = min(budget_kwh, power * (finish - begin).total_seconds() / 3600)
+                            if power > 0 and refill_capacity_kwh + amount >= missing_kwh - 1e-9:
+                                completion_time = begin + timedelta(hours=max(0.0, missing_kwh - refill_capacity_kwh) / power)
+                                refill_capacity_kwh = missing_kwh
+                                break
+                            refill_capacity_kwh += amount
+                            budget_kwh -= amount
+                        if refill_capacity_kwh >= missing_kwh - 1e-9:
+                            break
+                    # An outlet after reaching full belongs to the next cycle.
+                    can_continue_discharge = self._has_profitable_discharge(
+                        slots=slots, start=max(now, slot_start), end=completion_time,
+                        cost=grid_cost_floor, minimum_profit=battery_min_profit,
+                    )
+                    if (self._cycle_export_enabled and not can_continue_discharge
+                            and sim_usable_energy_kwh <= no_charge_reserve_kwh + _BATTERY_DEPLETION_EPSILON_KWH
+                            and refill_capacity_kwh + sim_usable_energy_kwh >= usable_capacity_kwh - 0.05):
+                        simulated_discharge_session_started = False
+                        blocked = []
                 if blocked:
                     blocked_starts = {cast(datetime, w["start"]) for w in blocked}
                     charge_windows = [w for w in charge_windows if w not in blocked]

@@ -59,7 +59,7 @@ class ReserveStockTest(unittest.TestCase):
         # With all capacity released, full demand remains necessary.
         self.assertFalse(self.evaluate(budget=8., reserve=0.)['profitable'])
 
-    def test_unavoidable_sixty_percent_remainder_must_discharge_before_refill(self):
+    def test_unavoidable_sixty_percent_remainder_can_be_filled_to_full(self):
         now = datetime(2026, 10, 26, 10)
         c = coordinator()
         c._charge_session_started, c._discharge_session_started = False, True
@@ -80,15 +80,15 @@ class ReserveStockTest(unittest.TestCase):
             initial_usable_energy_kwh=4, usable_capacity_kwh=8, battery_soc_percent=60,
             average_price=.25, average_export_price=.13, max_charge_kw=2.5,
             max_discharge_kw=3, no_charge_reserve_kwh=4, battery_min_profit=.10)
-        self.assertEqual(mode, 'accu_uit')
+        self.assertEqual(mode, 'laden_van_net')
         trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
-        self.assertAlmostEqual(max(e for _, e, _ in trace), 6.)
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 10.)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 6.)
         self.assertAlmostEqual(trace[-1][1], 6.)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         imported = sum((datetime.fromisoformat(w['end'])-datetime.fromisoformat(w['start'])).total_seconds()
                        /3600*2.5 for w in windows if w['mode'] == 'laden_van_net')
-        self.assertAlmostEqual(imported, 0.)
+        self.assertAlmostEqual(imported, 4.)
 
     def replay(self, now, energy=6., instance=None):
         return replay_full_plan('2026_10_25', now.isoformat(), soc=energy*10,

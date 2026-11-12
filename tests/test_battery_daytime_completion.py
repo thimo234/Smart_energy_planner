@@ -28,14 +28,16 @@ class DaytimeCompletionTest(unittest.TestCase):
         self.assertTrue(all(w['end'] <= commands[0]['end'] for w in commands
                             if w['mode'].startswith('laden_')))
         trace = energy_trace(now, slots, commands, initial=9.3, max_charge=2.5)
-        # Keep the unfinished discharge rather than interrupting it for solar;
-        # wait where no profitable demand exists.
+        # Unprofitable night slots preserve 60%; profitable morning demand
+        # may use stored energy below that reserve before the solar refill.
         self.assertAlmostEqual(trace[-1][1], 4.832, delta=.005)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         preview = result.estimated_battery_mode_windows
-        self.assertTrue(preview)
-        self.assertFalse(any(w['mode'].startswith('laden_') for w in preview))
+        self.assertEqual(preview[0]['start'], '2026-10-06T09:00:00+02:00')
+        self.assertEqual(preview[0]['mode'], 'laden_met_zonne_energie')
+        self.assertEqual([w['start'] for w in preview if w['mode'] == 'laden_van_net'],
+                         ['2026-10-06T13:30:00+02:00'])
 
     def test_evening_discharge_survives_updates_and_restart_without_night_topup(self):
         c = self.evening_coordinator()
@@ -82,8 +84,7 @@ class DaytimeCompletionTest(unittest.TestCase):
                 break
         self.assertTrue(discharged)
         self.assertEqual(now, end)
-        self.assertLess(energy, 9.3)
-        self.assertGreaterEqual(energy, 2.-.005)
+        self.assertLess(energy, 6.)
 
     def test_grid_led_cycle_can_cross_midnight(self):
         now = datetime.fromisoformat('2026-10-05T22:00:00+02:00')
@@ -147,14 +148,17 @@ class DaytimeCompletionTest(unittest.TestCase):
                                   snapshot='2026_10_05_reduced_solar', profit=.50)
         self.assertFalse(result.planned_grid_charge_windows)
 
-    def test_latest_tomorrow_preview_skips_refill_until_discharge_finishes(self):
+    def test_latest_tomorrow_preview_uses_solar_instead_of_late_grid_fill(self):
         now, slots, result = self.replay('2026-10-05T15:52:01.632559+02:00', 92,
                                        snapshot='2026_10_05_tomorrow_preview')
         preview = result.estimated_battery_mode_windows
         solar = [w for w in preview if w['mode'] == 'laden_met_zonne_energie']
         grid = [w for w in preview if w['mode'] == 'laden_van_net']
-        self.assertFalse(solar)
-        self.assertFalse(grid)
+        self.assertEqual(solar[0]['start'], '2026-10-06T09:00:00+02:00')
+        self.assertEqual(len(grid), 1)
+        self.assertEqual(grid[0]['start'], '2026-10-06T13:30:00+02:00')
+        # The retained reserve shortens the fill: stop exactly at full.
+        self.assertEqual(grid[0]['end'], '2026-10-06T13:47:15.360000+02:00')
         windows = result.planned_battery_mode_windows + preview
         for before, after in zip(windows, windows[1:]):
             self.assertLessEqual(datetime.fromisoformat(before['end']), datetime.fromisoformat(after['start']))
@@ -162,10 +166,7 @@ class DaytimeCompletionTest(unittest.TestCase):
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         tomorrow = [(t, e) for t, e, _ in trace if t.startswith('2026-10-06')]
-        # No phantom refill in the outlook: tomorrow only holds or discharges.
-        self.assertGreater(trace[-1][1], 2.05)
-        self.assertLess(trace[-1][1], 9.2)
-        self.assertTrue(all(b[1] <= a[1]+.005 for a, b in zip(tomorrow, tomorrow[1:])))
+        self.assertAlmostEqual(max(e for _, e in tomorrow), 10, delta=.005)
 
     def test_forecast_drop_updates_and_restart_complete_real_commands(self):
         c = coordinator()

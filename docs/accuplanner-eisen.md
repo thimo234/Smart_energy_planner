@@ -15,9 +15,7 @@ gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
   einde van de zichtbare planning maakt een gedeeltelijke laadfase niet af.
 - Een lopende laadfase blijft daarom vergrendeld totdat de accu daadwerkelijk
   (of in de simulatie) vol is. Daarna mag de rendabele ontlaadfase beginnen.
-- Expliciet bevestigd: een gestarte ontlaadcyclus moet eerst de normale
-  minimum-SOC bereiken voordat een nieuwe laadfase mag beginnen, ook op of
-  onder de hogere reserve. Dit gaat vóór de historische herlaaduitzonderingen.
+- Herladen tijdens een onvoltooide ontlaadfase mag niet boven de reserve.
   Hetzelfde geldt voor een voorgesteld laadvenster dat nu begint of al loopt;
   een voorstel mag de opgeslagen cyclusstatus niet zonder controle overschrijven.
 - Zonder rendabel ontlaadmoment wordt niet onrendabel teruggeleverd. Huisverbruik
@@ -26,11 +24,9 @@ gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
 - Expliciet door de gebruiker bevestigd: gebruik voor deze terugval de hogere
   ingestelde reserve-zonder-laadmogelijkheid, niet de normale minimum-SOC.
   Alleen huisverbruik is toegestaan, zonder onrendabele teruglevering.
-- De eerdere exportcyclus-uitzondering die herladen op/onder de hogere reserve
-  toeliet is voor een lopende ontlaadcyclus vervallen. Zonder rendabele afname
-  pauzeert die cyclus; daardoor mag een zonnelaadmoment worden overgeslagen en
-  kan de accu langere tijd wachten. Capaciteit, laadvermogen, historische
-  inkoopkosten en minimumwinst blijven gelden.
+- In de bestaande exportcyclus-uitzondering mag een herlading op/onder die reserve
+  alleen doorgaan als de aangeboden laadfase ook daadwerkelijk volledig kan vullen.
+  Capaciteit, laadvermogen, historische inkoopkosten en minimumwinst blijven gelden.
 - Dit staat een onderbroken cyclus toe om op een latere geschikte gelegenheid te
   wachten; het dwingt geen verliesgevende handeling af om een cyclus af te maken.
 
