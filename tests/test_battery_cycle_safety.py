@@ -55,7 +55,10 @@ class CycleSafetyTest(unittest.TestCase):
                 solar = 1.1 * solar_factor if i == 0 else 0.
                 s.update(solar_kwh=solar, net_solar_kwh=solar-1.,
                          import_price=.80 if i == 0 else .60)
-            _, mode = modes(coordinator(), now, slots, 2., [], [])
+            c = coordinator()
+            c._charge_session_started = False
+            c._discharge_session_started = True
+            _, mode = modes(c, now, slots, 2., [], [])
             outcomes.append(mode)
         self.assertEqual(outcomes, ['accu_uit', 'ontladen'])
 
@@ -117,16 +120,16 @@ class CycleSafetyTest(unittest.TestCase):
         self.assertTrue(c._charge_session_started)
         self.assertFalse(c._discharge_session_started)
 
-    def test_last_charge_window_over_allows_evening_discharge_when_not_full(self):
+    def test_last_charge_window_over_does_not_complete_partial_charge(self):
         now = datetime(2026, 9, 25, 18)
         c = coordinator()
         slots = slots_at(now)
         for s in slots:
             s.update(net_solar_kwh=-1., solar_kwh=0., import_price=.60)
         _, mode = modes(c, now, slots, 2., [], [])
-        self.assertEqual(mode, 'ontladen')
-        self.assertTrue(c._discharge_session_started)
-        self.assertFalse(c._charge_session_started)
+        self.assertEqual(mode, 'accu_uit')
+        self.assertFalse(c._discharge_session_started)
+        self.assertTrue(c._charge_session_started)
 
     def test_twenty_percent_margin_reduces_solar_in_actual_planner(self):
         args = ('2026_09_24_cheap_solar', '2026-09-24T20:04:29.361358+02:00')

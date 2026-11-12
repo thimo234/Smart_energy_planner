@@ -5,6 +5,31 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Actuele cyclusregel: volledig laden, daarna ontladen
+
+Deze regel heeft voorrang op historische uitzonderingen verderop die een
+gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
+
+- De gebruiker wil eerst volledig laden tot het ingestelde maximum en daarna
+  ontladen tot de geldende minimumgrens. Een pauze tussen laadvensters of het
+  einde van de zichtbare planning maakt een gedeeltelijke laadfase niet af.
+- Een lopende laadfase blijft daarom vergrendeld totdat de accu daadwerkelijk
+  (of in de simulatie) vol is. Daarna mag de rendabele ontlaadfase beginnen.
+- Herladen tijdens een onvoltooide ontlaadfase mag niet boven de reserve.
+  Hetzelfde geldt voor een voorgesteld laadvenster dat nu begint of al loopt;
+  een voorstel mag de opgeslagen cyclusstatus niet zonder controle overschrijven.
+- Zonder rendabel ontlaadmoment wordt niet onrendabel teruggeleverd. Huisverbruik
+  mag tot de ingestelde reserve, ook als er later een laadmogelijkheid bestaat.
+  Eén rendabel uur geeft de reserve niet vrij voor andere, onrendabele uren.
+- Expliciet door de gebruiker bevestigd: gebruik voor deze terugval de hogere
+  ingestelde reserve-zonder-laadmogelijkheid, niet de normale minimum-SOC.
+  Alleen huisverbruik is toegestaan, zonder onrendabele teruglevering.
+- In de bestaande exportcyclus-uitzondering mag een herlading op/onder die reserve
+  alleen doorgaan als de aangeboden laadfase ook daadwerkelijk volledig kan vullen.
+  Capaciteit, laadvermogen, historische inkoopkosten en minimumwinst blijven gelden.
+- Dit staat een onderbroken cyclus toe om op een latere geschikte gelegenheid te
+  wachten; het dwingt geen verliesgevende handeling af om een cyclus af te maken.
+
 ## 1. Prijs bepaalt het laden
 
 - Vergelijk netladen en zonneladen op hun effectieve prijs. Zonneoverschot krijgt

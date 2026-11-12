@@ -795,6 +795,7 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertLessEqual(datetime.fromisoformat(solar_windows[0]["end"]), now.replace(hour=20, minute=0))
         self.assertTrue(all(datetime.fromisoformat(window["start"]) >= now.replace(hour=10, minute=0) for window in grid_windows))
 
+        coordinator._charge_session_started = True
         coordinator._active_charge_phase_mode = "accu_uit"
         mode_windows, current_mode = SmartEnergyPlannerCoordinator._build_mode_windows_from_hourly_plan(
             coordinator,
@@ -2036,12 +2037,13 @@ class BatteryPlannerTest(unittest.TestCase):
                     "end": now.replace(hour=16).isoformat(),
                     "price": 0.07,
                     "usable_hours": 4.0,
+                    "charge_kwh": 6.5,
                 }
             ],
             planned_grid_charge_windows=[],
-            initial_usable_energy_kwh=0.1,
+            initial_usable_energy_kwh=1.5,
             usable_capacity_kwh=8.0,
-            battery_soc_percent=21.0,
+            battery_soc_percent=35.0,
             average_price=0.30,
             average_export_price=0.20,
             max_charge_kw=2.0,

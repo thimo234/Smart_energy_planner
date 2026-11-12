@@ -201,13 +201,13 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertTrue(first.planned_grid_charge_windows)
         self.assertTrue(all(w["price"] <= .186 for w in first.planned_grid_charge_windows))
 
-    def test_september_24_stale_charge_latch_does_not_defer_discharge(self):
+    def test_september_24_incomplete_charge_waits_for_full_before_discharge(self):
         c, history = self.run_feedback_updates(
             "2026_09_24", "2026-09-24T19:53:04.854187+02:00", 30, 12,
         )
-        self.assertTrue(all(r.battery_strategy == "ontladen" for _, r, _ in history))
-        self.assertTrue(c._discharge_session_started)
-        self.assertLess(history[-1][2], 2.6)
+        self.assertTrue(all(r.battery_strategy == "accu_uit" for _, r, _ in history))
+        self.assertFalse(c._discharge_session_started)
+        self.assertAlmostEqual(history[-1][2], 3., delta=.005)
 
     def test_incomplete_discharge_does_not_reverse_for_next_day_solar(self):
         _, history = self.run_feedback_updates(
@@ -440,7 +440,7 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         self.assertEqual(energy, 1.5)
 
-    def test_partial_charge_cycle_only_discharges_the_energy_actually_stored(self):
+    def test_partial_charge_cycle_holds_stored_energy_until_full(self):
         now = datetime(2026, 9, 17, 12)
         slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1), hours=1,
                       import_price=.16 if i == 0 else .42, export_price=.10,
@@ -454,7 +454,8 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         trace = energy_trace(now, slots, windows, initial=3)
         self.assertGreaterEqual(min(row[1] for row in trace), 2.0 - 1e-5)
-        self.assertAlmostEqual(trace[-1][1], 2.0)
+        self.assertAlmostEqual(trace[-1][1], 3.5)
+        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
     def test_grid_topup_does_not_reuse_the_same_cheap_slot(self):
         now = datetime(2026, 9, 17, 12)

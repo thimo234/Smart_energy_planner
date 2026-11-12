@@ -23,11 +23,14 @@ class DaytimeCompletionTest(unittest.TestCase):
         self.assertEqual(commands[0]['mode'], 'laden_van_net')
         self.assertEqual(c._active_charge_phase_end.isoformat(), commands[0]['end'])
         self.assertEqual(commands[-1]['mode'], 'ontladen')
-        self.assertLessEqual(commands[-1]['start'], '2026-10-05T17:00:00+02:00')
+        first_discharge = next(w for w in commands if w['mode'] == 'ontladen')
+        self.assertLessEqual(first_discharge['start'], '2026-10-05T17:00:00+02:00')
         self.assertTrue(all(w['end'] <= commands[0]['end'] for w in commands
                             if w['mode'].startswith('laden_')))
         trace = energy_trace(now, slots, commands, initial=9.3, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 2.354, delta=.005)
+        # Unprofitable night slots preserve 60%; profitable morning demand
+        # may use stored energy below that reserve before the solar refill.
+        self.assertAlmostEqual(trace[-1][1], 4.832, delta=.005)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         preview = result.estimated_battery_mode_windows
@@ -154,7 +157,8 @@ class DaytimeCompletionTest(unittest.TestCase):
         self.assertEqual(solar[0]['start'], '2026-10-06T09:00:00+02:00')
         self.assertEqual(len(grid), 1)
         self.assertEqual(grid[0]['start'], '2026-10-06T13:30:00+02:00')
-        self.assertEqual(grid[0]['end'], '2026-10-06T14:00:00+02:00')
+        # The retained reserve shortens the fill: stop exactly at full.
+        self.assertEqual(grid[0]['end'], '2026-10-06T13:47:15.360000+02:00')
         windows = result.planned_battery_mode_windows + preview
         for before, after in zip(windows, windows[1:]):
             self.assertLessEqual(datetime.fromisoformat(before['end']), datetime.fromisoformat(after['start']))

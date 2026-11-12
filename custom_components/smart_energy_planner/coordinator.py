@@ -3162,6 +3162,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ) for slot in slots
         )
 
+    def _has_profitable_discharge(self, *, slots, start, end, cost, minimum_profit):
+        """Distinguish a tariff margin from home-only use above the reserve."""
+        return any(
+            slot["end"] > start and slot["start"] < end
+            and slot.get("price_known", True) and (
+                (float(slot.get("net_solar_kwh", 0.0)) < -1e-9
+                 and float(slot["import_price"]) + 1e-9 >= (cost or 0.0) + minimum_profit)
+                or (self._cycle_export_enabled and float(slot["export_price"]) > 0
+                    and float(slot["export_price"]) + 1e-9 >= (cost or 0.0) + minimum_profit)
+            ) for slot in slots
+        )
+
     def _estimate_battery_depletion_time(
         self,
         *,
@@ -3358,13 +3370,6 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             None,
         )
         active_charge_phase_end = active_charge_phase["end"] if active_charge_phase is not None else None
-        if active_charge_phase is not None and not battery_is_full:
-            charge_session_started = True
-            discharge_session_started = False
-            self._charge_session_started = True
-            self._discharge_session_started = False
-            self._battery_cycle_state_restored_recent = False
-
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
         grid_cost_floor = getattr(self, "_battery_grid_charge_price", None)
         if initial_usable_energy_kwh <= 0.01:
@@ -3374,6 +3379,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         current_mode = "accu_uit"
         last_charge_mode = "accu_uit"
         simulated_discharge_session_started = discharge_session_started
+        simulated_charge_incomplete = charge_session_started and not battery_is_full
 
         slot_index = 0
         while slot_index < len(slots):
@@ -3397,11 +3403,38 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     phase_end = max((cluster["end"] for cluster in charge_phase_clusters
                         if cluster["start"] < slot_end and cluster["end"] > slot_start),
                         default=max(cast(datetime, w["end"]) for w in blocked))
-                    can_continue_discharge = self._can_discharge_in_interval(
-                        slots=slots, start=slot_start, end=phase_end,
+                    refill_capacity_kwh = 0.0
+                    completion_time = phase_end
+                    missing_kwh = max(0.0, usable_capacity_kwh - sim_usable_energy_kwh)
+                    for candidate in sorted(charge_windows, key=lambda window: cast(datetime, window["start"])):
+                        if cast(datetime, candidate["start"]) >= phase_end:
+                            break
+                        budget_kwh = float(candidate.get("charge_kwh", 0.0))
+                        for forecast in slots:
+                            begin = max(now, slot_start, cast(datetime, candidate["start"]), forecast["start"])
+                            finish = min(phase_end, cast(datetime, candidate["end"]), forecast["end"])
+                            if finish <= begin or budget_kwh <= 0:
+                                continue
+                            power = max_charge_kw if candidate["mode"] == "laden_van_net" else min(
+                                max_charge_kw, max(0.0, float(forecast["net_solar_kwh"])) / max(float(forecast["hours"]), 1e-9),
+                            )
+                            amount = min(budget_kwh, power * (finish - begin).total_seconds() / 3600)
+                            if power > 0 and refill_capacity_kwh + amount >= missing_kwh - 1e-9:
+                                completion_time = begin + timedelta(hours=max(0.0, missing_kwh - refill_capacity_kwh) / power)
+                                refill_capacity_kwh = missing_kwh
+                                break
+                            refill_capacity_kwh += amount
+                            budget_kwh -= amount
+                        if refill_capacity_kwh >= missing_kwh - 1e-9:
+                            break
+                    # An outlet after reaching full belongs to the next cycle.
+                    can_continue_discharge = self._has_profitable_discharge(
+                        slots=slots, start=max(now, slot_start), end=completion_time,
                         cost=grid_cost_floor, minimum_profit=battery_min_profit,
                     )
-                    if self._cycle_export_enabled and not can_continue_discharge:
+                    if (self._cycle_export_enabled and not can_continue_discharge
+                            and sim_usable_energy_kwh <= no_charge_reserve_kwh + _BATTERY_DEPLETION_EPSILON_KWH
+                            and refill_capacity_kwh + sim_usable_energy_kwh >= usable_capacity_kwh - 0.05):
                         simulated_discharge_session_started = False
                         blocked = []
                 if blocked:
@@ -3414,6 +3447,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     charge_phase_clusters, _ = self._resolve_charge_phase_bounds(
                         charge_windows=charge_windows, now=now,
                     )
+                    active_charge_phase = next((cluster for cluster in charge_phase_clusters
+                        if cluster["start"] <= now < cluster["end"]), None)
+                    active_charge_phase_end = active_charge_phase["end"] if active_charge_phase else None
             overlapping_charge_window = next(
                 (
                     window
@@ -3423,6 +3459,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ),
                 None,
             )
+            # A proposed active phase is not evidence of an accepted fill.
+            # Change the live latch only after the discharge/refill guard above.
+            if (overlapping_charge_window is not None and not battery_is_full
+                    and cast(datetime, overlapping_charge_window["start"]) <= now
+                    < cast(datetime, overlapping_charge_window["end"])):
+                charge_session_started = True
+                discharge_session_started = False
+                self._charge_session_started = True
+                self._discharge_session_started = False
+                self._battery_cycle_state_restored_recent = False
             if (
                 overlapping_charge_window is not None
                 and slot_start not in charge_starts
@@ -3444,6 +3490,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 last_charge_mode = charge_mode
                 simulated_discharge_session_started = False
+                simulated_charge_incomplete = sim_usable_energy_kwh < usable_capacity_kwh - 0.05
                 if charge_mode == "laden_van_net":
                     grid_cost_floor = max(
                         ([grid_cost_floor] if grid_cost_floor is not None else [])
@@ -3477,6 +3524,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
                 last_charge_mode = charge_mode
                 simulated_discharge_session_started = False
+                simulated_charge_incomplete = sim_usable_energy_kwh < usable_capacity_kwh - 0.05
                 if charge_mode == "laden_van_net":
                     costs = [float(s["import_price"]) for s in slots
                              if s["end"] > max(now, slot_start) and s["start"] < charge_end]
@@ -3521,6 +3569,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slots=slots, charge_windows=charge_windows,
                 after=max(now, segment_slots[0]["start"]), reserve_kwh=no_charge_reserve_kwh,
             )
+            if not self._has_profitable_discharge(
+                slots=segment_slots, start=max(now, segment_slots[0]["start"]),
+                end=segment_slots[-1]["end"], cost=grid_cost_floor,
+                minimum_profit=battery_min_profit,
+            ):
+                # Without a profitable outlet, only home use above reserve is allowed.
+                segment_reserve_kwh = max(segment_reserve_kwh, no_charge_reserve_kwh)
             discharge_budget_kwh = max(0.0, sim_usable_energy_kwh - segment_reserve_kwh)
             arbitrage = next((period for period in getattr(self, "_full_arbitrage_intervals", [])
                               if period[0] <= segment_slots[0]["start"] < period[1]), None)
@@ -3706,7 +3761,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # Discharge takes priority over charging, except between charge
                 # windows within today's cycle (suppress_discharge).
                 mode = "accu_uit"
-                if (
+                if simulated_charge_incomplete:
+                    # A pause cannot end a charge cycle or change its latch.
+                    pass
+                elif (
                     segment_discharge_kwh > 0
                     and sim_usable_energy_kwh > 0
                     and discharge_allowed_by_soc
@@ -3762,6 +3820,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     slots=slots, charge_windows=charge_windows,
                     after=max(now, segment_slot_start), reserve_kwh=no_charge_reserve_kwh,
                 )
+                if not self._has_profitable_discharge(
+                    slots=(segment_slot,), start=max(now, segment_slot_start),
+                    end=segment_slot_end, cost=grid_cost_floor,
+                    minimum_profit=battery_min_profit,
+                ):
+                    # A margin in another slot cannot release this slot's reserve.
+                    reserve_kwh = max(reserve_kwh, no_charge_reserve_kwh)
                 if mode in ("ontladen", "ontladen_naar_net"):
                     available_kwh = max(0.0, energy_before_slot - reserve_kwh)
                     allocated_kwh = min(available_kwh, max(0.0, energy_before_slot - sim_usable_energy_kwh))
@@ -3936,17 +4001,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     preview._discharge_session_started = True
                 if energy <= _BATTERY_DEPLETION_EPSILON_KWH:
                     preview._battery_grid_charge_price = None
-        # The executable two-family plan has finished this accepted charge
-        # phase. Do not carry its charging latch into a separate cheap refill
-        # later today: that would hold stored energy through the evening peak.
-        # A preview clipped inside a charge window must still finish that fill.
-        if (include_known_prices and preview_start is not None
-                and energy < capacity - 0.05
-                and last_energy_mode in ("laden_van_net", "laden_met_zonne_energie")
-                and last_energy_window_end <= start):
-            preview._charge_session_started = False
-            preview._discharge_session_started = True
-            preview._active_charge_phase_mode = "accu_uit"
+        # An ended partial charge window is not a completed cycle. The mode
+        # builder releases the charge latch only when simulated energy is full.
         # Treat estimates as inputs only within this isolated preview. The
         # published prices stay unknown and no live reserve is released by it.
         future = []

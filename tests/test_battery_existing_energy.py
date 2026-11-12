@@ -26,7 +26,7 @@ class ExistingEnergyTest(unittest.TestCase):
         self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
-    def test_feedback_uses_home_energy_then_refills_unavoidable_remainder(self):
+    def test_feedback_rejects_refill_above_reserve(self):
         now, slots, result = replay_full_plan(
             '2026_09_29_blocked_cycle', '2026-09-29T09:02:57.501039+02:00',
             soc=75, instance=self.instance(), reserve=60, max_charge=2.5,
@@ -34,14 +34,13 @@ class ExistingEnergyTest(unittest.TestCase):
         )
         windows = result.planned_battery_mode_windows
         self.assertEqual(result.battery_strategy, 'ontladen')
-        # Explicit October 2 exception: once PV covers all further demand
-        # and export cannot earn its historical margin, retain the refill.
-        self.assertEqual(result.next_charge_window_start, '2026-09-29T11:30:00+02:00')
-        self.assertFalse(result.battery_no_charge_reserve_active)
+        # A remainder above reserve cannot authorize a new charge cycle.
+        self.assertIsNone(result.next_charge_window_start)
+        self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=7.5, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
+        self.assertLessEqual(trace[-1][1], 7.5)
 
     def test_repeated_updates_keep_home_discharge_and_historical_export_cost(self):
         c = self.instance()
@@ -53,7 +52,7 @@ class ExistingEnergyTest(unittest.TestCase):
                 instance=c, reserve=60, max_charge=2.5,
                 tax_deduction=.11, isolated_cycles=True,
             )
-            self.assertEqual(result.battery_strategy, 'ontladen')
+            self.assertIn(result.battery_strategy, ('ontladen', 'accu_uit'))
             self.assertEqual(c._battery_grid_charge_price, .322)
             until = now + timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
