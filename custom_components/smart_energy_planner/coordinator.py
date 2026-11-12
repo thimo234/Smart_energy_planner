@@ -3742,8 +3742,12 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and more_todays_charge_ahead
                     )
                 )
-                if arbitrage is not None and (sim_usable_energy_kwh >= usable_capacity_kwh - .05
-                                               or simulated_discharge_session_started):
+                if (simulated_discharge_session_started
+                        or (arbitrage is not None
+                            and sim_usable_energy_kwh >= usable_capacity_kwh - .05)):
+                    # An unfinished discharge must not be held merely because
+                    # another charge candidate lies later today. This also
+                    # applies to home-only segments without an export plan.
                     suppress_discharge = within_charge_phase
                 simulated_soc_percent = (
                     (sim_usable_energy_kwh / usable_capacity_kwh) * 100.0

@@ -180,6 +180,31 @@ class CompleteCyclePolicyTest(unittest.TestCase):
             preview_start=self.now+timedelta(hours=1))
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in preview))
 
+    def test_discharge_below_reserve_waits_for_later_profitable_outlet(self):
+        self.c._discharge_session_started = True
+        slots = self.slots(count=14, home=0.)
+        slots[0].update(import_price=.60, demand_kwh=.13, net_solar_kwh=-.13)
+        for index in (3, 6, 7):
+            slots[index].update(import_price=.60, demand_kwh=3., net_solar_kwh=-3.)
+        windows = self.build(slots, 3.5, [self.charge(2, 4, 5.), self.charge(8, 12, 8.)])
+        charges = [w for w in windows if w['mode'].startswith('laden_')]
+        self.assertTrue(charges)
+        self.assertTrue(all(datetime.fromisoformat(w['start']) >= self.now+timedelta(hours=8)
+                            for w in charges),
+                        'A cheap refill must not interrupt discharge below reserve')
+        trace = energy_trace(self.now, slots, windows, initial=5.5, max_charge=2.5)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
+
+    def test_below_reserve_without_any_profitable_outlet_can_refill(self):
+        self.c._discharge_session_started = True
+        windows = self.build(self.slots(count=10, home=0.), 3.5,
+                             [self.charge(2, 4, 5.)])
+        self.assertTrue(any(w['mode'].startswith('laden_') for w in windows))
+        trace = energy_trace(self.now, self.slots(count=10, home=0.), windows,
+                             initial=5.5, max_charge=2.5)
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
+
     def test_full_charge_can_discharge_to_minimum_when_profitable(self):
         slots = self.slots(price=.60)
         windows = self.build(slots, 8., [self.charge(6, 8, 5.)])
