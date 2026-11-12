@@ -1,4 +1,4 @@
-"""A small stranded remainder must not cancel a useful solar refill."""
+"""Full discharge takes priority over a solar refill, including after restart."""
 from datetime import datetime, timedelta
 import unittest
 
@@ -23,17 +23,16 @@ def replay(now=NOW, soc=26, instance=None):
 
 
 class UnavoidableRemainderTest(unittest.TestCase):
-    def test_solar_refill_survives_stranded_remainder(self):
+    def test_solar_refill_waits_for_stranded_remainder(self):
         c = instance_with_cost()
         now, slots, result = replay(instance=c)
         self.assertFalse(c._charge_session_started)
         self.assertTrue(c._discharge_session_started)
         self.assertEqual(c._battery_grid_charge_price, .30)
         charge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_')]
-        self.assertTrue(charge)
-        self.assertEqual(charge[0]['start'], '2026-10-02T11:45:00+02:00')
+        self.assertFalse(charge)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=2.6, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
+        self.assertLessEqual(max(e for _, e, _ in trace), 2.6+.005)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in result.planned_battery_mode_windows))
@@ -69,22 +68,23 @@ class UnavoidableRemainderTest(unittest.TestCase):
         slot['net_solar_kwh'] = -.1
         self.assertTrue(possible())
 
-    def test_restored_discharge_state_does_not_delay_current_solar_charge(self):
+    def test_restored_discharge_state_blocks_current_solar_charge(self):
         c = instance_with_cost()
         c._battery_cycle_state_restored_recent = True
         now = datetime.fromisoformat('2026-10-02T11:51:36.720573+02:00')
         _, _, result = replay(now, 24.87095933, c)
-        self.assertEqual(result.battery_strategy, 'laden_met_zonne_energie')
-        self.assertEqual(result.next_charge_window_start, now.isoformat())
+        self.assertEqual(result.battery_strategy, 'accu_uit')
+        self.assertIsNone(result.next_charge_window_start)
+        self.assertTrue(c._discharge_session_started)
 
-    def test_sequential_updates_keep_daytime_refill(self):
+    def test_sequential_updates_cannot_refill_an_unfinished_cycle(self):
         c = instance_with_cost()
         now, energy = NOW, 2.6
         charged = False
         for _ in range(100):
             _, slots, result = replay(now, energy*10, c)
-            if energy < 9.95:
-                self.assertIsNotNone(result.next_charge_window_start)
+            if energy > 2.05 and not charged:
+                self.assertFalse(result.battery_strategy.startswith('laden_'))
             until = now+timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                 for w in result.planned_battery_mode_windows if datetime.fromisoformat(w['start']) < until]
@@ -97,5 +97,5 @@ class UnavoidableRemainderTest(unittest.TestCase):
             now = until
             if energy >= 9.95:
                 break
-        self.assertTrue(charged)
-        self.assertGreaterEqual(energy, 9.95)
+        self.assertFalse(charged)
+        self.assertLessEqual(energy, 2.6+.005)
