@@ -34,11 +34,11 @@ class TomorrowCycleTest(unittest.TestCase):
                 self.assertEqual(result.next_charge_window_start, charge[0]["start"])
                 self.assertGreater(result.next_charge_window_hours, 0)
                 self.assertGreater(result.next_discharge_window_hours, 0)
-                self.assertFalse(result.battery_no_charge_reserve_active)
+                self.assertTrue(result.battery_no_charge_reserve_active)
                 self.assertFalse(instance._charge_session_started)
                 self.assertTrue(instance._discharge_session_started)
                 before = [w for w in live if w["end"] <= charge[0]["start"]]
-                self.assertAlmostEqual(energy_trace(now, slots, before, initial=10)[-1][1], 2, delta=.05)
+                self.assertAlmostEqual(energy_trace(now, slots, before, initial=10)[-1][1], 6, delta=.05)
                 trace = energy_trace(now, slots, live, initial=10)
                 self.assertAlmostEqual(trace[-1][1], 10, delta=.05)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
@@ -122,7 +122,7 @@ class TomorrowCycleTest(unittest.TestCase):
                                     for w in tomorrow))
                 before = [w for w in windows if w["end"] <= charge[0]["start"]]
                 before_trace = energy_trace(now, slots, before, initial=soc / 10)
-                self.assertAlmostEqual(before_trace[-1][1], 2, delta=.05)
+                self.assertAlmostEqual(before_trace[-1][1], 6, delta=.05)
                 trace = energy_trace(now, slots, windows, initial=soc / 10)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
@@ -131,7 +131,7 @@ class TomorrowCycleTest(unittest.TestCase):
                 # Surplus export must use executable slots within eight hours
                 # before the next cycle, while still covering household demand.
                 exports = [w for w in windows if w["mode"] == "ontladen_naar_net"]
-                self.assertTrue(exports)
+                self.assertFalse(exports)  # Household supply uses energy above reserve.
                 for window in exports:
                     gap = (datetime.fromisoformat(charge[0]["start"])
                            - datetime.fromisoformat(window["start"])).total_seconds() / 3600

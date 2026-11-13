@@ -39,26 +39,26 @@ class PreplannedRefillTest(unittest.TestCase):
                 # October 28: retrying an earlier completion also finds a
                 # full profitable fill after the late start (11.25 ct/kWh).
                 self.assertTrue(result.planned_grid_charge_windows)
-                self.assertFalse(result.battery_no_charge_reserve_active)
+                self.assertTrue(result.battery_no_charge_reserve_active)
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=9, max_charge=2.5)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-                self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
-                self.assertAlmostEqual(trace[-1][1], 10., delta=.005)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+                self.assertGreaterEqual(trace[-1][1], 5.995)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_profitable_full_refill_is_planned_before_household_depletion(self):
         now, slots, result = self.replay(self.profitable_scenario())
         self.assertTrue(result.planned_grid_charge_windows)
-        self.assertLess(result.next_charge_window_start, '2026-10-22T12:00:00+02:00')
-        self.assertFalse(result.battery_no_charge_reserve_active)
+        self.assertLess(result.next_charge_window_start, '2026-10-22T16:00:00+02:00')
+        self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertTrue(any(w['mode'].startswith('ontladen')
                             for w in result.planned_battery_mode_windows))
         trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                              initial=9, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertLessEqual(min(e for _, e, _ in trace), 2.005)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertGreaterEqual(trace[-1][1], 5.995)
         imported = cost = saved = 0.
         for window in result.planned_battery_mode_windows + result.estimated_battery_mode_windows:
             for slot in slots:
@@ -84,7 +84,7 @@ class PreplannedRefillTest(unittest.TestCase):
                     discharging=True, reserve=60, max_charge=2.5, tax_deduction=.11,
                     isolated_cycles=True)
                 self.assertTrue(result.planned_grid_charge_windows)
-                self.assertFalse(result.battery_no_charge_reserve_active)
+                self.assertTrue(result.battery_no_charge_reserve_active)
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=soc/10, max_charge=2.5)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)

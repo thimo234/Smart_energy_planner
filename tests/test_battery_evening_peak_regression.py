@@ -64,7 +64,7 @@ def replay_evening_gap(*, soc=None, instance=None, charge_started=False, dischar
 
 
 class EveningPeakRegressionTest(unittest.TestCase):
-    def test_preview_holds_observed_partial_solar_cycle_until_full(self):
+    def test_preview_uses_partial_solar_energy_at_evening_peak(self):
         now, slots, _ = replay_evening_gap()
         data = json.loads((Path(__file__).parent / "fixtures" /
                            "battery_2026_11_11_evening_gap.json").read_text())
@@ -77,7 +77,7 @@ class EveningPeakRegressionTest(unittest.TestCase):
         peak = datetime.fromisoformat("2026-11-11T17:45:00+01:00")
         mode = next(w["mode"] for w in preview
                     if datetime.fromisoformat(w["start"]) <= peak < datetime.fromisoformat(w["end"]))
-        self.assertEqual(mode, "accu_uit")
+        self.assertEqual(mode, "ontladen")
         trace = energy_trace(now, slots, data["actual_windows"] + preview,
                              initial=9.6, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2.4 - 1e-6)

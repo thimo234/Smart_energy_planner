@@ -98,38 +98,29 @@ class ReserveStockTest(unittest.TestCase):
     def test_supplied_snapshot_discharges_then_fills_and_keeps_final_reserve(self):
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         _, slots, result = self.replay(now)
-        self.assertEqual(result.battery_strategy, 'ontladen')
+        self.assertEqual(result.battery_strategy, 'accu_uit')
         self.assertTrue(result.planned_grid_charge_windows)
-        self.assertFalse(result.battery_no_charge_reserve_active)
+        self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
-        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
-        charge_end = max(datetime.fromisoformat(w['end']) for w in windows
-                         if w['mode'] == 'laden_van_net')
-        imported = cost = used = value = 0.
+        from test_battery_partial_cycle_economics import imported_margin
+        ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=4.)
+        self.assertGreaterEqual(ledger['margin'], .1, ledger)
         for window in windows:
-            for slot in slots:
-                start = max(datetime.fromisoformat(window['start']), slot['start'])
-                end = min(datetime.fromisoformat(window['end']), slot['end'])
-                hours = max(0., (end-start).total_seconds()/3600)
-                net_kw = slot['net_solar_kwh']/slot['hours']
-                if window['mode'] == 'laden_van_net':
-                    amount = max(0., 2.5-max(0., net_kw))*hours
-                    imported += amount
-                    cost += amount*slot['import_price']
-                elif window['mode'] == 'ontladen' and start >= charge_end:
-                    amount = min(3., max(0., -net_kw))*hours
-                    used += amount
-                    value += amount*slot['import_price']
-        self.assertAlmostEqual(imported, 8., delta=.005)
-        self.assertAlmostEqual(used, 4., delta=.005)
-        self.assertGreaterEqual(value-used*cost/imported, used*.10)
-        # Remaining imports carry cost, not a presumed later sale price.
-        retained_cost = (imported-used)*cost/imported
-        self.assertAlmostEqual(retained_cost, .634, delta=.005)
+            if window['mode'] == 'ontladen_naar_net':
+                for slot in slots:
+                    if slot['start'].isoformat() < window['end'] and slot['end'].isoformat() > window['start']:
+                        self.assertGreaterEqual(slot['export_price']-ledger['average_cost'], .1)
+        # Partial cycling can import, sell a profitable surplus, and refill.
+        # Account for every emitted sale (including export), not only household
+        # consumption after the last refill as the obsolete full-cycle ledger did.
+        self.assertGreater(ledger['imported'], 4.)
+        self.assertAlmostEqual(ledger['imported'], ledger['sold'], delta=.005)
+        self.assertGreaterEqual(ledger['value']-ledger['sold']*ledger['average_cost'],
+                                ledger['sold']*.10)
 
     def test_feedback_and_restart_keep_refill_after_releasing_reserve(self):
         c = coordinator()
@@ -164,5 +155,5 @@ class ReserveStockTest(unittest.TestCase):
             minimum, peak = min(minimum, energy), max(peak, energy)
             now = until
         self.assertTrue(saw_grid)
-        self.assertLessEqual(minimum, 2.05)
+        self.assertGreaterEqual(minimum, 5.995)
         self.assertGreaterEqual(peak, 9.95)

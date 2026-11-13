@@ -8,7 +8,7 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 
 
 class FullProfitReserveTest(unittest.TestCase):
-    def test_rejected_charge_cannot_release_reserve_or_leave_stale_sensor_summary(self):
+    def test_profitable_partial_charge_keeps_reserve_and_consistent_sensor_summary(self):
         now = datetime.fromisoformat('2026-10-08T19:30:10.369777+02:00')
         c = coordinator()
         c._charge_session_started = False
@@ -19,10 +19,10 @@ class FullProfitReserveTest(unittest.TestCase):
                          price=.10, usable_hours=.25, charge_kwh=.625)]
         with patch.object(c, '_plan_charge_windows_for_horizon', return_value=([], rejected)):
             _, slots, result = self.replay(now, 90, c)
-        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertTrue(result.planned_grid_charge_windows)
         self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertEqual(result.battery_reserved_energy_kwh, 4.)
-        self.assertIsNone(result.next_charge_opportunity_start)
+        self.assertEqual(result.next_charge_opportunity_start, rejected[0]['start'])
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9., max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
 
@@ -46,7 +46,7 @@ class FullProfitReserveTest(unittest.TestCase):
             average_price=.30, average_export_price=.18, max_charge_kw=2,
             max_discharge_kw=3, no_charge_reserve_kwh=4, battery_min_profit=.10)
         trace = energy_trace(now, slots, windows, initial=8, max_charge=2)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
 
     def replay(self, now, soc, instance=None, reserve=60, profit=.10):
@@ -58,11 +58,17 @@ class FullProfitReserveTest(unittest.TestCase):
         now = datetime.fromisoformat('2026-10-08T19:30:10.369777+02:00')
         for profit in (.08, .10):
             _, slots, result = self.replay(now, 90, profit=profit)
-            self.assertFalse(result.planned_grid_charge_windows)
+            self.assertEqual(bool(result.planned_grid_charge_windows), profit == .08)
             self.assertTrue(result.battery_no_charge_reserve_active)
             self.assertAlmostEqual(result.battery_reserved_energy_kwh, 4.)
             windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
-            self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
+            from test_battery_partial_cycle_economics import imported_margin
+            ledger = imported_margin(slots, windows, initial_usable=7., reserve_usable=4.)
+            if profit == .08:
+                self.assertGreater(ledger['imported'], 0.)
+                self.assertGreaterEqual(ledger['margin']+.001, profit, ledger)
+            else:
+                self.assertEqual(ledger['imported'], 0.)
             trace = energy_trace(now, slots, windows, initial=9., max_charge=2.5)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
             self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
@@ -106,7 +112,7 @@ class FullProfitReserveTest(unittest.TestCase):
         now = datetime(2026, 10, 8, 12)
         for later_price, later_hours, charge_known, allowed in (
                 (.35, 4, True, True), (.25, 4, True, False),
-                (.35, 1, True, False), (.35, 4, False, False)):
+                (.35, 1, True, True), (.35, 4, False, False)):
             slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1),
                 hours=1., import_price=.20 if i < 2 else later_price,
                 export_price=.08 if i < 2 else later_price-.12,
@@ -119,6 +125,6 @@ class FullProfitReserveTest(unittest.TestCase):
                 max_charge_kw=1., max_discharge_kw=1., battery_min_profit=.10)
             self.assertEqual(bool(grid), allowed)
             if allowed:
-                self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 2.)
+                self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), min(2., later_hours))
                 self.assertTrue(all(datetime.fromisoformat(w['end']) <= now+timedelta(hours=2)
                                     for w in grid))

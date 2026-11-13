@@ -13,16 +13,19 @@ class SolarPreviewTest(unittest.TestCase):
             reserve=60, profit=.15, max_charge=2.5, snapshot_exports=True,
             isolated_cycles=True, instance=instance)
 
-    def test_preview_does_not_reintroduce_rejected_grid_supplement(self):
+    def test_preview_admits_only_independently_profitable_partial_grid_supplement(self):
         now, slots, result = self.replay('2026-10-10T09:15:10.729241+02:00', 20)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
-        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
+        from test_battery_partial_cycle_economics import imported_margin
+        ledger = imported_margin(slots, windows, initial_usable=0., reserve_usable=4.)
+        self.assertGreaterEqual(ledger['margin']+.001, .15, ledger)
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
-        # New policy: reject the entire incomplete cycle, including its PV.
-        self.assertTrue(all(w['mode'] == 'accu_uit' for w in windows))
-        self.assertAlmostEqual(trace[-1][1], 2.)
+        # Rejecting an uneconomic grid supplement must not reject free PV.
+        self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in windows))
+        self.assertGreater(trace[-1][1], 2.)
         self.assertTrue(result.battery_no_charge_reserve_active)
 
     def test_skipped_cycle_preserves_reserve_across_updates(self):
@@ -33,7 +36,7 @@ class SolarPreviewTest(unittest.TestCase):
             now, slots, result = self.replay(timestamp, 60, c)
             self.assertTrue(result.battery_no_charge_reserve_active)
             self.assertFalse(result.planned_grid_charge_windows)
-            self.assertFalse(result.planned_solar_charge_windows)
+            self.assertTrue(result.planned_solar_charge_windows)
             trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                  initial=6., max_charge=2.5)
             self.assertTrue(all(e >= 5.995 for _, e, _ in trace))
@@ -53,8 +56,9 @@ class SolarPreviewTest(unittest.TestCase):
             usable_capacity_kwh=8, current_remaining_capacity_kwh=8,
             max_charge_kw=2.5, max_discharge_kw=3, battery_min_profit=.10)
         self.assertFalse(grid)
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 8.)
-        self.assertTrue(all(w['start'].startswith('2026-10-11') for w in solar))
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 9.)
+        self.assertTrue(any(w['start'].startswith('2026-10-10') for w in solar))
+        self.assertTrue(any(w['start'].startswith('2026-10-11') for w in solar))
 
     def test_solar_feedback_does_not_become_a_running_grid_cycle(self):
         c = coordinator()

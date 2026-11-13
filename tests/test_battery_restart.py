@@ -37,14 +37,14 @@ class RestartTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(c._battery_cycle_state_initialized)
             self.assertFalse(c._charge_session_started)
         now, slots, result = replay(c, 39)
-        # October 25: reserve at cost permits the refill. A cold start must
-        # include the preceding discharge in the amount needed to reach full.
-        self.assertEqual(result.battery_strategy, "ontladen")
+        # A cold start below reserve must preserve measured energy rather than
+        # projecting an earlier discharge down to the physical minimum.
+        self.assertEqual(result.battery_strategy, "accu_uit")
         self.assertTrue(result.planned_grid_charge_windows)
-        self.assertFalse(result.battery_no_charge_reserve_active)
+        self.assertTrue(result.battery_no_charge_reserve_active)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=3.9, max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
-        self.assertAlmostEqual(trace[-1][1], 10., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 3.9, delta=.005)
+        self.assertGreater(trace[-1][1], 3.9)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_unknown_soc_preserves_both_existing_directions(self):

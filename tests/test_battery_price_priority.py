@@ -97,6 +97,7 @@ class PricePriorityTest(unittest.TestCase):
         solar, grid = c._plan_charge_windows_for_horizon(
             slots=slots, now=now, usable_capacity_kwh=8, current_remaining_capacity_kwh=4,
             max_charge_kw=2, max_discharge_kw=2, battery_min_profit=.08,
+            no_charge_reserve_kwh=4,
         )
         windows, mode = c._build_mode_windows_from_hourly_plan(
             slots=slots, now=now, planned_solar_charge_windows=solar, planned_grid_charge_windows=grid,
@@ -109,27 +110,29 @@ class PricePriorityTest(unittest.TestCase):
     def test_cheaper_grid_beats_abundant_more_expensive_solar(self):
         now, slots, solar, grid, windows, mode = self.plan()
         self.assertEqual(solar, [])
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 8)
+        # The higher reserve is permanent: buy only the real remaining room,
+        # while preserving source-price priority over dearer solar.
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 4)
         self.assertEqual(grid[0]['start'], (now+timedelta(hours=2)).isoformat())
-        self.assertEqual(mode, 'ontladen')
+        self.assertEqual(mode, 'accu_uit')
         before = [w for w in windows if w['end'] <= grid[0]['start']]
         trace = energy_trace(now, slots, before, initial=6, max_charge=2)
-        self.assertAlmostEqual(trace[-1][1], 2, delta=.001)
+        self.assertAlmostEqual(trace[-1][1], 6, delta=.001)
         self.assertEqual(reserve_without_charge_opportunity(
-            slots=slots, charge_windows=grid, after=now, reserve_kwh=4), 0)
+            slots=slots, charge_windows=grid, after=now, reserve_kwh=4), 4)
 
     def test_eleven_cent_advantage_makes_solar_cheaper(self):
         _, _, solar, grid, _, _ = self.plan(grid_price=.30, solar_price=.40)
         self.assertEqual(grid, [])
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 8)
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 4)
         self.assertAlmostEqual(solar[0]['price'], .29)
 
     def test_negative_grid_price_uses_grid_even_with_solar(self):
         now, slots, solar, grid, windows, _ = self.plan(grid_price=-.02, simultaneous_solar=True)
         self.assertEqual(solar, [])
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 8)
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 4)
         trace = energy_trace(now, slots, windows, initial=6, max_charge=2)
-        self.assertGreaterEqual(min(row[1] for row in trace), 2-.001)
+        self.assertGreaterEqual(min(row[1] for row in trace), 6-.001)
         self.assertLessEqual(max(row[1] for row in trace), 10+.001)
         for a, b in zip(windows, windows[1:]):
             self.assertLessEqual(a['end'], b['start'])

@@ -5,7 +5,51 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
-## Actuele cyclusregel: volledig laden, daarna ontladen
+## Actueel beleid: gedeeltelijke laad- en ontlaadcycli
+
+Deze expliciete gebruikerswijziging vervangt de eerdere eis om vóór iedere
+omkering volledig te laden of tot het minimum te ontladen. Bij tegenstrijdigheid
+heeft deze sectie voorrang op alle oudere volledige-cyclusregels hieronder.
+De oude afspraken blijven als geschiedenis bewaard, niet als actueel verbod.
+
+- Een economisch zinvolle **gedeeltelijke** solar- of netlading mag worden
+  ontladen zonder eerst 100% te bereiken. Na een gedeeltelijke ontlading mag
+  opnieuw zinvol worden geladen zonder eerst de fysieke ondergrens te bereiken.
+- Ontladen stopt bij de ingestelde reservegrens; de fysieke minimum-SOC blijft
+  een absolute ondergrens. Gebruik de eerder goedgekeurde hogere ingestelde
+  reserve-zonder-laadmogelijkheid. Een klein geselecteerd solarvenster mag die
+  reserve niet fictief vrijgeven.
+- Beschikbare bruikbare zon mag niet uitsluitend wegens een onvolledige cyclus
+  of een oude laad-/ontlaadlatch worden verworpen voor duurder later netladen.
+  Dit is **geen** onvoorwaardelijke solarprioriteit: aantoonbaar goedkopere
+  netenergie mag duurdere zonne-energie vervangen.
+- Inkoopkosten, exportbescherming en de ingestelde minimale gemiddelde winst
+  voor nieuwe netinkoop blijven gelden. Zon en opgeslagen reserve zijn geen
+  fictieve winstbron waarmee een onrendabele netaanvulling wordt toegestaan.
+  Achterblijvende voorraad wordt tegen kostprijs gewaardeerd, niet als winst.
+- Iedere nieuwe planning, herhaalde update en herstart moet werkelijke SOC,
+  ruimte, vermogen, tarieven en vraag gebruiken. Oude volledige-laad- of
+  ontlaadlatches zijn geen zelfstandig verbod op een nieuwe richting.
+- Grafieken moeten de berekende opdrachten onafhankelijk integreren, zonder
+  de uitkomst cosmetisch binnen de grenzen te begrenzen. Een veilige specifieke
+  fixture bewijst niet dat alle scenario's veilig zijn.
+
+### Status lokale kandidaat en preview-gate
+
+De gebruiker heeft de getoonde gedeeltelijke-cycliversie goedgekeurd voor
+publicatie naar main. De volledige offline unittest-suite slaagt: **352 tests,
+nul failures/errors**. Vóór publicatie slagen opnieuw **65 gerichte tests**.
+Fysieke integratie, reserve, bronprijsvolgorde, export-inkoopkosten, minimale
+netwinst en herhaalde updates/herstarts blijven gecontroleerd. Alleen verouderde
+volledige-cyclusverwachtingen zijn vervangen door inhoudelijke gedeeltelijke-
+cycluscontroles; economische en fysieke grenzen zijn niet weggewuifd.
+Zie `docs/partial-cycle-policy-verification.md` en de daadwerkelijk berekende
+lokale standalone preview `previews/partial-cycles/index.html`. De preview-gate
+is daarmee voldaan; gegenereerde previews en logs worden niet meegepubliceerd.
+Deployment en herstart zijn niet uitgevoerd en vallen buiten deze toestemming.
+Dit is geen uitspraak over de live Home Assistant-installatie.
+
+## Historische cyclusregel (vervallen): volledig laden, daarna ontladen
 
 Deze regel heeft voorrang op historische uitzonderingen verderop die een
 gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.

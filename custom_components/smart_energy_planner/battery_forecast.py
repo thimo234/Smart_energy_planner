@@ -846,9 +846,24 @@ def build_energy_balance_slots(
     and discharge planning account for the same extra expected home demand.
     """
 
+    # A tariff can span multiple demand/PV rates. Averaging those rates can
+    # produce an apparently safe discharge that crosses the real reserve.
+    from types import SimpleNamespace
+    forecast_edges = {at for item in hourly_demand
+                      for key in ('start', 'end')
+                      if (at := _parse_datetime(item.get(key))) is not None}
+    forecast_edges.update(at for item in solar_windows for at in (item.start, item.end)
+                          if at is not None)
+    aligned_prices = []
+    for window in price_windows:
+        edges = sorted({window.start, window.end,
+                        *(at for at in forecast_edges if window.start < at < window.end)})
+        aligned_prices.extend(SimpleNamespace(start=a, end=b, price=window.price,
+                                              price_known=window.price_known)
+                              for a, b in zip(edges, edges[1:]))
     demand_multiplier = 1.0 + max(0.0, min(1.0, float(demand_safety_margin)))
     slots: list[dict[str, Any]] = []
-    for window in price_windows:
+    for window in aligned_prices:
         if window.end <= horizon_start:
             continue
         slot_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)

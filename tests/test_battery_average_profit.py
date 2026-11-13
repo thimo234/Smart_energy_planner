@@ -48,7 +48,7 @@ class AverageProfitTest(unittest.TestCase):
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.01)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertAlmostEqual(trace[-1][1], 6., delta=.01)
+        self.assertGreaterEqual(trace[-1][1], 6.-.01)
         imported = cost = avoided = 0.
         for window in windows:
             for slot in slots:
@@ -88,7 +88,8 @@ class AverageProfitTest(unittest.TestCase):
             peak = max(peak, *(e for _, e, _ in trace))
             now = until
         self.assertTrue(saw_grid)
-        self.assertGreaterEqual(peak, 9.95)
+        # A profitable partial fill need not reach the former full-cycle target.
+        self.assertGreater(peak, 7.4)
 
 
 if __name__ == '__main__':

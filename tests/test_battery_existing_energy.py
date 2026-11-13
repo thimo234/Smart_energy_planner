@@ -26,7 +26,7 @@ class ExistingEnergyTest(unittest.TestCase):
         self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
-    def test_feedback_rejects_refill_above_reserve(self):
+    def test_feedback_partial_refill_above_reserve_keeps_export_cost_gate(self):
         now, slots, result = replay_full_plan(
             '2026_09_29_blocked_cycle', '2026-09-29T09:02:57.501039+02:00',
             soc=75, instance=self.instance(), reserve=60, max_charge=2.5,
@@ -35,12 +35,12 @@ class ExistingEnergyTest(unittest.TestCase):
         windows = result.planned_battery_mode_windows
         self.assertEqual(result.battery_strategy, 'ontladen')
         # A remainder above reserve cannot authorize a new charge cycle.
-        self.assertIsNone(result.next_charge_window_start)
+        self.assertIsNotNone(result.next_charge_window_start)
         self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=7.5, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
-        self.assertLessEqual(trace[-1][1], 7.5)
+        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_repeated_updates_keep_home_discharge_and_historical_export_cost(self):
         c = self.instance()

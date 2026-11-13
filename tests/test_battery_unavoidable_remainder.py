@@ -33,20 +33,21 @@ class UnavoidableRemainderTest(unittest.TestCase):
         self.assertTrue(charge)
         self.assertEqual(charge[0]['start'], '2026-10-02T11:45:00+02:00')
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=2.6, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 6, delta=.005)
+        self.assertGreater(max(e for _, e, _ in trace), 6.)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in result.planned_battery_mode_windows))
 
-    def test_profitable_export_still_empties_battery_before_refill(self):
+    def test_profitable_export_cannot_spend_initial_energy_below_reserve(self):
         now, slots, result = replay(instance=instance_with_cost(.20))
         windows = result.planned_battery_mode_windows
-        self.assertTrue(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         charge_start = result.next_charge_window_start
         self.assertIsNotNone(charge_start)
         trace = energy_trace(now, slots, [w for w in windows if w['end'] <= charge_start],
                              initial=2.6, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 2, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 2.6, delta=.005)
         for w in windows:
             if w['mode'] == 'ontladen_naar_net':
                 for s in slots:

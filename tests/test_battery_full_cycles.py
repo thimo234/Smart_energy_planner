@@ -1,4 +1,4 @@
-"""Full charge/discharge cycles replace the former partial-night exception."""
+"""Multi-day partial cycles retain physical/reserve and economic gates."""
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -17,21 +17,12 @@ class FullNightCycleTest(unittest.TestCase):
 
     def assert_cycles(self, now, slots, windows, initial):
         energy = initial
-        direction = 'discharge' if initial > 2.05 else None
         for window in windows:
-            mode = window['mode']
-            next_direction = ('charge' if mode.startswith('laden_') else
-                              'discharge' if mode.startswith('ontladen') else None)
-            if next_direction and next_direction != direction:
-                if next_direction == 'charge':
-                    self.assertLessEqual(energy, 2.05)
-                elif direction == 'charge':
-                    self.assertGreaterEqual(energy, 9.95)
-                direction = next_direction
+            reserve_floor = min(energy, 6.)
             trace = energy_trace(now, slots, [window], initial=energy, max_charge=2.5)
             if trace:
                 energy = trace[-1][1]
-                self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), reserve_floor-.005)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
         return energy
 
@@ -41,7 +32,7 @@ class FullNightCycleTest(unittest.TestCase):
         self.assertFalse(any(w['mode'].startswith('laden_') and datetime.fromisoformat(w['start']).hour < 9
                              for w in result.planned_battery_mode_windows))
         end_energy = self.assert_cycles(now, slots, result.planned_battery_mode_windows, 6.8)
-        self.assertAlmostEqual(end_energy, 10, delta=.005)
+        self.assertGreaterEqual(end_energy, 6.-.005)
         self.assert_cycles(now, slots,
                            result.planned_battery_mode_windows + result.estimated_battery_mode_windows, 6.8)
 
@@ -58,9 +49,9 @@ class FullNightCycleTest(unittest.TestCase):
         now = datetime.fromisoformat('2026-09-30T00:00:00+02:00')
         _, slots, result = self.replay(now, 20, snapshot='full_cycles_synthetic')
         windows = result.planned_battery_mode_windows
-        self.assertTrue(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+        self.assertTrue(any(w['mode'].startswith('ontladen') for w in windows))
         end_energy = self.assert_cycles(now, slots, windows, 2.)
-        self.assertAlmostEqual(end_energy, 2., delta=.005)
+        self.assertGreaterEqual(end_energy, 6.-.005)
         self.assertTrue(any(w['mode'].startswith('laden_') for w in result.estimated_battery_mode_windows))
         self.assert_cycles(now, slots, windows + result.estimated_battery_mode_windows, 2.)
         max_buy = max(float(slot['import_price']) for slot in slots
@@ -142,11 +133,11 @@ class FullNightCycleTest(unittest.TestCase):
                     if saw_discharge and now.hour >= 9:
                         daytime_refill = True
                     if direction == 'discharge':
-                        self.assertLessEqual(energy, 2.05)
+                        self.assertGreaterEqual(energy, 6.-.005)
                     direction = 'charge'
                 elif mode.startswith('ontladen'):
                     if direction == 'charge':
-                        self.assertGreaterEqual(energy, 9.95)
+                        self.assertGreaterEqual(energy, 6.-.005)
                     direction = 'discharge'
                     saw_discharge = True
                 trace = energy_trace(now, slots, [w], initial=energy, max_charge=2.5)
@@ -159,4 +150,4 @@ class FullNightCycleTest(unittest.TestCase):
         self.assertGreaterEqual(maximum, 9.95)
         self.assertTrue(saw_discharge)
         self.assertTrue(daytime_refill)
-        self.assertGreaterEqual(energy, 9.95)
+        self.assertGreaterEqual(energy, 6.-.005)

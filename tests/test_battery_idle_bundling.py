@@ -73,4 +73,5 @@ class IdleBundlingTest(unittest.TestCase):
             now = until
         # October 25: reserve stays at cost; the discharged part earns its margin.
         self.assertTrue(saw_grid)
-        self.assertGreaterEqual(peak, 9.95)
+        self.assertGreater(peak, 6.)
+        self.assertLessEqual(peak, 10.005)

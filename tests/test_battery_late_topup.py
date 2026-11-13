@@ -15,9 +15,9 @@ class LateTopupTest(unittest.TestCase):
 
     def test_daytime_fill_preserves_evening_value_and_safe_full_cycle(self):
         now, slots, result = self.replay()
-        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertFalse(result.planned_grid_charge_windows)
         self.assertTrue(result.planned_solar_charge_windows)
-        self.assertFalse(result.battery_no_charge_reserve_active)
+        self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         charge = [w for w in windows if w['mode'].startswith('laden_')]
         start = min(datetime.fromisoformat(w['start']) for w in charge)
@@ -25,8 +25,8 @@ class LateTopupTest(unittest.TestCase):
         self.assertEqual(start.date().isoformat(), '2026-10-29')
         self.assertLessEqual(end.hour, 16)
         trace = energy_trace(now, slots, windows, initial=10., max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
-        self.assertAlmostEqual(max(e for t, e, _ in trace if start.isoformat() <= t <= end.isoformat()), 10., delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertLessEqual(max(e for t, e, _ in trace if start.isoformat() <= t <= end.isoformat()), 10.005)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         imported = cost = used = value = 0.
@@ -44,9 +44,10 @@ class LateTopupTest(unittest.TestCase):
                     amount = min(3., max(0., -net))*hours
                     used += amount
                     value += amount*s['import_price']
-        self.assertGreater(imported, 2.)
-        self.assertLess(imported, 4.)
-        self.assertGreaterEqual(value/used-cost/imported, .1)
+        # Retained reserve and partial solar now avoid this unnecessary purchase.
+        self.assertEqual(imported, 0.)
+        self.assertEqual(cost, 0.)
+        self.assertGreater(used, 0.)
 
     def test_unprofitable_fill_still_keeps_reserve(self):
         _, _, result = self.replay(profit=1.)
@@ -87,5 +88,6 @@ class LateTopupTest(unittest.TestCase):
             if now.date().isoformat() == '2026-10-29' and now.hour >= 9:
                 peak = max(peak, energy)
             now = until
-        self.assertLessEqual(minimum, 2.05)
-        self.assertGreaterEqual(peak, 9.95)
+        self.assertGreaterEqual(minimum, 5.995)
+        self.assertGreater(peak, 6.)
+        self.assertLessEqual(peak, 10.005)

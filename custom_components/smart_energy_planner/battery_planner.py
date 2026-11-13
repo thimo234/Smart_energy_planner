@@ -27,15 +27,11 @@ def reserve_without_charge_opportunity(
     after: datetime,
     reserve_kwh: float,
 ) -> float:
-    """Keep extra reserve unless the remaining horizon offers replenishment."""
+    """Keep the configured reserve through partial cycles.
 
-    # Raw sunshine is not sufficient: the price-aware planner must actually
-    # have selected a replenishment window before releasing extra reserve.
-    if any(
-        (end := _parse_datetime(window.get("end"))) is not None and end > after
-        for window in charge_windows
-    ):
-        return 0.0
+    A selected top-up is not a promise to replenish released reserve. Historical
+    full-cycle rules released it on *any* charge window; partial cycles must not.
+    """
     return max(0.0, reserve_kwh)
 
 

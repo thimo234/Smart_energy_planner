@@ -7,21 +7,22 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 
 
 class ExportTransitionTest(unittest.TestCase):
-    def test_feedback_export_returns_directly_to_home_discharge(self):
+    def test_feedback_reserve_preserves_home_supply_before_export(self):
         now, slots, result = replay_full_plan(
             "2026_09_25_full", "2026-09-25T15:43:02+02:00", soc=100,
             reserve=60, tax_deduction=.11, isolated_cycles=True,
         )
         windows = result.planned_battery_mode_windows
         exports = [i for i, w in enumerate(windows) if w["mode"] == "ontladen_naar_net"]
-        self.assertTrue(exports)
+        self.assertFalse(exports)
+        self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
         for i in exports:
             self.assertEqual(windows[i + 1]["mode"], "ontladen")
             self.assertEqual(windows[i]["end"], windows[i + 1]["start"])
         trace = energy_trace(now, slots, windows, initial=10)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
         self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
-        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
 
     def test_partial_export_preserves_full_home_supply_and_energy_budget(self):
         for home_kw in (0, .5):

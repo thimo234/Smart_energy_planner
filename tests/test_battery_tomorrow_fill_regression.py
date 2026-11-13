@@ -79,8 +79,9 @@ class TomorrowFillRegressionTest(unittest.TestCase):
         before_charge = [w for w in windows if datetime.fromisoformat(w['end']) <= charge_start]
         trace = energy_trace(now, slots, before_charge,
                              initial=a['battery_total_energy_kwh'], max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
-        # The refill must be recalculated from 20%, not the old partial drain.
+        # Measured energy starts below reserve; never invent a half-kWh.
+        self.assertAlmostEqual(trace[-1][1], a['battery_total_energy_kwh'], delta=.005)
+        # The refill is recalculated from the protected configured reserve.
         first_discharge = next(w for w in windows if w['mode'].startswith('ontladen')
                                and datetime.fromisoformat(w['start']) > charge_start)
         filled = [w for w in windows

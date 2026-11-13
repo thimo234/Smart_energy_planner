@@ -1,4 +1,4 @@
-"""Cycle hysteresis, an expired-charge escape, and forecast uncertainty."""
+"""Partial cycles ignore historical direction while retaining physical bounds."""
 from datetime import datetime, timedelta
 import unittest
 
@@ -23,7 +23,7 @@ def modes(c, now, slots, energy, solar, grid):
 
 
 class CycleSafetyTest(unittest.TestCase):
-    def test_small_soc_changes_keep_direction_across_replans(self):
+    def test_small_soc_changes_follow_available_demand_and_charge_across_replans(self):
         now = datetime(2026, 9, 25, 10)
         c = coordinator()
         window = dict(start=now.replace(hour=14).isoformat(), end=now.replace(hour=16).isoformat(),
@@ -33,9 +33,11 @@ class CycleSafetyTest(unittest.TestCase):
             slots = slots_at(current)
             for s in slots:
                 s.update(net_solar_kwh=-1., solar_kwh=0., import_price=.60)
-            _, mode = modes(c, current, slots, energy, [], [window])
-            self.assertEqual(mode, 'accu_uit')
-            self.assertTrue(c._charge_session_started)
+            windows, mode = modes(c, current, slots, energy, [], [window])
+            self.assertEqual(mode, 'ontladen')
+            trace = energy_trace(current, slots, windows, initial=energy+2., max_charge=2.)
+            self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+            self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
         c._charge_session_started = False
         c._discharge_session_started = True
         for minute, energy in ((15, 2.), (20, 1.9), (25, 1.8)):
@@ -43,8 +45,8 @@ class CycleSafetyTest(unittest.TestCase):
             cheap = dict(start=current.isoformat(), end=(current+timedelta(hours=1)).isoformat(),
                          charge_kwh=2., usable_hours=1.)
             _, mode = modes(c, current, slots_at(current), energy, [], [cheap])
-            self.assertNotEqual(mode, 'laden_van_net')
-            self.assertTrue(c._discharge_session_started)
+            self.assertEqual(mode, 'laden_van_net')
+            self.assertTrue(c._charge_session_started)
 
     def test_lower_solar_forecast_starts_evening_discharge_earlier(self):
         now = datetime(2026, 9, 25, 18)
@@ -60,9 +62,9 @@ class CycleSafetyTest(unittest.TestCase):
             c._discharge_session_started = True
             _, mode = modes(c, now, slots, 2., [], [])
             outcomes.append(mode)
-        self.assertEqual(outcomes, ['accu_uit', 'ontladen'])
+        self.assertEqual(outcomes, ['laden_met_zonne_energie', 'ontladen'])
 
-    def test_future_cheap_refill_cannot_reverse_unfinished_simulated_discharge(self):
+    def test_future_cheap_refill_can_reverse_partial_simulated_discharge(self):
         now = datetime(2026, 9, 25, 10)
         c = coordinator()
         c._charge_session_started = False
@@ -73,13 +75,15 @@ class CycleSafetyTest(unittest.TestCase):
             s.update(net_solar_kwh=-1., solar_kwh=0., import_price=.20 if i < 4 else .80)
         window = dict(start=(now+timedelta(hours=3)).isoformat(),
                       end=(now+timedelta(hours=4)).isoformat(), charge_kwh=2., usable_hours=1.)
-        # Four kWh cannot be depleted by three hours of one-kW home demand,
-        # even though historical purchase cost no longer blocks home use.
+        # Four kWh need not be fully depleted before a useful partial refill.
         windows, _ = modes(c, now, slots, 4., [], [window])
-        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
+        trace = energy_trace(now, slots, windows, initial=6., max_charge=2.)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
-    def test_discharge_latch_rejects_solar_and_grid_until_minimum(self):
+    def test_discharge_latch_cannot_reject_capacity_bounded_solar_or_grid(self):
         now = datetime(2026, 9, 25, 12)
         for source in ('solar', 'grid'):
             for energy in (7.5, 4, .10):
@@ -89,12 +93,14 @@ class CycleSafetyTest(unittest.TestCase):
                     c._discharge_session_started = True
                     window = dict(start=now.isoformat(), end=(now+timedelta(hours=1)).isoformat(),
                                   charge_kwh=1., usable_hours=1.)
-                    _, mode = modes(c, now, slots_at(now), energy,
+                    slots = slots_at(now)
+                    windows, mode = modes(c, now, slots, energy,
                                     [window] if source == 'solar' else [],
                                     [window] if source == 'grid' else [])
-                    self.assertNotIn(mode, ('laden_met_zonne_energie', 'laden_van_net'))
-                    self.assertTrue(c._discharge_session_started)
-                    self.assertFalse(c._charge_session_started)
+                    self.assertEqual(mode, 'laden_met_zonne_energie' if source == 'solar' else 'laden_van_net')
+                    trace = energy_trace(now, slots, windows, initial=energy+2., max_charge=2.)
+                    self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+                    self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_depletion_releases_discharge_latch_for_next_charge(self):
         now = datetime(2026, 9, 25, 12)
@@ -107,7 +113,7 @@ class CycleSafetyTest(unittest.TestCase):
         self.assertEqual(mode, 'laden_met_zonne_energie')
         self.assertTrue(c._charge_session_started)
 
-    def test_partial_charge_waits_for_remaining_charge_instead_of_reversing(self):
+    def test_partial_charge_can_serve_home_before_remaining_charge(self):
         now = datetime(2026, 9, 25, 10)
         c = coordinator()  # Charging started earlier; only a small amount stored.
         slots = slots_at(now)
@@ -116,20 +122,20 @@ class CycleSafetyTest(unittest.TestCase):
         window = dict(start=(now+timedelta(hours=4)).isoformat(),
                       end=(now+timedelta(hours=6)).isoformat(), charge_kwh=4., usable_hours=2.)
         _, mode = modes(c, now, slots, 1., [], [window])
-        self.assertEqual(mode, 'accu_uit')
-        self.assertTrue(c._charge_session_started)
-        self.assertFalse(c._discharge_session_started)
+        self.assertEqual(mode, 'ontladen')
+        self.assertTrue(c._discharge_session_started)
+        self.assertFalse(c._charge_session_started)
 
-    def test_last_charge_window_over_does_not_complete_partial_charge(self):
+    def test_last_partial_charge_window_ending_does_not_block_home_use(self):
         now = datetime(2026, 9, 25, 18)
         c = coordinator()
         slots = slots_at(now)
         for s in slots:
             s.update(net_solar_kwh=-1., solar_kwh=0., import_price=.60)
         _, mode = modes(c, now, slots, 2., [], [])
-        self.assertEqual(mode, 'accu_uit')
-        self.assertFalse(c._discharge_session_started)
-        self.assertTrue(c._charge_session_started)
+        self.assertEqual(mode, 'ontladen')
+        self.assertTrue(c._discharge_session_started)
+        self.assertFalse(c._charge_session_started)
 
     def test_twenty_percent_margin_reduces_solar_in_actual_planner(self):
         args = ('2026_09_24_cheap_solar', '2026-09-24T20:04:29.361358+02:00')
