@@ -234,7 +234,7 @@ async def _async_setup_household(hass, entry):
     )
     for binding in planner_bindings(entry):
         try:
-            await async_adopt_legacy(hass, entry, binding.subentry, er.async_get(hass))
+            await async_adopt_legacy(hass, entry, binding.subentry, er.async_get(hass), dr.async_get(hass))
         except Exception:
             # Adoption has not transferred ownership: a live standalone planner
             # may still own this identity and its runtime state.

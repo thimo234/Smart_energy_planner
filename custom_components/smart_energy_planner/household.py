@@ -114,7 +114,26 @@ def adoption_conflicts(parent, legacy):
     return conflicts
 
 
-async def async_adopt_legacy(hass, parent, subentry, registry):
+def legacy_claims(hass, legacy_id):
+    """Find configured owners, including children whose setup has failed."""
+    return [(entry.entry_id, child.subentry_id)
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            for child in entry.subentries.values()
+            if child.data.get('_legacy_entry_id') == legacy_id]
+
+
+def legacy_available(hass, legacy):
+    """An orphan archive needs explicit adoption; never restart it on its own."""
+    if legacy_claims(hass, legacy.entry_id):
+        return False
+    adopted = legacy.data.get('_adopted_by')
+    if not adopted:
+        return True
+    owner = hass.config_entries.async_get_entry(adopted['entry_id'])
+    return owner is None or adopted['subentry_id'] not in owner.subentries
+
+
+async def async_adopt_legacy(hass, parent, subentry, registry, devices):
     """Resume explicit adoption idempotently; keep the old entry as an archive.
 
     No entities or persisted planner state are deleted. The old entry is marked
@@ -124,24 +143,43 @@ async def async_adopt_legacy(hass, parent, subentry, registry):
     legacy_id = subentry.data.get('_legacy_entry_id')
     if not legacy_id:
         return
+    target = {'entry_id': parent.entry_id, 'subentry_id': subentry.subentry_id}
+    claims = legacy_claims(hass, legacy_id)
+    if any(claim != (parent.entry_id, subentry.subentry_id) for claim in claims):
+        raise ValueError('Legacy planner is already claimed by another child')
     legacy = hass.config_entries.async_get_entry(legacy_id)
+    adopted = legacy.data.get('_adopted_by') if legacy else None
+    if adopted and adopted != target:
+        owner = hass.config_entries.async_get_entry(adopted['entry_id'])
+        if owner is not None and adopted['subentry_id'] in owner.subentries:
+            raise ValueError('Legacy planner is already adopted by another child')
+    live = hass.data.get(DOMAIN, {}).get(legacy_id)
+    if live is not None and (legacy is None or adopted):
+        raise ValueError('Legacy planner still has a live controller')
     if legacy is None:
         # The user may have removed the inert archive after successful adoption.
         return
-    target = {'entry_id': parent.entry_id, 'subentry_id': subentry.subentry_id}
-    adopted = legacy.data.get('_adopted_by')
-    if adopted and adopted != target:
-        raise ValueError('Legacy planner is already adopted by another child')
-    if not adopted:
+    if adopted != target:
         if adoption_conflicts(parent, legacy):
             raise ValueError('Shared sources changed or conflict; resolve before adoption')
-        if not await hass.config_entries.async_unload(legacy_id):
+        if not adopted and not await hass.config_entries.async_unload(legacy_id):
             raise ValueError('Legacy planner could not be unloaded')
         hass.config_entries.async_update_entry(legacy, data={**legacy.data, '_adopted_by': target})
+    # Transfer ALL entities before any device. HA's queued device-update handler
+    # deletes entries still owned by the device's old config entry/subentry. An
+    # exception partway through either loop must leave that cleanup harmless.
+    # HA validates the target entry/subentry and device existence, not matching
+    # device ownership, so keeping each stable device link here is supported.
+    # Both registry APIs are synchronous callbacks: do not yield between moves.
     for entity in list(registry.entities.values()):
         if entity.config_entry_id == legacy_id:
             registry.async_update_entity(entity.entity_id, config_entry_id=parent.entry_id,
                                          config_subentry_id=subentry.subentry_id)
+    # Devices must also move before the inert archive can be safely removed.
+    for device in list(devices.devices.values()):
+        if device.config_entry_id == legacy_id:
+            devices.async_update_device(device.id, new_config_entry_id=parent.entry_id,
+                                        new_config_subentry_id=subentry.subentry_id)
 
 
 class SharedSources:

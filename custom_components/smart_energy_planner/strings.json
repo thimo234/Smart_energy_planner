@@ -156,7 +156,8 @@
   },
   "config_subentries": {
     "battery": {
-      "title": "Battery planner",
+      "entry_type": "Battery planner",
+      "initiate_flow": {"user": "Add battery planner"},
       "step": {
         "user": {
           "title": "Battery planner",
@@ -238,7 +239,8 @@
       }
     },
     "price_window": {
-      "title": "Price window planner",
+      "entry_type": "Price window planner",
+      "initiate_flow": {"user": "Add price window planner"},
       "step": {
         "user": {
           "title": "Price window planner",
@@ -320,7 +322,8 @@
       }
     },
     "demand": {
-      "title": "Consumption forecast",
+      "entry_type": "Consumption forecast",
+      "initiate_flow": {"user": "Add consumption forecast"},
       "step": {
         "user": {
           "title": "Consumption forecast",

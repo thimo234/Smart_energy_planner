@@ -15,7 +15,7 @@ from homeassistant.helpers import selector
 from .const import (PLANNER_KIND_DEMAND, CONF_DEMAND_DEVICES, CONF_DEMAND_ENERGY_SENSORS,
                     CONF_DEMAND_FORECAST_SENSOR)
 from .const import PLANNER_KIND_HOUSEHOLD, SHARED_SOURCE_KEYS
-from .household import adoption_conflicts, child_data, merged_data
+from .household import adoption_conflicts, child_data, legacy_available, merged_data
 
 
 def _build_household_schema(hass, data=None):
@@ -539,7 +539,7 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
         result = []
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if (merged_data(entry).get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY) == self._subentry_type
-                    and not entry.data.get('_adopted_by')):
+                    and legacy_available(self.hass, entry)):
                 result.append(entry)
         return result
 
@@ -567,7 +567,7 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
 
     async def async_step_adopt(self, user_input=None):
         legacy = self.hass.config_entries.async_get_entry(self._legacy_id)
-        if legacy is None or legacy.data.get('_adopted_by'):
+        if legacy is None or not legacy_available(self.hass, legacy):
             return self.async_abort(reason='legacy_unavailable')
         conflicts = adoption_conflicts(self._get_entry(), legacy)
         if conflicts:
@@ -575,6 +575,7 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
                 description_placeholders={'sources': ', '.join(sorted(conflicts))})
         if user_input is not None and user_input.get('confirm'):
             data = {**child_data(merged_data(legacy)), '_legacy_entry_id': legacy.entry_id}
+            data.pop('_adopted_by', None)
             return self.async_create_entry(title=legacy.title, data=data)
         return self.async_show_form(step_id='adopt', data_schema=vol.Schema({
             vol.Required('confirm', default=False): selector.BooleanSelector()}),

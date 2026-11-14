@@ -158,7 +158,8 @@
   },
   "config_subentries": {
     "battery": {
-      "title": "Accuplanner",
+      "entry_type": "Accuplanner",
+      "initiate_flow": {"user": "Accuplanner toevoegen"},
       "step": {
         "user": {
           "title": "Accuplanner",
@@ -241,7 +242,8 @@
       }
     },
     "price_window": {
-      "title": "Prijsblokplanner",
+      "entry_type": "Prijsblokplanner",
+      "initiate_flow": {"user": "Prijsblokplanner toevoegen"},
       "step": {
         "user": {
           "title": "Prijsblokplanner",
@@ -324,7 +326,8 @@
       }
     },
     "demand": {
-      "title": "Verbruiksvoorspelling",
+      "entry_type": "Verbruiksvoorspelling",
+      "initiate_flow": {"user": "Verbruiksvoorspelling toevoegen"},
       "step": {
         "user": {
           "title": "Verbruiksvoorspelling",

@@ -318,6 +318,7 @@ class RuntimeContractTest(unittest.IsolatedAsyncioTestCase):
                 state = {'battery_profit_total_eur': 44, 'battery_cycle_state': {'cycles': 7}}
                 hass = NS(data={DOMAIN: {'old': live}, RUNTIME_STATE: {'old': state}},
                     config_entries=NS(async_get_entry=lambda identity: old,
+                        async_entries=lambda domain: [home, old],
                         async_unload=AsyncMock(return_value=False), async_update_entry=Mock(),
                         async_forward_entry_setups=AsyncMock()))
                 with patch.dict(sys.modules, doubles), self.assertLogs(runtime._LOGGER, 'ERROR'):

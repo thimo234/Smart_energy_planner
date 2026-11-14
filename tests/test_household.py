@@ -99,11 +99,11 @@ class AdoptionTest(unittest.IsolatedAsyncioTestCase):
         update = registry.async_update_entity.side_effect
         registry.async_update_entity.side_effect = RuntimeError('interrupted')
         with self.assertRaises(RuntimeError):
-            await async_adopt_legacy(hass, home, child, registry)
+            await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         self.assertIn('_adopted_by', old.data)
         self.assertEqual(registry.entities['sensor.strategy'].config_entry_id, 'legacy')
         registry.async_update_entity.side_effect = update
-        await async_adopt_legacy(hass, home, child, registry)
+        await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         hass.config_entries.async_unload.assert_awaited_once_with('legacy')
         self.assertEqual(registry.entities['sensor.strategy'].config_entry_id, 'home')
 
@@ -122,14 +122,15 @@ class AdoptionTest(unittest.IsolatedAsyncioTestCase):
             for key, value in kwargs.items():
                 setattr(target, key, value)
         manager = NS(async_get_entry=lambda identity: old if identity == 'legacy' else home,
+                     async_entries=lambda domain: [home, old],
                      async_unload=AsyncMock(return_value=True),
                      async_update_entry=Mock(side_effect=update_entry))
-        hass = NS(config_entries=manager)
+        hass = NS(config_entries=manager, data={})
         return hass, home, old, child, registry
 
     async def test_adoption_moves_registry_not_unique_ids_or_persistent_state(self):
         hass, home, old, child, registry = self.fixture()
-        await async_adopt_legacy(hass, home, child, registry)
+        await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         record = registry.entities['sensor.strategy']
         self.assertEqual(record.config_entry_id, 'home')
         self.assertEqual(record.config_subentry_id, 'child')
@@ -137,14 +138,14 @@ class AdoptionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(old.data['_adopted_by'], {'entry_id': 'home', 'subentry_id': 'child'})
         self.assertEqual(old.data['price_sensor'], 'sensor.price')
         self.assertEqual(PlannerBinding(home, child).entry_id, 'legacy')
-        await async_adopt_legacy(hass, home, child, registry)
+        await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         self.assertEqual(registry.async_update_entity.call_count, 1)
 
     async def test_failed_unload_does_not_move_or_mark_legacy(self):
         hass, home, old, child, registry = self.fixture()
         hass.config_entries.async_unload.return_value = False
         with self.assertRaises(ValueError):
-            await async_adopt_legacy(hass, home, child, registry)
+            await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         registry.async_update_entity.assert_not_called()
         self.assertNotIn('_adopted_by', old.data)
 
@@ -152,20 +153,25 @@ class AdoptionTest(unittest.IsolatedAsyncioTestCase):
         hass, home, old, child, registry = self.fixture()
         home.options = {'price_sensor': 'different'}
         with self.assertRaises(ValueError):
-            await async_adopt_legacy(hass, home, child, registry)
+            await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         hass.config_entries.async_unload.assert_not_called()
 
     async def test_adopted_source_changes_and_serialized_restart_are_idempotent(self):
         hass, home, old, child, registry = self.fixture()
-        await async_adopt_legacy(hass, home, child, registry)
+        await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         old.data = json.loads(json.dumps(old.data))
         home.options = {'price_sensor': 'new-price'}
-        await async_adopt_legacy(hass, home, child, registry)
+        await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         self.assertEqual(PlannerBinding(home, child).data['price_sensor'], 'new-price')
 
     async def test_same_legacy_cannot_be_claimed_by_another_household(self):
         hass, home, old, child, registry = self.fixture()
+        other = entry('other')
+        other.subentries = {'different': sub('different')}
+        entries = {'home': home, 'legacy': old, 'other': other}
+        hass.config_entries.async_get_entry = entries.get
+        hass.config_entries.async_entries = lambda domain: list(entries.values())
         old.data['_adopted_by'] = {'entry_id': 'other', 'subentry_id': 'different'}
         with self.assertRaises(ValueError):
-            await async_adopt_legacy(hass, home, child, registry)
+            await async_adopt_legacy(hass, home, child, registry, NS(devices={}))
         registry.async_update_entity.assert_not_called()
