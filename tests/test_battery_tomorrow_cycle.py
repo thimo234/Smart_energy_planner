@@ -38,15 +38,17 @@ class TomorrowCycleTest(unittest.TestCase):
                 self.assertFalse(instance._charge_session_started)
                 self.assertTrue(instance._discharge_session_started)
                 before = [w for w in live if w["end"] <= charge[0]["start"]]
-                self.assertAlmostEqual(energy_trace(now, slots, before, initial=10)[-1][1], 6, delta=.05)
+                self.assertAlmostEqual(energy_trace(now, slots, before, initial=10)[-1][1], 2, delta=.05)
                 trace = energy_trace(now, slots, live, initial=10)
-                self.assertAlmostEqual(trace[-1][1], 10, delta=.05)
+                gained = sum(energy_trace(now, slots, [w], initial=0)[-1][1] for w in charge)
+                self.assertAlmostEqual(trace[-1][1], 2 + gained, delta=.005)
+                self.assertLess(trace[-1][1], 9.995, 'insufficient solar remains an incomplete fill')
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
                 preview = result.estimated_battery_mode_windows
                 self.assertTrue(preview)
                 self.assertEqual(preview[0]["start"], charge[-1]["end"])
-                self.assertTrue(any(w["mode"] == "ontladen" for w in preview))
+                self.assertTrue(all(w['mode'] == 'accu_uit' for w in preview))
                 # Skipped near-full candidates must not turn into an invented
                 # extra refill cycle later in the same sunny afternoon.
                 self.assertFalse(any(w["mode"].startswith("laden_") for w in preview))
@@ -118,20 +120,28 @@ class TomorrowCycleTest(unittest.TestCase):
                 tomorrow = [w for w in windows if w["start"].startswith("2026-09-26")]
                 charge = [w for w in tomorrow if w["mode"] == "laden_met_zonne_energie"]
                 self.assertTrue(charge)
-                self.assertTrue(any(w["mode"] == "ontladen" and w["start"] >= charge[-1]["end"]
-                                    for w in tomorrow))
+                after_fill = [w for w in tomorrow if w['start'] >= charge[-1]['end']]
+                if soc == 100:
+                    self.assertFalse(any(w['mode'].startswith('ontladen') for w in after_fill))
+                else:
+                    self.assertTrue(any(w['mode'] == 'ontladen' for w in after_fill))
                 before = [w for w in windows if w["end"] <= charge[0]["start"]]
                 before_trace = energy_trace(now, slots, before, initial=soc / 10)
-                self.assertAlmostEqual(before_trace[-1][1], 6, delta=.05)
+                self.assertAlmostEqual(before_trace[-1][1], 2, delta=.05)
                 trace = energy_trace(now, slots, windows, initial=soc / 10)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
-                self.assertAlmostEqual(max(e for t, e, _ in trace if t.startswith("2026-09-26")),
-                                       10, delta=.05)
+                tomorrow_peak = max(e for t, e, _ in trace if t.startswith('2026-09-26'))
+                if soc == 100:
+                    gained = sum(energy_trace(now, slots, [w], initial=0)[-1][1] for w in charge)
+                    self.assertAlmostEqual(tomorrow_peak, 2 + gained, delta=.005)
+                    self.assertLess(tomorrow_peak, 9.995)
+                else:
+                    self.assertAlmostEqual(tomorrow_peak, 10, delta=.005)
                 # Surplus export must use executable slots within eight hours
                 # before the next cycle, while still covering household demand.
                 exports = [w for w in windows if w["mode"] == "ontladen_naar_net"]
-                self.assertFalse(exports)  # Household supply uses energy above reserve.
+                self.assertTrue(exports)  # Profitable export completes the normal-minimum cycle.
                 for window in exports:
                     gap = (datetime.fromisoformat(charge[0]["start"])
                            - datetime.fromisoformat(window["start"])).total_seconds() / 3600

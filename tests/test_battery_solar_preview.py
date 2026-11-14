@@ -19,7 +19,7 @@ class SolarPreviewTest(unittest.TestCase):
         self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
         from test_battery_partial_cycle_economics import imported_margin
         ledger = imported_margin(slots, windows, initial_usable=0., reserve_usable=4.)
-        self.assertGreaterEqual(ledger['margin']+.001, .15, ledger)
+        self.assertEqual(ledger['sold'], 0., 'unfinished refill cannot sell imported stock')
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
@@ -56,7 +56,7 @@ class SolarPreviewTest(unittest.TestCase):
             usable_capacity_kwh=8, current_remaining_capacity_kwh=8,
             max_charge_kw=2.5, max_discharge_kw=3, battery_min_profit=.10)
         self.assertFalse(grid)
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 9.)
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), 8.)  # Maximum minus normal minimum.
         self.assertTrue(any(w['start'].startswith('2026-10-10') for w in solar))
         self.assertTrue(any(w['start'].startswith('2026-10-11') for w in solar))
 

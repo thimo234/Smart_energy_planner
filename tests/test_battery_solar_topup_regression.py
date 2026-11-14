@@ -75,11 +75,12 @@ class SolarTopupTest(unittest.TestCase):
             battery_min_profit=.1)
         return c, windows
 
-    def test_partial_solar_topup_does_not_wait_for_full_before_evening(self):
+    def test_partial_solar_cannot_reverse_an_unfinished_discharge(self):
         now = datetime.fromisoformat('2026-11-13T12:00:00+01:00')
         slots = [slot(now, 0, .2, .05, solar=1.), slot(now, 1, .6, .1, demand=2.)]
         _, windows = self.build(slots, initial=1.)
-        self.assertEqual(windows[0]['mode'], 'laden_met_zonne_energie')
+        self.assertEqual(windows[0]['mode'], 'accu_uit')
+        self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
         self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
         self.assertLess(max(e for _, e, _ in energy_trace(now, slots, windows, initial=3.)), 10.)
 

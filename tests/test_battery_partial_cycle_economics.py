@@ -88,8 +88,10 @@ class PartialCycleEconomicsTest(unittest.TestCase):
         import json
 
         instance = coordinator()
-        now = datetime.fromisoformat('2026-09-18T19:24:56.329382+02:00')
-        energy = 6.
+        # Replace the superseded partial-only turnover with a recorded
+        # complete-cycle opportunity; positive FIFO assertions remain strict.
+        now = datetime.fromisoformat('2026-09-19T13:16:06+02:00')
+        energy = 2.
         all_slots, executed = [], []
         minimum_energy = maximum_energy = energy
         for update in range(114):
@@ -109,8 +111,8 @@ class PartialCycleEconomicsTest(unittest.TestCase):
                 del restored.hass
                 instance = restored
             _, slots, result = replay_full_plan(
-                '2026_09_18_evening', now.isoformat(), soc=energy*10,
-                reserve=40, profit=.15, max_charge=2.5, tax_deduction=.11,
+                '2026_09_19_morning', now.isoformat(), soc=energy*10,
+                reserve=20, profit=.08, max_charge=2.5, tax_deduction=.11,
                 isolated_cycles=True, instance=instance)
             until = now + timedelta(minutes=15)
             commands = [{**w, 'start': max(now, datetime.fromisoformat(w['start'])).isoformat(),
@@ -128,31 +130,48 @@ class PartialCycleEconomicsTest(unittest.TestCase):
                         'net_solar_kwh': slot['net_solar_kwh']*hours/slot['hours']})
             trace = energy_trace(now, slots, commands, initial=energy, max_charge=2.5)
             self.assertTrue(trace)
-            self.assertGreaterEqual(min(e for _, e, _ in trace), 4.-1e-6)
+            self.assertGreaterEqual(min(e for _, e, _ in trace), 2.-1e-6)
             self.assertLessEqual(max(e for _, e, _ in trace), 10.+1e-6)
             minimum_energy = min(minimum_energy, *(e for _, e, _ in trace))
             maximum_energy = max(maximum_energy, *(e for _, e, _ in trace))
             energy = trace[-1][1]
             executed.extend(commands)
             now = until
-        ledger = imported_margin(all_slots, executed, initial_usable=4., reserve_usable=2.)
+        ledger = imported_margin(all_slots, executed, initial_usable=0., reserve_usable=0.)
         self.assertGreater(ledger['imported'], .1, ledger)
         self.assertGreater(ledger['sold'], .1, ledger)
-        self.assertGreaterEqual(ledger['margin'] + 1e-6, .15, ledger)
+        self.assertGreaterEqual(ledger['margin'] + 1e-6, .08, ledger)
         self.replan_metrics = {**ledger, 'minimum_energy_kwh': minimum_energy,
             'maximum_energy_kwh': maximum_energy, 'final_energy_kwh': energy,
             'updates': 114, 'restart': restart}
 
     def test_reviewed_single_plan_grid_margin(self):
         _, slots, result = replay_full_plan(
-            '2026_09_18_evening', '2026-09-18T19:24:56.329382+02:00',
-            soc=60, reserve=40, profit=.15, max_charge=2.5,
+            '2026_09_19_morning', '2026-09-19T13:16:06+02:00',
+            soc=20, reserve=20, profit=.08, max_charge=2.5,
             tax_deduction=.11, isolated_cycles=True)
         ledger = imported_margin(slots,
             result.planned_battery_mode_windows + result.estimated_battery_mode_windows,
-            initial_usable=4., reserve_usable=2.)
+            initial_usable=0., reserve_usable=0.)
         self.assertGreater(ledger['sold'], .1, ledger)
-        self.assertGreaterEqual(ledger['margin'] + 1e-6, .15, ledger)
+        self.assertGreaterEqual(ledger['margin'] + 1e-6, .08, ledger)
+
+    def test_original_partial_only_fixture_waits_without_spending_grid_margin(self):
+        # Preserve the original 60% / 40% / EUR .15 scenario. It no longer
+        # provides a complete profitable cycle; zero imports are expected, not
+        # evidence for positive turnover. The other fixture proves turnover.
+        now, slots, result = replay_full_plan(
+            '2026_09_18_evening', '2026-09-18T19:24:56.329382+02:00',
+            soc=60, reserve=40, profit=.15, max_charge=2.5,
+            tax_deduction=.11, isolated_cycles=True)
+        windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
+        self.assertTrue(windows)
+        self.assertTrue(all(w['mode'] == 'accu_uit' for w in windows))
+        trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
+        self.assertTrue(all(abs(e-6.) < 1e-6 for _, e, _ in trace))
+        ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=2.)
+        self.assertEqual(ledger['imported'], 0.)
+        self.assertEqual(ledger['sold'], 0.)
 
     def test_emitted_grid_imports_keep_margin_without_pv_subsidy(self):
         cases = [
@@ -170,6 +189,10 @@ class PartialCycleEconomicsTest(unittest.TestCase):
                 self.assertGreaterEqual(min(e for _, e, _ in trace), min(soc/10., 6.)-.005)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
                 ledger = imported_margin(slots, windows, initial_usable=soc/10.-2., reserve_usable=4.)
-                if ledger['imported'] > .01:
-                    self.assertIsNotNone(ledger['margin'], ledger)
+                if ledger['sold'] > .01:
                     self.assertGreaterEqual(ledger['margin'] + .001, minimum, ledger)
+                elif ledger['imported'] > .01:
+                    # An incomplete charge remains inventory, never an early
+                    # profitable partial discharge under the fixed policy.
+                    self.assertLess(max(e for _, e, _ in trace), 10.-.005)
+                    self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))

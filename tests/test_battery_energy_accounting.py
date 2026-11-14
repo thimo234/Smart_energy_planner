@@ -180,15 +180,25 @@ class EnergyAccountingTest(unittest.TestCase):
         now = datetime.fromisoformat(timestamp)
         energy = soc / 10
         history = []
+        direction = 'charge'
         for _ in range(count):
             _, slots, result = replay_full_plan(
                 snapshot, now.isoformat(), soc=energy * 10, reserve=reserve,
-                max_charge=2.5, instance=c,
+                max_charge=2.5, instance=c, isolated_cycles=True,
             )
             until = now + timedelta(minutes=minutes)
             executed = [{**w, "end": min(datetime.fromisoformat(w["end"]), until).isoformat()}
                         for w in result.planned_battery_mode_windows
                         if datetime.fromisoformat(w["start"]) < until]
+            from bound_cycle_assertions import assert_bound_plan
+            assert_bound_plan(self, now, slots, executed, initial=energy,
+                              floor=2 + (getattr(c, '_battery_cycle_discharge_floor_kwh', None) or 0),
+                              charging=direction == 'charge')
+            for w in executed:
+                if w['mode'].startswith('laden_'):
+                    direction = 'charge'
+                elif w['mode'].startswith('ontladen'):
+                    direction = 'discharge'
             trace = energy_trace(now, slots, executed, initial=energy, max_charge=2.5)
             self.assertTrue(trace)
             self.assertGreaterEqual(min(row[1] for row in trace), 2 - .005)
@@ -218,20 +228,16 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertFalse(c._discharge_session_started)
         self.assertAlmostEqual(history[-1][2], 3., delta=.005)
 
-    def test_incomplete_discharge_allows_next_day_solar_but_not_grid(self):
-        _, history = self.run_feedback_updates(
+    def test_complete_charge_keeps_direction_until_boundary_across_updates(self):
+        c, history = self.run_feedback_updates(
             "2026_09_23", "2026-09-23T13:55:04.999681+02:00", 81, 112, minutes=15,
         )
-        self.assertTrue(any(now.day == 23 and r.battery_strategy == "ontladen"
-                            for now, r, _ in history))
-        tomorrow = [(r, energy) for now, r, energy in history if now.day == 24]
-        # Solar is now an explicit exception to the full-discharge rule. It
-        # must neither authorize new imports nor strand the evening discharge.
-        self.assertGreater(min(energy for _, energy in tomorrow), 2.05)
-        self.assertLessEqual(max(energy for _, energy in tomorrow), 10.005)
-        self.assertTrue(any(r.battery_strategy == "ontladen" for r, _ in tomorrow))
-        self.assertTrue(any(r.battery_strategy == "laden_met_zonne_energie" for r, _ in tomorrow))
-        self.assertFalse(any(r.battery_strategy == "laden_van_net" for r, _ in tomorrow))
+        self.assertTrue(any(r.battery_strategy.startswith('laden_') for _, r, _ in history))
+        self.assertTrue(any(r.battery_strategy.startswith('ontladen') for _, r, _ in history))
+        # The helper checks every executed transition, including mode changes
+        # inside an update (not just the strategy label at its start).
+        self.assertGreaterEqual(max(e for _, _, e in history), 9.995)
+        self.assertAlmostEqual(min(e for _, _, e in history), 2., delta=.005)
 
     def test_committed_grid_refill_does_not_cancel_itself_halfway(self):
         _, history = self.run_feedback_updates(
@@ -240,8 +246,7 @@ class EnergyAccountingTest(unittest.TestCase):
             "2026_09_19_morning", "2026-09-19T12:30:00+02:00", 20, 60, reserve=20,
         )
         self.assertTrue(all(r.battery_strategy == "laden_van_net" for _, r, _ in history[2:36]))
-        # The integration treats >=99.5% as full to avoid SOC sensor chatter.
-        self.assertGreaterEqual(history[-1][2], 9.95)
+        self.assertGreaterEqual(history[-1][2], 9.995)
 
     def test_active_grid_cycle_still_rechecks_profit(self):
         c, history = self.run_feedback_updates(
@@ -273,11 +278,11 @@ class EnergyAccountingTest(unittest.TestCase):
             "2026_09_19_morning", "2026-09-19T08:00:10.907547+02:00",
             # This test checks physical capacity; the 60% reserve stock
             # variant is covered by PreplannedRefillTest.
-            soc=44, discharging=True, reserve=20, max_charge=2.5,
+            soc=44, discharging=True, reserve=20, max_charge=2.5, isolated_cycles=True,
         )
         grid = result.planned_grid_charge_windows
         self.assertEqual(len(grid), 1)
-        self.assertEqual(grid[0]["start"], "2026-09-19T12:30:00+02:00")
+        self.assertEqual(grid[0]["start"], "2026-09-19T12:36:27.360000+02:00")
         self.assertGreater(grid[0]["charge_kwh"], 0.)
         self.assertLessEqual(grid[0]["charge_kwh"], 7.856)
         self.assertAlmostEqual(result.planned_solar_charge_windows[0]["charge_kwh"], .144)
@@ -294,7 +299,8 @@ class EnergyAccountingTest(unittest.TestCase):
             # Existing energy may now cover home demand below the historical
             # purchase margin, including the estimated tail. New grid profit
             # remains covered by test_small_solar_window_does_not_override_minimum_grid_profit.
-        self.assertIn("2026-09-19T18:30:00+02:00", [w["start"] for w in windows if w["mode"] == "ontladen"])
+        self.assertIn("2026-09-19T18:30:00+02:00", [w["start"] for w in
+                      windows + result.estimated_battery_mode_windows if w["mode"] == "ontladen"])
         for window in [*grid, *result.planned_solar_charge_windows]:
             mode = "laden_van_net" if window in grid else "laden_met_zonne_energie"
             measured = energy_trace(now, slots, [{**window, "mode": mode}], initial=0, max_charge=2.5)
@@ -342,13 +348,13 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertTrue(result.planned_grid_charge_windows)
         ledger = imported_margin(slots, result.planned_battery_mode_windows,
                                  initial_usable=7.5, reserve_usable=0.)
-        self.assertIsNotNone(ledger['margin'], ledger)
-        self.assertGreaterEqual(ledger['margin']+.001, .08, ledger)
+        self.assertIsNone(ledger['margin'], ledger)
+        self.assertEqual(ledger['sold'], 0., 'no partial-cycle sale of newly imported stock')
         self.assertEqual(result.battery_strategy, "ontladen")
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9.5, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.+.005)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        self.assertGreater(trace[-1][1], 2., 'unsold partial refill remains stored at acquisition cost')
 
     def test_higher_configured_profit_rejects_latest_grid_cycle(self):
         _, _, result = replay_full_plan(
@@ -456,7 +462,7 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         self.assertEqual(energy, 1.5)
 
-    def test_partial_charge_can_discharge_usable_energy_without_reaching_full(self):
+    def test_partial_charge_waits_for_full_before_discharge(self):
         now = datetime(2026, 9, 17, 12)
         slots = [dict(start=now+timedelta(hours=i), end=now+timedelta(hours=i+1), hours=1,
                       import_price=.16 if i == 0 else .42, export_price=.10,
@@ -470,8 +476,8 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         trace = energy_trace(now, slots, windows, initial=3)
         self.assertGreaterEqual(min(row[1] for row in trace), 2.0 - 1e-5)
-        self.assertAlmostEqual(trace[-1][1], 2.)
-        self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
+        self.assertAlmostEqual(trace[-1][1], 3.5)
+        self.assertFalse(any(w['mode'] == 'ontladen' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
     def test_grid_topup_does_not_reuse_the_same_cheap_slot(self):

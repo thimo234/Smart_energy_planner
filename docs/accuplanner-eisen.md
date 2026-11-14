@@ -5,7 +5,35 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
-## Actueel beleid: gedeeltelijke laad- en ontlaadcycli
+## Actueel beleid: vaste cyclusgrens vóór de cyclus kiezen
+
+Deze nieuwste afspraak vervangt het hieronder bewaarde gedeeltelijke-cyclusbeleid.
+Voorkeur: een **volledige, haalbare en rendabele cyclus** van het ingestelde
+maximum naar de normale minimum-SOC. Is dat economisch niet haalbaar, kies dan
+maximum → **ingestelde hogere reserve**; die reserve is niet hardcoded 50%.
+
+- Kies de ondergrens vóór de cyclus en bewaar die bij pauzes, nieuwe prognoses
+  en herstarts. Een lopende volledige cyclus wordt niet ineens een reservecyclus,
+  en een gekozen reservecyclus wordt niet alsnog een volledige ontlading.
+- Een begonnen laadfase moet tot het ingestelde maximum blijven laden/wachten;
+  ook tussen losse laadvensters mag geen tussentijdse ontlading plaatsvinden.
+- Ontladen blijft actief tot de gekozen ondergrens werkelijk is bereikt. Eerder
+  herladen uit zon of net is niet toegestaan, ook niet bij een goedkope aanbieding.
+- Wachten is toegestaan; geen verliesgevende export afdwingen om een grens te
+  bereiken. Inkooplots, gerealiseerde marge en netwinst-/exportbescherming blijven
+  behouden. Een toekomstige gesimuleerde voltooiing wijzigt nooit de live fase.
+- SOC-grafieken integreren de daadwerkelijk berekende opdrachten onafhankelijk,
+  zonder cosmetische begrenzing. Uitvoerbare planning en vooruitblik sluiten
+  fysiek aan, maar vooruitblik is niet uitvoerbaar en geen waargenomen toestand.
+
+**Status:** gebruiker heeft na de berekende grafiek publicatie naar Git goedgekeurd.
+Deze versie wordt vanuit `ha_energy_planner-rollback` gepubliceerd; installatie
+of een Home Assistant-herstart is niet uitgevoerd en valt buiten deze goedkeuring. Zie
+`docs/bound-cycle-policy-verification.md` voor werkelijk uitgevoerde tests en
+classificatie van vervallen verwachtingen. Nieuwe berekende standalone preview:
+`previews/bound-cycles/index.html`; oudere previews blijven ongewijzigd.
+
+## Historisch beleid (vervallen): gedeeltelijke laad- en ontlaadcycli
 
 Deze expliciete gebruikerswijziging vervangt de eerdere eis om vóór iedere
 omkering volledig te laden of tot het minimum te ontladen. Bij tegenstrijdigheid

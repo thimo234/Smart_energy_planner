@@ -90,9 +90,9 @@ def observed_stock(previous, now, energy, reserve, minimum):
     A mismatch cannot mint profit credit. Unexplained energy is conservatively
     valued at the highest known acquisition cost rather than marked as free PV.
     """
-    if not previous or previous['at'] > now.isoformat() or previous['reserve'] != reserve:
+    if not previous or previous['at'] > now.isoformat() or previous['reserve'] < reserve:
         return MarginStock(energy, reserve)
-    stock = MarginStock(previous['energy'], reserve, previous['lots'], previous['credit'])
+    stock = MarginStock(previous['energy'], previous['reserve'], previous['lots'], previous['credit'])
     for action in previous['actions']:
         start = max(datetime.fromisoformat(previous['at']), datetime.fromisoformat(action['start']))
         end = min(now, datetime.fromisoformat(action['end']))
@@ -104,6 +104,16 @@ def observed_stock(previous, now, energy, reserve, minimum):
             stock.charge(action['grid_kw']*hours, action['import_price'])
         elif action['mode'].startswith('ontladen'):
             stock.discharge(action['power']*hours, action['sale_price'], minimum)
+    if stock.reserve > reserve:
+        # Full-cycle accounting exposes stock previously hidden by the reserve.
+        # Retain purchased FIFO lots and realized debt; a policy migration is
+        # not a new free battery. Price untracked stock conservatively.
+        costs = [cost for _, cost in stock.lots if cost is not None]
+        costs += [a['import_price'] for a in previous['actions'] if a['grid_kw'] > 0]
+        exposed = max(0., stock.energy-reserve) - sum(q for q, _ in stock.lots)
+        if exposed > 1e-9:
+            stock.lots.insert(0, [exposed, max(costs) if costs else None])
+        stock.reserve = reserve
     difference = energy-stock.energy
     if abs(difference) > 1e-6:
         stock.credit = min(0., stock.credit)

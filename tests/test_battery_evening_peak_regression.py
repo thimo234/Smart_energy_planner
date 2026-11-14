@@ -64,7 +64,7 @@ def replay_evening_gap(*, soc=None, instance=None, charge_started=False, dischar
 
 
 class EveningPeakRegressionTest(unittest.TestCase):
-    def test_preview_uses_partial_solar_energy_at_evening_peak(self):
+    def test_preview_retains_incomplete_solar_charge_through_evening_peak(self):
         now, slots, _ = replay_evening_gap()
         data = json.loads((Path(__file__).parent / "fixtures" /
                            "battery_2026_11_11_evening_gap.json").read_text())
@@ -77,7 +77,7 @@ class EveningPeakRegressionTest(unittest.TestCase):
         peak = datetime.fromisoformat("2026-11-11T17:45:00+01:00")
         mode = next(w["mode"] for w in preview
                     if datetime.fromisoformat(w["start"]) <= peak < datetime.fromisoformat(w["end"]))
-        self.assertEqual(mode, "ontladen")
+        self.assertEqual(mode, "accu_uit", 'partial solar refill cannot authorize discharge')
         trace = energy_trace(now, slots, data["actual_windows"] + preview,
                              initial=9.6, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2.4 - 1e-6)
@@ -108,17 +108,18 @@ class EveningPeakRegressionTest(unittest.TestCase):
                         max_discharge=3., reserve=3.6, min_profit=.1,
                         include_known_prices=True,
                         preview_start=datetime.fromisoformat(f"2026-11-11T{cutoff}+01:00"))
-                self.assertEqual(charging_states, [expected_charging])
+                self.assertTrue(charging_states)
+                self.assertTrue(all(state == expected_charging for state in charging_states))
                 self.assertEqual(vars(c), original_state,
                                  "preview must not mutate live coordinator state")
 
-    def test_observed_solar_topup_does_not_skip_evening_peak(self):
+    def test_observed_incomplete_solar_topup_waits_at_evening_peak(self):
         now, slots, result = replay_evening_gap()
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         peak = datetime.fromisoformat("2026-11-11T17:45:00+01:00")
         mode = next(w["mode"] for w in windows
                     if datetime.fromisoformat(w["start"]) <= peak < datetime.fromisoformat(w["end"]))
-        self.assertEqual(mode, "ontladen", "stored energy must cover the 0.680 EUR/kWh evening peak")
+        self.assertEqual(mode, "accu_uit", 'high prices do not complete an unfinished refill')
         trace = energy_trace(now, slots, windows, initial=9.6, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2. - 1e-6)
         self.assertLessEqual(max(e for _, e, _ in trace), 10. + 1e-6)

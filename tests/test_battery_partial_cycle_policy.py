@@ -1,4 +1,4 @@
-"""Partial-cycle policy: physical energy and reserve, not full/empty latches."""
+"""Superseded partial trades now respect the selected cycle direction."""
 from datetime import datetime, timedelta
 import unittest
 from test_battery_energy_accounting import coordinator, energy_trace
@@ -26,7 +26,7 @@ class PartialCyclePolicyTest(unittest.TestCase):
             battery_min_profit=.1)
         return c, solar, grid, windows
 
-    def test_current_partial_solar_beats_dearer_grid_despite_unfinished_cycle(self):
+    def test_current_partial_solar_respects_unfinished_cycle(self):
         slots = [slot(self.now, 0, .2, .02, solar=1.),
                  slot(self.now, 1, .25, .02),
                  slot(self.now, 2, .65, .05, demand=1.4)]
@@ -35,18 +35,22 @@ class PartialCyclePolicyTest(unittest.TestCase):
                 with self.subTest(charging=charging, restored=restored):
                     _, solar, grid, windows = self.plan(slots, charging=charging, restored=restored)
                     self.assertTrue(solar)
-                    self.assertEqual(windows[0]['mode'], 'laden_met_zonne_energie')
+                    self.assertEqual(windows[0]['mode'], 'laden_met_zonne_energie' if charging else 'accu_uit')
                     trace = energy_trace(self.now, slots, windows, initial=6.5, max_charge=2.5)
                     self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
                     self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
-                    self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
+                    if charging:
+                        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
+                    else:
+                        self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
 
-    def test_stale_charge_latch_cannot_block_home_discharge_to_reserve(self):
+    def test_charge_latch_preserves_incomplete_charge_through_restore(self):
         slots = [slot(self.now, i, .6, .05, demand=2.) for i in range(3)]
         for restored in (False, True):
             _, _, _, windows = self.plan(slots, initial=6., charging=True, restored=restored)
             trace = energy_trace(self.now, slots, windows, initial=8., max_charge=2.5)
-            self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+            self.assertAlmostEqual(trace[-1][1], 8., delta=.005)
+            self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
     def test_cheaper_useful_grid_still_beats_more_expensive_solar(self):
         slots = [slot(self.now, 0, .10, .05),

@@ -14,7 +14,7 @@ class ExportTransitionTest(unittest.TestCase):
         )
         windows = result.planned_battery_mode_windows
         exports = [i for i, w in enumerate(windows) if w["mode"] == "ontladen_naar_net"]
-        self.assertFalse(exports)
+        self.assertTrue(exports, 'profitable export can complete the selected normal-minimum cycle')
         self.assertTrue(any(w['mode'] == 'ontladen' for w in windows))
         for i in exports:
             self.assertEqual(windows[i + 1]["mode"], "ontladen")
@@ -22,7 +22,7 @@ class ExportTransitionTest(unittest.TestCase):
         trace = energy_trace(now, slots, windows, initial=10)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
         self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
 
     def test_partial_export_preserves_full_home_supply_and_energy_budget(self):
         for home_kw in (0, .5):

@@ -48,7 +48,7 @@ class MorningValueTest(unittest.TestCase):
                 self.assertAlmostEqual(min(e for _,e,_ in trace),3.6,delta=.005)
                 self.assertLessEqual(max(e for _,e,_ in trace),10.005)
                 self.assertGreater(max(e for _,e,_ in trace),6.)
-                self.assertAlmostEqual(trace[-1][1],6.,delta=.005)
+                self.assertGreaterEqual(trace[-1][1],6.-.005)  # Unfinished refill retains energy.
                 if solar=='zero':self.assertFalse(result.planned_solar_charge_windows)
                 # Partial cycles can discharge between fills: a post-last-fill
                 # average silently drops those real profitable sales. Track lots
@@ -83,7 +83,7 @@ class MorningValueTest(unittest.TestCase):
             t=energy_trace(now,slots,commands,initial=energy,max_charge=2.5)
             self.assertTrue(t);self.assertGreaterEqual(min(e for _,e,_ in t),1.995);self.assertLessEqual(max(e for _,e,_ in t),10.005)
             energy=t[-1][1]
-            if now.hour<7:self.assertAlmostEqual(energy,3.6,delta=.005)
+            if now.hour<7:self.assertGreaterEqual(energy,3.6-.005)  # Full-target refill may begin overnight.
             now=until
         self.assertGreater(energy,6.)
         self.assertLessEqual(energy,10.005)

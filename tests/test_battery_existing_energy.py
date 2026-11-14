@@ -35,7 +35,7 @@ class ExistingEnergyTest(unittest.TestCase):
         windows = result.planned_battery_mode_windows
         self.assertEqual(result.battery_strategy, 'ontladen')
         # A remainder above reserve cannot authorize a new charge cycle.
-        self.assertIsNotNone(result.next_charge_window_start)
+        self.assertIsNone(result.next_charge_window_start)  # Remainder must finish before any refill.
         self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=7.5, max_charge=2.5)

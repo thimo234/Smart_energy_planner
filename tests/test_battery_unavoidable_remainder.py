@@ -26,8 +26,8 @@ class UnavoidableRemainderTest(unittest.TestCase):
     def test_solar_refill_survives_stranded_remainder(self):
         c = instance_with_cost()
         now, slots, result = replay(instance=c)
-        self.assertFalse(c._charge_session_started)
-        self.assertTrue(c._discharge_session_started)
+        self.assertTrue(c._charge_session_started)  # Legacy state below selected reserve starts a refill.
+        self.assertFalse(c._discharge_session_started)
         self.assertEqual(c._battery_grid_charge_price, .30)
         charge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_')]
         self.assertTrue(charge)

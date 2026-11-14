@@ -95,7 +95,7 @@ class ReserveStockTest(unittest.TestCase):
             discharging=True, reserve=60, max_charge=2.5, profit=.1,
             snapshot_exports=True, isolated_cycles=True, instance=instance)
 
-    def test_supplied_snapshot_discharges_then_fills_and_keeps_final_reserve(self):
+    def test_supplied_snapshot_prefers_complete_full_cycle_and_preserves_unsold_stock(self):
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         _, slots, result = self.replay(now)
         self.assertEqual(result.battery_strategy, 'accu_uit')
@@ -103,22 +103,24 @@ class ReserveStockTest(unittest.TestCase):
         self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         from test_battery_partial_cycle_economics import imported_margin
-        ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=4.)
+        ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=0.)
         self.assertGreaterEqual(ledger['margin'], .1, ledger)
         for window in windows:
             if window['mode'] == 'ontladen_naar_net':
-                for slot in slots:
-                    if slot['start'].isoformat() < window['end'] and slot['end'].isoformat() > window['start']:
-                        self.assertGreaterEqual(slot['export_price']-ledger['average_cost'], .1)
-        # Partial cycling can import, sell a profitable surplus, and refill.
-        # Account for every emitted sale (including export), not only household
-        # consumption after the last refill as the obsolete full-cycle ledger did.
+                # Check the realized FIFO prefix, not the average acquisition
+                # cost of different lots sold later in the outlook.
+                prefix = imported_margin(slots, [w for w in windows if w['end'] <= window['end']],
+                                         initial_usable=4., reserve_usable=0.)
+                if prefix['sold'] > 1e-6:
+                    self.assertGreaterEqual(prefix['margin'], .1 - 1e-9, prefix)
+        # The first fill has a feasible full-depth outlet. The later outlook
+        # retains four unsold kWh; retained imports stay stock, not sale revenue.
         self.assertGreater(ledger['imported'], 4.)
-        self.assertAlmostEqual(ledger['imported'], ledger['sold'], delta=.005)
+        self.assertAlmostEqual(ledger['imported'] - ledger['sold'], 4., delta=.005)
         self.assertGreaterEqual(ledger['value']-ledger['sold']*ledger['average_cost'],
                                 ledger['sold']*.10)
 

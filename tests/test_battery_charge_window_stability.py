@@ -62,7 +62,9 @@ class ChargeWindowStabilityTest(unittest.TestCase):
             instance._battery_cycle_state_restored_recent = restored
             for minute in (4, 5, 14, 16):
                 now = datetime.fromisoformat(f"2026-09-26T12:{minute:02d}:06+02:00")
-                _, _, result = self.plan(instance, now, soc=60)
+                # Above the configured 60% boundary: exactly 60% has completed
+                # the reserve cycle and legitimately permits a new charge.
+                _, _, result = self.plan(instance, now, soc=65)
                 self.assertFalse(result.battery_strategy.startswith("laden_"))
                 self.assertTrue(instance._discharge_session_started)
 

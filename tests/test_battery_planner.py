@@ -609,9 +609,9 @@ class BatteryPlannerTest(unittest.TestCase):
         # 8 October: insufficient profitable demand rejects the next full
         # grid cycle. With no extra reserve in this unit scenario, discharge
         # can still use all existing energy down to the absolute floor.
-        self.assertGreaterEqual(datetime.fromisoformat(charge_start), tomorrow)
+        self.assertIsNone(charge_start, 'unfinished discharge cannot start tomorrow refill')
         trace = energy_trace(now, slots, mode_windows, initial=9.8, max_charge=3)
-        self.assertAlmostEqual(trace[-1][1], 4.004, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)  # Feasible full cycle reaches normal minimum.
 
     def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
         now = datetime(2026, 6, 25, 18, 30)
@@ -671,9 +671,9 @@ class BatteryPlannerTest(unittest.TestCase):
         # 8 October: insufficient profitable demand rejects the next full
         # grid cycle. With no extra reserve in this unit scenario, discharge
         # can still use all existing energy down to the absolute floor.
-        self.assertGreaterEqual(datetime.fromisoformat(charge_start), tomorrow)
+        self.assertIsNone(charge_start, 'unfinished discharge cannot start tomorrow refill')
         trace = energy_trace(now, slots, mode_windows, initial=9.6, max_charge=3)
-        self.assertAlmostEqual(trace[-1][1], 4.004, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)  # Feasible full cycle reaches normal minimum.
 
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
@@ -1951,7 +1951,7 @@ class BatteryPlannerTest(unittest.TestCase):
             max_discharge_kw=3.0,
         )
 
-        self.assertEqual(current_mode, "ontladen")
+        self.assertEqual(current_mode, "accu_uit")  # Incomplete charge survives an idle gap.
 
     def test_charge_planning_keeps_current_in_progress_solar_slot(self):
         now = datetime(2026, 6, 26, 13, 30)
@@ -2340,7 +2340,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertEqual(current_mode, "ontladen")
-        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
         self.assertNotIn("laden_met_zonne_energie", {window["mode"] for window in mode_windows})
 
     def test_active_discharge_session_keeps_discharging_when_usable_energy_remains(self):
@@ -2404,7 +2404,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
-        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
 
     def test_active_discharge_session_does_not_stop_at_raw_30_percent_soc(self):
         now = datetime(2026, 6, 24, 3, 0)
@@ -2510,7 +2510,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertEqual(current_mode, "ontladen_naar_net")  # Profitable stored energy.
-        self.assertTrue(any(w["mode"] == "ontladen" for w in mode_windows))
+        self.assertEqual(mode_windows[0]['mode'], 'ontladen_naar_net')
         self.assertTrue(any(w["mode"] in ("laden_van_net", "laden_met_zonne_energie")
                              for w in mode_windows))
 
@@ -2561,7 +2561,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         self.assertIn(current_mode, ("ontladen", "ontladen_naar_net"))
-        self.assertIn("laden_van_net", {window["mode"] for window in mode_windows})
+        self.assertNotIn("laden_van_net", {window["mode"] for window in mode_windows})
         self.assertTrue(
             any(
                 window["mode"] in ("ontladen", "ontladen_naar_net")

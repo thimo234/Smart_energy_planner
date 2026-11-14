@@ -18,7 +18,7 @@ class FullNightCycleTest(unittest.TestCase):
     def assert_cycles(self, now, slots, windows, initial):
         energy = initial
         for window in windows:
-            reserve_floor = min(energy, 6.)
+            reserve_floor = min(energy, 2.)  # Selected complete-cycle boundary.
             trace = energy_trace(now, slots, [window], initial=energy, max_charge=2.5)
             if trace:
                 energy = trace[-1][1]
@@ -32,7 +32,7 @@ class FullNightCycleTest(unittest.TestCase):
         self.assertFalse(any(w['mode'].startswith('laden_') and datetime.fromisoformat(w['start']).hour < 9
                              for w in result.planned_battery_mode_windows))
         end_energy = self.assert_cycles(now, slots, result.planned_battery_mode_windows, 6.8)
-        self.assertGreaterEqual(end_energy, 6.-.005)
+        self.assertGreaterEqual(end_energy, 2.-.005)  # Complete-cycle normal minimum.
         self.assert_cycles(now, slots,
                            result.planned_battery_mode_windows + result.estimated_battery_mode_windows, 6.8)
 
@@ -51,7 +51,7 @@ class FullNightCycleTest(unittest.TestCase):
         windows = result.planned_battery_mode_windows
         self.assertTrue(any(w['mode'].startswith('ontladen') for w in windows))
         end_energy = self.assert_cycles(now, slots, windows, 2.)
-        self.assertGreaterEqual(end_energy, 6.-.005)
+        self.assertGreaterEqual(end_energy, 2.-.005)  # Complete-cycle normal minimum.
         self.assertTrue(any(w['mode'].startswith('laden_') for w in result.estimated_battery_mode_windows))
         self.assert_cycles(now, slots, windows + result.estimated_battery_mode_windows, 2.)
         max_buy = max(float(slot['import_price']) for slot in slots
@@ -133,11 +133,12 @@ class FullNightCycleTest(unittest.TestCase):
                     if saw_discharge and now.hour >= 9:
                         daytime_refill = True
                     if direction == 'discharge':
-                        self.assertGreaterEqual(energy, 6.-.005)
+                        self.assertLessEqual(energy, selected_floor+.005)  # No premature reversal.
                     direction = 'charge'
                 elif mode.startswith('ontladen'):
                     if direction == 'charge':
-                        self.assertGreaterEqual(energy, 6.-.005)
+                        self.assertGreaterEqual(energy, 9.995)  # Full charge before discharge.
+                    selected_floor = c._battery_cycle_discharge_floor_kwh + 2.
                     direction = 'discharge'
                     saw_discharge = True
                 trace = energy_trace(now, slots, [w], initial=energy, max_charge=2.5)
@@ -150,4 +151,4 @@ class FullNightCycleTest(unittest.TestCase):
         self.assertGreaterEqual(maximum, 9.95)
         self.assertTrue(saw_discharge)
         self.assertTrue(daytime_refill)
-        self.assertGreaterEqual(energy, 6.-.005)
+        self.assertGreaterEqual(energy, 2.-.005)

@@ -66,12 +66,15 @@ class FullProfitReserveTest(unittest.TestCase):
             ledger = imported_margin(slots, windows, initial_usable=7., reserve_usable=4.)
             if profit == .08:
                 self.assertGreater(ledger['imported'], 0.)
-                self.assertGreaterEqual(ledger['margin']+.001, profit, ledger)
+                self.assertEqual(ledger['sold'], 0., 'unfinished refill cannot sell imported stock')
             else:
                 self.assertEqual(ledger['imported'], 0.)
             trace = energy_trace(now, slots, windows, initial=9., max_charge=2.5)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
-            self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+            if profit == .08:
+                self.assertGreater(trace[-1][1], 6., 'incomplete refill retains purchased stock')
+            else:
+                self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
 
     def test_existing_discharge_and_restart_respect_configured_reserve(self):
         c = coordinator()
