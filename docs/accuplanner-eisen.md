@@ -5,6 +5,20 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Hoofdconfiguratie met gedeelde bronnen
+
+Nieuw gebruikersverzoek: één hoofdconfiguratie voor prijs-, hoofdverbruik- en
+zonnebronnen, met meerdere subplanners die deze gebruiken. Dubbele configuratie,
+platformregistratie en identieke historische bronopvragingen centraliseren.
+Planner-specifieke instellingen en de bestaande accu-/prijsvensterlogica blijven
+behouden. Bestaande configuraties blijven werken; overname onder de hoofdconfiguratie
+vereist expliciete bevestiging en mag sensor-ID's of opgeslagen status niet wissen.
+Een mislukte overname mag een bestaande actieve planner niet stoppen. Een onbereikbare
+subplanner mag gezonde subplanners niet blokkeren en moet na bronherstel kunnen herstellen.
+Dit verzoek omvat lokale software, tests en publicatie; geen live migratie,
+installatie of Home Assistant-herstart. Zie `docs/household-configuration-verification.md`
+voor de implementatiegrenzen en de werkelijk uitgevoerde controles.
+
 ## Actueel beleid: vaste cyclusgrens vóór de cyclus kiezen
 
 Deze nieuwste afspraak vervangt het hieronder bewaarde gedeeltelijke-cyclusbeleid.

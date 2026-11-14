@@ -252,8 +252,9 @@ class ScoreRemovalTest(unittest.IsolatedAsyncioTestCase):
         from custom_components.smart_energy_planner import sensor
         registry=Mock()
         registry.async_get_entity_id.return_value='sensor.accu_planner_score'
-        entry=types.SimpleNamespace(entry_id='a',title='Accu')
-        coordinator=types.SimpleNamespace(data=types.SimpleNamespace(planner_kind='battery'))
+        entry=types.SimpleNamespace(entry_id='a',title='Accu',data={'planner_kind':'battery'},options={})
+        coordinator=types.SimpleNamespace(_config={'planner_kind':'battery'},
+                                          data=types.SimpleNamespace(planner_kind='battery'))
         hass=types.SimpleNamespace(data={sensor.DOMAIN:{'a':coordinator}})
         add=Mock()
         with patch.object(sensor.er,'async_get',return_value=registry,create=True):

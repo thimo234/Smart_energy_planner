@@ -38,6 +38,8 @@ from .const import (
     STORAGE_VERSION,
 )
 from .coordinator import SmartEnergyPlannerCoordinator
+from .const import PLANNER_KIND_HOUSEHOLD
+from .household import SharedSources, async_adopt_legacy, planner_bindings
 from .const import PLANNER_KIND_DEMAND, CONF_DEMAND_FORECAST_SENSOR, CONF_DEMAND_DEVICES
 from .frontend_resource import (
     async_load_and_upsert_card_resource,
@@ -62,12 +64,27 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Smart Energy Planner from a config entry."""
     merged = {**entry.data, **entry.options}
+    if entry.data.get('_adopted_by'):
+        _LOGGER.info("Planner %s is an inert adoption archive", entry.entry_id)
+        return True
+    if merged.get(CONF_PLANNER_KIND) == PLANNER_KIND_HOUSEHOLD:
+        return await _async_setup_household(hass, entry)
     if merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY) not in (
         PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND,
     ):
         _LOGGER.error("Planner type is no longer supported; remove this integration entry")
         return False
     await _async_register_frontend(hass)
+
+    await _async_setup_planner(hass, entry)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    return True
+
+
+async def _async_setup_planner(hass, entry, shared=None):
+    """One lifecycle for standalone and household planners."""
+    merged = {**entry.data, **entry.options}
 
     # Load persisted runtime state BEFORE the first coordinator refresh so
     # that battery profit tracking reads the correct stored values instead of
@@ -93,15 +110,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "expected_hourly_demand_last_hour_key": persisted_state.get("expected_hourly_demand_last_hour_key"),
         "expected_hourly_demand_last_ts": persisted_state.get("expected_hourly_demand_last_ts"),
         "expected_hourly_demand_today": persisted_state.get("expected_hourly_demand_today", {}),
+        **persisted_state,
     }
 
     coordinator = SmartEnergyPlannerCoordinator(hass, entry)
-    await coordinator.async_refresh()
-    if coordinator.data is None:
-        raise ConfigEntryNotReady("Planner data is not ready yet")
+    coordinator.shared_sources = shared
+    try:
+        await coordinator.async_refresh()
+        if coordinator.data is None and shared is None:
+            raise ConfigEntryNotReady("Planner data is not ready yet")
+    except BaseException:
+        await coordinator.async_shutdown()
+        raise
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     planner_kind = merged.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY)
 
     def _entity_id(key: str) -> str | None:
@@ -138,13 +160,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.async_create_task(coordinator.async_request_refresh())
 
-    entry.async_on_unload(
-        async_track_state_change_event(
-            hass,
-            tracked,
-            _handle_source_state_change,
-        )
-    )
+    coordinator.source_entities = set(tracked)
+    if shared is None:
+        entry.async_on_unload(async_track_state_change_event(
+            hass, tracked, _handle_source_state_change,
+        ))
 
     # Ensure a fresh coordinator refresh runs once HA has fully started so
     # that source entities (ESPHome, Solcast) are available.  Two cases:
@@ -196,8 +216,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
     )
 
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     entry.async_on_unload(coordinator._cancel_source_error_retry)
+    return coordinator
+
+
+async def _async_setup_household(hass, entry):
+    """Keep child refreshes, failures and state independent under one HA entry."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    await _async_register_frontend(hass)
+    shared = SharedSources()
+    children = {}
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = children
+    dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, entry.entry_id)},
+        name=entry.title, manufacturer="Smart Energy Planner", model="Household",
+    )
+    for binding in planner_bindings(entry):
+        try:
+            await async_adopt_legacy(hass, entry, binding.subentry, er.async_get(hass))
+        except Exception:
+            # Adoption has not transferred ownership: a live standalone planner
+            # may still own this identity and its runtime state.
+            _LOGGER.exception("Unable to adopt child %s; other planners remain active", binding.title)
+            continue
+        previous = hass.data.get(DOMAIN, {}).get(binding.entry_id)
+        previous_state = hass.data.get(RUNTIME_STATE, {}).get(binding.entry_id)
+        try:
+            children[binding.subentry_id] = await _async_setup_planner(hass, binding, shared)
+        except Exception:
+            _LOGGER.exception("Unable to set up child %s; other planners remain active", binding.title)
+            planners = hass.data.get(DOMAIN, {})
+            failed = planners.get(binding.entry_id)
+            if failed is not None and failed is not previous:
+                planners.pop(binding.entry_id)
+                failed._cancel_source_error_retry()
+                await failed.async_shutdown()
+            states = hass.data.get(RUNTIME_STATE, {})
+            if states.get(binding.entry_id) is not previous_state:
+                if previous_state is None:
+                    states.pop(binding.entry_id, None)
+                else:
+                    states[binding.entry_id] = previous_state
+
+    @callback
+    def source_changed(event):
+        entity_id = event.data.get('entity_id')
+        shared.invalidate()
+        for coordinator in children.values():
+            if entity_id in coordinator.source_entities:
+                hass.async_create_task(coordinator.async_request_refresh())
+
+    tracked = set().union(*(c.source_entities for c in children.values())) if children else set()
+    if tracked:
+        entry.async_on_unload(async_track_state_change_event(hass, list(tracked), source_changed))
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
@@ -249,10 +323,16 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, retry: int = 0)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    if entry.data.get('_adopted_by'):
+        # Its stable identity now indexes the live child, not this inert archive.
+        return True
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
-        hass.data.get(RUNTIME_STATE, {}).pop(entry.entry_id, None)
+        value = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        identities = [c.planner_entry.entry_id for c in value.values()] if isinstance(value, dict) else [entry.entry_id]
+        for identity in identities:
+            hass.data.get(DOMAIN, {}).pop(identity, None)
+            hass.data.get(RUNTIME_STATE, {}).pop(identity, None)
     return unload_ok
 
 

@@ -2,10 +2,15 @@
   "config": {
     "step": {
       "user": {
-        "title": "Smart Energy Planner",
-        "description": "Choose a battery planner, price window planner or standalone consumption forecast.",
+        "title": "Household",
+        "description": "Configure shared price, total household consumption and solar sources once. Then add battery, price-window and consumption planners under this household. Solar and consumption sources are optional; battery planners need total consumption or a consumption forecast.",
         "data": {
-          "planner_kind": "Planner type",
+          "price_sensor": "Energy price sensor",
+          "export_price_sensor": "Export price sensor",
+          "solcast_today_sensor": "Solcast solar forecast for today",
+          "total_energy_sensor": "Total home energy sensor",
+          "planner_name": "Name",
+          "solcast_tomorrow_sensor": "Solcast solar forecast for tomorrow",
           "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
         },
         "data_description": {
@@ -37,7 +42,10 @@
           "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
           "demand_forecast_sensor": "Consumption forecast (optional)",
           "demand_energy_sensors": "Appliance energy meters",
-          "price_peak_min_duration_minutes": "Minimum peak duration (minutes)"
+          "price_peak_min_duration_minutes": "Minimum peak duration (minutes)",
+          "planner_name": "Name",
+          "solcast_tomorrow_sensor": "Solcast solar forecast for tomorrow",
+          "export_price_tax_deduction": "Export price tax deduction (EUR/kWh)"
         },
         "data_description": {
           "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
@@ -80,7 +88,7 @@
     "step": {
       "init": {
         "title": "Smart Energy Planner options",
-        "description": "Update the sensors and settings for this planner.",
+        "description": "Household source changes apply to all its planners. Existing standalone planners retain their local settings.",
         "data": {
           "price_sensor": "Energy price sensor",
           "export_price_sensor": "Export price sensor",
@@ -104,7 +112,9 @@
           "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
           "demand_forecast_sensor": "Consumption forecast (optional)",
           "demand_energy_sensors": "Appliance energy meters",
-          "price_peak_min_duration_minutes": "Minimum peak duration (minutes)"
+          "price_peak_min_duration_minutes": "Minimum peak duration (minutes)",
+          "planner_name": "Name",
+          "solcast_tomorrow_sensor": "Solcast solar forecast for tomorrow"
         },
         "data_description": {
           "export_price_tax_deduction": "When export sensor is empty or equals the import sensor: export price = import price minus this amount. 0.11 means 11 cents/kWh; 0 disables the deduction. Use an import price including tax. A separate export sensor is unchanged.",
@@ -142,6 +152,254 @@
       "price_sensor_required": "A price sensor is required for a cheapest block.",
       "demand_source_required": "Select a household total or consumption forecast.",
       "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing."
+    }
+  },
+  "config_subentries": {
+    "battery": {
+      "title": "Battery planner",
+      "step": {
+        "user": {
+          "title": "Battery planner",
+          "description": "Create a new planner or explicitly adopt an existing standalone planner. Shared sources come from the household.",
+          "data": {
+            "legacy_entry_id": "New or existing planner"
+          }
+        },
+        "adopt": {
+          "title": "Adopt existing planner",
+          "description": "Adopt {planner}. The standalone entry becomes an inert archive. Entity IDs, unique IDs and stored planner state are preserved. Conflicting shared sources block adoption.",
+          "data": {
+            "confirm": "Confirm adoption"
+          }
+        },
+        "configure": {
+          "title": "Battery planner",
+          "description": "Configure this planner’s own behaviour. Prices, total consumption and solar sources are inherited from the household.",
+          "data": {
+            "battery_soc_sensor": "Battery state of charge sensor",
+            "price_resolution": "Energy contract price interval",
+            "price_window_type": "Price window type",
+            "price_window_duration_hours": "Contiguous price window duration (hours)",
+            "price_window_whole_hour_start": "Only allow windows that start on the whole hour",
+            "battery_enabled": "Enable home battery support",
+            "battery_capacity_kwh": "Battery capacity (kWh)",
+            "battery_min_soc_percent": "Minimum battery state of charge (%)",
+            "battery_no_charge_min_soc_percent": "Minimum battery state of charge without a charging opportunity (%)",
+            "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
+            "battery_max_charge_kw": "Max charge power (kW)",
+            "battery_max_discharge_kw": "Max discharge power (kW)",
+            "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
+            "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)",
+            "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
+            "demand_forecast_sensor": "Consumption forecast (optional)",
+            "demand_energy_sensors": "Appliance energy meters",
+            "price_peak_min_duration_minutes": "Minimum peak duration (minutes)",
+            "planner_name": "Name"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
+            "price_peak_min_prominence_percent": "Filter minor peaks by height above surrounding valleys as a percentage of the daily range. For window boundaries, use this percentage between the following valley and the summit (50% is halfway). 0 disables the height filter. Expensive peaks only.",
+            "price_window_duration_hours": "Maximum duration for expensive peaks. Trim both flanks using the summit and following valley. Include later lower summits above the threshold in the same block. Active starts stay fixed. Cheap blocks keep their fixed duration.",
+            "demand_forecast_sensor": "Select a standalone consumption forecast. It replaces internal demand estimation; the safety margin is applied once afterwards.",
+            "demand_energy_sensors": "Select Wh/kWh counters (total or total_increasing), not power sensors. The optional household total includes these devices; only residual consumption is added.",
+            "price_peak_min_duration_minutes": "Skip shorter future peak blocks instead of extending them. Default 60 minutes; 0 disables this filter. Active blocks are retained. Expensive peaks only."
+          }
+        },
+        "device": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "timing": "Timing"
+          }
+        },
+        "device_schedule": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "start_time": "Fixed start time",
+            "offset_hours": "Hours after cheapest block starts",
+            "weekdays": "Active weekdays"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "The same meter is selected more than once.",
+        "no_energy_sources": "Select a household total or appliance meters.",
+        "price_sensor_required": "A price sensor is required for a cheapest block.",
+        "demand_source_required": "Select a household total or consumption forecast.",
+        "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing.",
+        "self_forecast": "A planner cannot use its own consumption forecast as a source."
+      },
+      "abort": {
+        "unsupported_planner_kind": "This planner type is not supported here.",
+        "legacy_unavailable": "This standalone planner is no longer available for adoption.",
+        "shared_source_conflict": "Adoption blocked: shared sources differ ({sources}). Align the household and standalone sources first; nothing was adopted.",
+        "reconfigure_successful": "Planner updated."
+      }
+    },
+    "price_window": {
+      "title": "Price window planner",
+      "step": {
+        "user": {
+          "title": "Price window planner",
+          "description": "Create a new planner or explicitly adopt an existing standalone planner. Shared sources come from the household.",
+          "data": {
+            "legacy_entry_id": "New or existing planner"
+          }
+        },
+        "adopt": {
+          "title": "Adopt existing planner",
+          "description": "Adopt {planner}. The standalone entry becomes an inert archive. Entity IDs, unique IDs and stored planner state are preserved. Conflicting shared sources block adoption.",
+          "data": {
+            "confirm": "Confirm adoption"
+          }
+        },
+        "configure": {
+          "title": "Price window planner",
+          "description": "Configure this planner’s own behaviour. Prices, total consumption and solar sources are inherited from the household.",
+          "data": {
+            "battery_soc_sensor": "Battery state of charge sensor",
+            "price_resolution": "Energy contract price interval",
+            "price_window_type": "Price window type",
+            "price_window_duration_hours": "Contiguous price window duration (hours)",
+            "price_window_whole_hour_start": "Only allow windows that start on the whole hour",
+            "battery_enabled": "Enable home battery support",
+            "battery_capacity_kwh": "Battery capacity (kWh)",
+            "battery_min_soc_percent": "Minimum battery state of charge (%)",
+            "battery_no_charge_min_soc_percent": "Minimum battery state of charge without a charging opportunity (%)",
+            "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
+            "battery_max_charge_kw": "Max charge power (kW)",
+            "battery_max_discharge_kw": "Max discharge power (kW)",
+            "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
+            "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)",
+            "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
+            "demand_forecast_sensor": "Consumption forecast (optional)",
+            "demand_energy_sensors": "Appliance energy meters",
+            "price_peak_min_duration_minutes": "Minimum peak duration (minutes)",
+            "planner_name": "Name"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
+            "price_peak_min_prominence_percent": "Filter minor peaks by height above surrounding valleys as a percentage of the daily range. For window boundaries, use this percentage between the following valley and the summit (50% is halfway). 0 disables the height filter. Expensive peaks only.",
+            "price_window_duration_hours": "Maximum duration for expensive peaks. Trim both flanks using the summit and following valley. Include later lower summits above the threshold in the same block. Active starts stay fixed. Cheap blocks keep their fixed duration.",
+            "demand_forecast_sensor": "Select a standalone consumption forecast. It replaces internal demand estimation; the safety margin is applied once afterwards.",
+            "demand_energy_sensors": "Select Wh/kWh counters (total or total_increasing), not power sensors. The optional household total includes these devices; only residual consumption is added.",
+            "price_peak_min_duration_minutes": "Skip shorter future peak blocks instead of extending them. Default 60 minutes; 0 disables this filter. Active blocks are retained. Expensive peaks only."
+          }
+        },
+        "device": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "timing": "Timing"
+          }
+        },
+        "device_schedule": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "start_time": "Fixed start time",
+            "offset_hours": "Hours after cheapest block starts",
+            "weekdays": "Active weekdays"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "The same meter is selected more than once.",
+        "no_energy_sources": "Select a household total or appliance meters.",
+        "price_sensor_required": "A price sensor is required for a cheapest block.",
+        "demand_source_required": "Select a household total or consumption forecast.",
+        "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing.",
+        "self_forecast": "A planner cannot use its own consumption forecast as a source."
+      },
+      "abort": {
+        "unsupported_planner_kind": "This planner type is not supported here.",
+        "legacy_unavailable": "This standalone planner is no longer available for adoption.",
+        "shared_source_conflict": "Adoption blocked: shared sources differ ({sources}). Align the household and standalone sources first; nothing was adopted.",
+        "reconfigure_successful": "Planner updated."
+      }
+    },
+    "demand": {
+      "title": "Consumption forecast",
+      "step": {
+        "user": {
+          "title": "Consumption forecast",
+          "description": "Create a new planner or explicitly adopt an existing standalone planner. Shared sources come from the household.",
+          "data": {
+            "legacy_entry_id": "New or existing planner"
+          }
+        },
+        "adopt": {
+          "title": "Adopt existing planner",
+          "description": "Adopt {planner}. The standalone entry becomes an inert archive. Entity IDs, unique IDs and stored planner state are preserved. Conflicting shared sources block adoption.",
+          "data": {
+            "confirm": "Confirm adoption"
+          }
+        },
+        "configure": {
+          "title": "Consumption forecast",
+          "description": "Configure this planner’s own behaviour. Prices, total consumption and solar sources are inherited from the household.",
+          "data": {
+            "battery_soc_sensor": "Battery state of charge sensor",
+            "price_resolution": "Energy contract price interval",
+            "price_window_type": "Price window type",
+            "price_window_duration_hours": "Contiguous price window duration (hours)",
+            "price_window_whole_hour_start": "Only allow windows that start on the whole hour",
+            "battery_enabled": "Enable home battery support",
+            "battery_capacity_kwh": "Battery capacity (kWh)",
+            "battery_min_soc_percent": "Minimum battery state of charge (%)",
+            "battery_no_charge_min_soc_percent": "Minimum battery state of charge without a charging opportunity (%)",
+            "battery_min_profit_per_kwh": "Minimum battery profit per kWh",
+            "battery_max_charge_kw": "Max charge power (kW)",
+            "battery_max_discharge_kw": "Max discharge power (kW)",
+            "battery_charge_safety_margin": "Solar forecast safety margin % (20 = assume 20% less solar; 0 = off)",
+            "price_peak_min_gap_hours": "Minimum off time between price peak blocks (hours)",
+            "price_peak_min_prominence_percent": "Minimum peak prominence (% of price spread)",
+            "demand_forecast_sensor": "Consumption forecast (optional)",
+            "demand_energy_sensors": "Appliance energy meters",
+            "price_peak_min_duration_minutes": "Minimum peak duration (minutes)",
+            "planner_name": "Name"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Only for expensive price peaks. At least 0.25 hours off between blocks. Existing blocks remain locked.",
+            "price_peak_min_prominence_percent": "Filter minor peaks by height above surrounding valleys as a percentage of the daily range. For window boundaries, use this percentage between the following valley and the summit (50% is halfway). 0 disables the height filter. Expensive peaks only.",
+            "price_window_duration_hours": "Maximum duration for expensive peaks. Trim both flanks using the summit and following valley. Include later lower summits above the threshold in the same block. Active starts stay fixed. Cheap blocks keep their fixed duration.",
+            "demand_forecast_sensor": "Select a standalone consumption forecast. It replaces internal demand estimation; the safety margin is applied once afterwards.",
+            "demand_energy_sensors": "Select Wh/kWh counters (total or total_increasing), not power sensors. The optional household total includes these devices; only residual consumption is added.",
+            "price_peak_min_duration_minutes": "Skip shorter future peak blocks instead of extending them. Default 60 minutes; 0 disables this filter. Active blocks are retained. Expensive peaks only."
+          }
+        },
+        "device": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "timing": "Timing"
+          }
+        },
+        "device_schedule": {
+          "title": "Appliance consumption",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "data": {
+            "start_time": "Fixed start time",
+            "offset_hours": "Hours after cheapest block starts",
+            "weekdays": "Active weekdays"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "The same meter is selected more than once.",
+        "no_energy_sources": "Select a household total or appliance meters.",
+        "price_sensor_required": "A price sensor is required for a cheapest block.",
+        "demand_source_required": "Select a household total or consumption forecast.",
+        "unsupported_energy_meter": "Choose an available Wh/kWh energy counter with state_class total or total_increasing.",
+        "self_forecast": "A planner cannot use its own consumption forecast as a source."
+      },
+      "abort": {
+        "unsupported_planner_kind": "This planner type is not supported here.",
+        "legacy_unavailable": "This standalone planner is no longer available for adoption.",
+        "shared_source_conflict": "Adoption blocked: shared sources differ ({sources}). Align the household and standalone sources first; nothing was adopted.",
+        "reconfigure_successful": "Planner updated."
+      }
     }
   }
 }

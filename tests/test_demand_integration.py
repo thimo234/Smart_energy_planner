@@ -37,6 +37,14 @@ def demand_plan(*, inconsistent_meters=False):
 
 
 class DemandIntegrationTest(unittest.TestCase):
+    def setUp(self):
+        # A real registry always implements both async_get entry points.
+        from homeassistant.helpers import entity_registry
+        registry = SimpleNamespace(async_get=lambda entity_id: None)
+        lookup = patch.object(entity_registry, 'async_get', return_value=registry, create=True)
+        lookup.start()
+        self.addCleanup(lookup.stop)
+
     def test_waiting_forecast_preserves_other_live_sources_without_commands(self):
         now, _, prices, _=fixtures()
         c=coordinator()
@@ -118,7 +126,7 @@ class DemandIntegrationTest(unittest.TestCase):
 
     def test_missing_selected_forecast_waits_instead_of_zero_demand(self):
         c = coordinator()
-        c.config_entry = SimpleNamespace(data={'demand_forecast_sensor':'sensor.missing'}, options={})
+        c.config_entry = SimpleNamespace(entry_id='battery', data={'demand_forecast_sensor':'sensor.missing'}, options={})
         c.hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity: None, async_all=lambda: []))
         c._schedule_source_error_retry=Mock()
         c._cancel_source_error_retry=Mock()

@@ -43,7 +43,12 @@ async def async_demand_result(coordinator, now):
                 entities, include_start_time_state=True, significant_changes_only=False,
                 no_attributes=False)
             return states, load_hourly_statistics(hass, entities, now)
-        histories, hourly_statistics = await get_instance(hass).async_add_executor_job(load)
+        async def async_load():
+            return await get_instance(hass).async_add_executor_job(load)
+        shared = getattr(coordinator, 'shared_sources', None)
+        histories, hourly_statistics = (await shared.async_cached(
+            ('demand_history', tuple(sorted(entities)), now.date()), async_load, ttl=3600)
+            if shared else await async_load())
         coordinator._demand_history_cache = (signature, now, histories, hourly_statistics)
     else:
         histories = cache[2]

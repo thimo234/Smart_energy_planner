@@ -12,8 +12,10 @@ from custom_components.smart_energy_planner import const
 ROOT = Path(__file__).resolve().parents[1] / "custom_components/smart_energy_planner"
 
 
-def load_function(filename, name, **namespace):
+def load_function(filename, name, class_name=None, **namespace):
     tree = ast.parse((ROOT / filename).read_text(encoding="utf-8-sig"))
+    if class_name:
+        tree = next(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == class_name)
     function = next(node for node in ast.walk(tree)
                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name)
     scope = {**vars(const), **namespace}
@@ -54,7 +56,7 @@ class PlannerTypesTest(unittest.IsolatedAsyncioTestCase):
                                config_entry=SimpleNamespace(data={"planner_kind": "thermostat"}, options={}),
                                async_abort=lambda **kw: kw)
         for name in ("async_step_user", "async_step_configure", "async_step_init"):
-            method = load_function("config_flow.py", name)
+            method = load_function("config_flow.py", name, class_name='SmartEnergyPlannerOptionsFlow' if name == 'async_step_init' else 'SmartEnergyPlannerConfigFlow')
             result = await method(flow, {"planner_kind": "thermostat"})
             self.assertEqual(result, {"reason": "unsupported_planner_kind"})
 

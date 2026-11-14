@@ -2,10 +2,15 @@
   "config": {
     "step": {
       "user": {
-        "title": "Slimme Energieplanner",
-        "description": "Kies een accuplanner, prijsvensterplanner of zelfstandige verbruiksvoorspelling.",
+        "title": "Huishouden",
+        "description": "Stel één keer de gedeelde prijs-, hoofdverbruiks- en zonbronnen in. Voeg daarna accu-, prijsblok- en verbruiksplanners toe via dit huishouden. Zon- en verbruiksbronnen zijn optioneel; accuplanners hebben een hoofdverbruiksbron of verbruiksvoorspelling nodig.",
         "data": {
-          "planner_kind": "Planner type",
+          "price_sensor": "Energieprijs sensor",
+          "export_price_sensor": "Terugleverprijs sensor",
+          "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "total_energy_sensor": "Totale energieverbruik sensor",
+          "planner_name": "Naam",
+          "solcast_tomorrow_sensor": "Solcast-zonvoorspelling voor morgen",
           "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)"
         },
         "data_description": {
@@ -38,7 +43,10 @@
           "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
           "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
           "demand_energy_sensors": "Energiemeters per apparaat",
-          "price_peak_min_duration_minutes": "Minimale piekduur (minuten)"
+          "price_peak_min_duration_minutes": "Minimale piekduur (minuten)",
+          "planner_name": "Naam",
+          "solcast_tomorrow_sensor": "Solcast-zonvoorspelling voor morgen",
+          "export_price_tax_deduction": "Belastingaftrek terugleverprijs (EUR/kWh)"
         },
         "data_description": {
           "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
@@ -81,7 +89,7 @@
     "step": {
       "init": {
         "title": "Slimme Energieplanner opties",
-        "description": "Werk de sensoren en instellingen van deze planner bij.",
+        "description": "Bij een huishouden gelden gewijzigde gedeelde bronnen voor alle onderliggende planners. Bij een bestaande losse planner blijven de instellingen lokaal.",
         "data": {
           "price_sensor": "Energieprijs sensor",
           "export_price_sensor": "Terugleverprijs sensor",
@@ -106,7 +114,9 @@
           "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
           "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
           "demand_energy_sensors": "Energiemeters per apparaat",
-          "price_peak_min_duration_minutes": "Minimale piekduur (minuten)"
+          "price_peak_min_duration_minutes": "Minimale piekduur (minuten)",
+          "planner_name": "Naam",
+          "solcast_tomorrow_sensor": "Solcast-zonvoorspelling voor morgen"
         },
         "data_description": {
           "export_price_tax_deduction": "Alleen bij een lege terugleversensor of dezelfde sensor als de importprijs: terugleverprijs = importprijs min dit bedrag. 0,11 betekent 11 cent/kWh; 0 schakelt de aftrek uit. Gebruik een importprijs inclusief belasting. Een aparte terugleversensor wordt niet aangepast.",
@@ -144,6 +154,257 @@
       "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
       "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
       "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing."
+    }
+  },
+  "config_subentries": {
+    "battery": {
+      "title": "Accuplanner",
+      "step": {
+        "user": {
+          "title": "Accuplanner",
+          "description": "Maak een nieuwe planner of neem bewust een bestaande losse planner over. Het huishouden levert de gedeelde bronnen.",
+          "data": {
+            "legacy_entry_id": "Nieuwe of bestaande planner"
+          }
+        },
+        "adopt": {
+          "title": "Bestaande planner overnemen",
+          "description": "Neem {planner} over. De bestaande planner wordt een inactief archief. Entiteits-ID’s, unieke ID’s en opgeslagen plannerstatus blijven behouden. Verschillende gedeelde bronnen blokkeren de overname.",
+          "data": {
+            "confirm": "Overname bevestigen"
+          }
+        },
+        "configure": {
+          "title": "Accuplanner",
+          "description": "Stel alleen het eigen plannergedrag in. Prijzen, hoofdverbruik en zonbronnen komen uit het huishouden.",
+          "data": {
+            "battery_soc_sensor": "Accu laadstatus sensor",
+            "price_resolution": "Prijsinterval energiecontract",
+            "price_window_type": "Type prijsvenster",
+            "price_window_duration_hours": "Duur aaneengesloten prijsvenster (uren)",
+            "price_window_whole_hour_start": "Alleen tijdvakken toestaan die op het hele uur beginnen",
+            "battery_enabled": "Thuisaccu inschakelen",
+            "battery_capacity_kwh": "Accucapaciteit (kWh)",
+            "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
+            "battery_no_charge_min_soc_percent": "Minimale accu-laadstatus zonder laadvooruitzicht (%)",
+            "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
+            "battery_max_charge_kw": "Max laadvermogen (kW)",
+            "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
+            "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
+            "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
+            "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)",
+            "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
+            "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
+            "demand_energy_sensors": "Energiemeters per apparaat",
+            "price_peak_min_duration_minutes": "Minimale piekduur (minuten)",
+            "planner_name": "Naam"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
+            "price_peak_min_prominence_percent": "Filter kleine pieken op hoogte boven omliggende dalen als percentage van het dagverschil. Voor de venstergrens: dit percentage tussen het volgende dal en de top (50% is halverwege). 0 schakelt het hoogtefilter uit. Alleen voor dure pieken.",
+            "price_window_duration_hours": "Maximale duur voor dure pieken. Kort beide flanken in op basis van de top en het volgende dal. Neem latere lagere toppen boven de grens mee in hetzelfde blok. Actieve starts blijven vast. Goedkope blokken behouden hun vaste duur.",
+            "demand_forecast_sensor": "Kies een zelfstandige verbruiksvoorspelling. Deze vervangt de interne verbruiksberekening; de veiligheidsmarge wordt daarna één keer toegepast.",
+            "demand_energy_sensors": "Selecteer Wh/kWh-tellers (total of total_increasing), geen vermogenssensoren. De optionele totaalmeter omvat deze apparaten; alleen het restverbruik wordt erbij geteld.",
+            "price_peak_min_duration_minutes": "Kortere toekomstige piekblokken worden overgeslagen, niet verlengd. Standaard 60 minuten; 0 schakelt dit filter uit. Een lopend blok blijft behouden. Alleen voor dure prijspieken."
+          }
+        },
+        "device": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "timing": "Startwijze"
+          }
+        },
+        "device_schedule": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "start_time": "Vaste starttijd",
+            "offset_hours": "Uren na begin goedkoopste blok",
+            "weekdays": "Actieve weekdagen"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "Dezelfde meter is meermaals geselecteerd.",
+        "no_energy_sources": "Selecteer een totaalmeter of apparaatmeters.",
+        "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
+        "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
+        "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing.",
+        "self_forecast": "Een planner kan niet zijn eigen verbruiksvoorspelling als bron gebruiken."
+      },
+      "abort": {
+        "unsupported_planner_kind": "Dit plannertype wordt hier niet ondersteund.",
+        "legacy_unavailable": "Deze bestaande planner is niet meer beschikbaar voor overname.",
+        "shared_source_conflict": "Overname geblokkeerd: de gedeelde bronnen verschillen ({sources}). Maak de huishoudenbronnen en bestaande planner eerst gelijk; er is niets overgenomen.",
+        "reconfigure_successful": "Planner bijgewerkt."
+      }
+    },
+    "price_window": {
+      "title": "Prijsblokplanner",
+      "step": {
+        "user": {
+          "title": "Prijsblokplanner",
+          "description": "Maak een nieuwe planner of neem bewust een bestaande losse planner over. Het huishouden levert de gedeelde bronnen.",
+          "data": {
+            "legacy_entry_id": "Nieuwe of bestaande planner"
+          }
+        },
+        "adopt": {
+          "title": "Bestaande planner overnemen",
+          "description": "Neem {planner} over. De bestaande planner wordt een inactief archief. Entiteits-ID’s, unieke ID’s en opgeslagen plannerstatus blijven behouden. Verschillende gedeelde bronnen blokkeren de overname.",
+          "data": {
+            "confirm": "Overname bevestigen"
+          }
+        },
+        "configure": {
+          "title": "Prijsblokplanner",
+          "description": "Stel alleen het eigen plannergedrag in. Prijzen, hoofdverbruik en zonbronnen komen uit het huishouden.",
+          "data": {
+            "battery_soc_sensor": "Accu laadstatus sensor",
+            "price_resolution": "Prijsinterval energiecontract",
+            "price_window_type": "Type prijsvenster",
+            "price_window_duration_hours": "Duur aaneengesloten prijsvenster (uren)",
+            "price_window_whole_hour_start": "Alleen tijdvakken toestaan die op het hele uur beginnen",
+            "battery_enabled": "Thuisaccu inschakelen",
+            "battery_capacity_kwh": "Accucapaciteit (kWh)",
+            "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
+            "battery_no_charge_min_soc_percent": "Minimale accu-laadstatus zonder laadvooruitzicht (%)",
+            "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
+            "battery_max_charge_kw": "Max laadvermogen (kW)",
+            "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
+            "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
+            "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
+            "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)",
+            "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
+            "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
+            "demand_energy_sensors": "Energiemeters per apparaat",
+            "price_peak_min_duration_minutes": "Minimale piekduur (minuten)",
+            "planner_name": "Naam"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
+            "price_peak_min_prominence_percent": "Filter kleine pieken op hoogte boven omliggende dalen als percentage van het dagverschil. Voor de venstergrens: dit percentage tussen het volgende dal en de top (50% is halverwege). 0 schakelt het hoogtefilter uit. Alleen voor dure pieken.",
+            "price_window_duration_hours": "Maximale duur voor dure pieken. Kort beide flanken in op basis van de top en het volgende dal. Neem latere lagere toppen boven de grens mee in hetzelfde blok. Actieve starts blijven vast. Goedkope blokken behouden hun vaste duur.",
+            "demand_forecast_sensor": "Kies een zelfstandige verbruiksvoorspelling. Deze vervangt de interne verbruiksberekening; de veiligheidsmarge wordt daarna één keer toegepast.",
+            "demand_energy_sensors": "Selecteer Wh/kWh-tellers (total of total_increasing), geen vermogenssensoren. De optionele totaalmeter omvat deze apparaten; alleen het restverbruik wordt erbij geteld.",
+            "price_peak_min_duration_minutes": "Kortere toekomstige piekblokken worden overgeslagen, niet verlengd. Standaard 60 minuten; 0 schakelt dit filter uit. Een lopend blok blijft behouden. Alleen voor dure prijspieken."
+          }
+        },
+        "device": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "timing": "Startwijze"
+          }
+        },
+        "device_schedule": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "start_time": "Vaste starttijd",
+            "offset_hours": "Uren na begin goedkoopste blok",
+            "weekdays": "Actieve weekdagen"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "Dezelfde meter is meermaals geselecteerd.",
+        "no_energy_sources": "Selecteer een totaalmeter of apparaatmeters.",
+        "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
+        "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
+        "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing.",
+        "self_forecast": "Een planner kan niet zijn eigen verbruiksvoorspelling als bron gebruiken."
+      },
+      "abort": {
+        "unsupported_planner_kind": "Dit plannertype wordt hier niet ondersteund.",
+        "legacy_unavailable": "Deze bestaande planner is niet meer beschikbaar voor overname.",
+        "shared_source_conflict": "Overname geblokkeerd: de gedeelde bronnen verschillen ({sources}). Maak de huishoudenbronnen en bestaande planner eerst gelijk; er is niets overgenomen.",
+        "reconfigure_successful": "Planner bijgewerkt."
+      }
+    },
+    "demand": {
+      "title": "Verbruiksvoorspelling",
+      "step": {
+        "user": {
+          "title": "Verbruiksvoorspelling",
+          "description": "Maak een nieuwe planner of neem bewust een bestaande losse planner over. Het huishouden levert de gedeelde bronnen.",
+          "data": {
+            "legacy_entry_id": "Nieuwe of bestaande planner"
+          }
+        },
+        "adopt": {
+          "title": "Bestaande planner overnemen",
+          "description": "Neem {planner} over. De bestaande planner wordt een inactief archief. Entiteits-ID’s, unieke ID’s en opgeslagen plannerstatus blijven behouden. Verschillende gedeelde bronnen blokkeren de overname.",
+          "data": {
+            "confirm": "Overname bevestigen"
+          }
+        },
+        "configure": {
+          "title": "Verbruiksvoorspelling",
+          "description": "Stel alleen het eigen plannergedrag in. Prijzen, hoofdverbruik en zonbronnen komen uit het huishouden.",
+          "data": {
+            "battery_soc_sensor": "Accu laadstatus sensor",
+            "price_resolution": "Prijsinterval energiecontract",
+            "price_window_type": "Type prijsvenster",
+            "price_window_duration_hours": "Duur aaneengesloten prijsvenster (uren)",
+            "price_window_whole_hour_start": "Alleen tijdvakken toestaan die op het hele uur beginnen",
+            "battery_enabled": "Thuisaccu inschakelen",
+            "battery_capacity_kwh": "Accucapaciteit (kWh)",
+            "battery_min_soc_percent": "Minimale accu-laadstatus (%)",
+            "battery_no_charge_min_soc_percent": "Minimale accu-laadstatus zonder laadvooruitzicht (%)",
+            "battery_min_profit_per_kwh": "Minimale accuwinst per kWh",
+            "battery_max_charge_kw": "Max laadvermogen (kW)",
+            "battery_max_discharge_kw": "Max ontlaadvermogen (kW)",
+            "battery_charge_safety_margin": "Zonneprognose veiligheidsmarge % (20 = reken met 20% minder zon; 0 = uit)",
+            "battery_demand_safety_margin": "Veiligheidsmarge voorspeld verbruik (%)",
+            "price_peak_min_gap_hours": "Minimale pauze tussen prijspiekblokken (uren)",
+            "price_peak_min_prominence_percent": "Minimale piekhoogte (% van prijsverschil)",
+            "demand_forecast_sensor": "Verbruiksvoorspelling (optioneel)",
+            "demand_energy_sensors": "Energiemeters per apparaat",
+            "price_peak_min_duration_minutes": "Minimale piekduur (minuten)",
+            "planner_name": "Naam"
+          },
+          "data_description": {
+            "price_peak_min_gap_hours": "Alleen voor dure prijspieken. Minimaal 0,25 uur laag tussen blokken. Bestaande blokken blijven vaststaan.",
+            "price_peak_min_prominence_percent": "Filter kleine pieken op hoogte boven omliggende dalen als percentage van het dagverschil. Voor de venstergrens: dit percentage tussen het volgende dal en de top (50% is halverwege). 0 schakelt het hoogtefilter uit. Alleen voor dure pieken.",
+            "price_window_duration_hours": "Maximale duur voor dure pieken. Kort beide flanken in op basis van de top en het volgende dal. Neem latere lagere toppen boven de grens mee in hetzelfde blok. Actieve starts blijven vast. Goedkope blokken behouden hun vaste duur.",
+            "demand_forecast_sensor": "Kies een zelfstandige verbruiksvoorspelling. Deze vervangt de interne verbruiksberekening; de veiligheidsmarge wordt daarna één keer toegepast.",
+            "demand_energy_sensors": "Selecteer Wh/kWh-tellers (total of total_increasing), geen vermogenssensoren. De optionele totaalmeter omvat deze apparaten; alleen het restverbruik wordt erbij geteld.",
+            "price_peak_min_duration_minutes": "Kortere toekomstige piekblokken worden overgeslagen, niet verlengd. Standaard 60 minuten; 0 schakelt dit filter uit. Een lopend blok blijft behouden. Alleen voor dure prijspieken."
+          }
+        },
+        "device": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "timing": "Startwijze"
+          }
+        },
+        "device_schedule": {
+          "title": "Apparaatverbruik",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "data": {
+            "start_time": "Vaste starttijd",
+            "offset_hours": "Uren na begin goedkoopste blok",
+            "weekdays": "Actieve weekdagen"
+          }
+        }
+      },
+      "error": {
+        "duplicate_energy_source": "Dezelfde meter is meermaals geselecteerd.",
+        "no_energy_sources": "Selecteer een totaalmeter of apparaatmeters.",
+        "price_sensor_required": "Selecteer eerst een prijssensor voor een goedkoop prijsblok.",
+        "demand_source_required": "Selecteer een totaalmeter of verbruiksvoorspelling.",
+        "unsupported_energy_meter": "Kies een beschikbare energieteller met eenheid Wh of kWh en state_class total of total_increasing.",
+        "self_forecast": "Een planner kan niet zijn eigen verbruiksvoorspelling als bron gebruiken."
+      },
+      "abort": {
+        "unsupported_planner_kind": "Dit plannertype wordt hier niet ondersteund.",
+        "legacy_unavailable": "Deze bestaande planner is niet meer beschikbaar voor overname.",
+        "shared_source_conflict": "Overname geblokkeerd: de gedeelde bronnen verschillen ({sources}). Maak de huishoudenbronnen en bestaande planner eerst gelijk; er is niets overgenomen.",
+        "reconfigure_successful": "Planner bijgewerkt."
+      }
     }
   }
 }

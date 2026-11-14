@@ -157,7 +157,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     config_entry: ConfigEntry
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self.config_entry = entry
+        self._planner_entry = entry
+        self.config_entry = getattr(entry, 'parent', entry)
         super().__init__(
             hass,
             logger=_LOGGER,
@@ -174,8 +175,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         self._battery_cycle_state_restored_recent: bool = False
         self._restore_recent_battery_cycle_state()
 
+    @property
+    def planner_entry(self):
+        """Stable planner identity, separate from the owning HA config entry."""
+        return getattr(self, '_planner_entry', self.config_entry)
+
     def _restore_recent_battery_cycle_state(self) -> None:
-        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.config_entry.entry_id, {})
+        runtime_state = self.hass.data.get(RUNTIME_STATE, {}).get(self.planner_entry.entry_id, {})
         self._battery_grid_charge_price = _coerce_float(runtime_state.get("battery_grid_charge_price"))
         self._battery_margin_state = runtime_state.get("battery_margin_state")
         cycle_state = runtime_state.get(_BATTERY_CYCLE_STATE_KEY)
@@ -239,7 +245,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if not hasattr(self, "hass"):
             return
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-            self.config_entry.entry_id,
+            self.planner_entry.entry_id,
             {},
         )
         runtime_state[_BATTERY_CYCLE_STATE_KEY] = {
@@ -254,7 +260,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
     @property
     def _config(self) -> dict[str, Any]:
-        return {**self.config_entry.data, **self.config_entry.options}
+        return {**self.planner_entry.data, **self.planner_entry.options}
 
     def _config_entity_id(self, key: str) -> str | None:
         value = self._config.get(key)
@@ -273,7 +279,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 errors = tuple(result.source_errors)
                 if errors != getattr(self, '_last_demand_source_errors', ()):
                     if errors:
-                        _LOGGER.warning("Consumption forecast %s: %s", self.config_entry.entry_id, errors)
+                        _LOGGER.warning("Consumption forecast %s: %s", self.planner_entry.entry_id, errors)
                     self._last_demand_source_errors = errors
                 if result.status in ('ready', 'ready_with_warnings'):
                     self._cancel_source_error_retry()
@@ -285,6 +291,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             forecast_sensor = self._config_entity_id(CONF_DEMAND_FORECAST_SENSOR)
             if planner_kind == PLANNER_KIND_BATTERY and forecast_sensor:
                 try:
+                    from .household import is_self_forecast
+                    if is_self_forecast(self.hass, self.planner_entry.entry_id, forecast_sensor):
+                        raise ValueError('self_forecast')
                     external_demand = read_forecast(self.hass.states.get(forecast_sensor), now=now,
                         horizon_end=now.replace(hour=0, minute=0, second=0, microsecond=0)+timedelta(days=2))
                 except ValueError as err:
@@ -559,7 +568,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if total_energy_sensor and total_energy_state:
                     runtime_state = (
                         self.hass.data.get(RUNTIME_STATE, {})
-                        .get(self.config_entry.entry_id, {})
+                        .get(self.planner_entry.entry_id, {})
                     )
                     current_energy = _coerce_float(total_energy_state.state)
                     if current_energy is not None:
@@ -576,7 +585,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     demand_adjustment_factor = (
                         _coerce_float(
                             self.hass.data.get(RUNTIME_STATE, {})
-                            .get(self.config_entry.entry_id, {})
+                            .get(self.planner_entry.entry_id, {})
                             .get(_EXPECTED_DEMAND_ADJUSTMENT_KEY)
                         )
                         or 1.0
@@ -620,14 +629,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 )
             if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is not None:
                 runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-                    self.config_entry.entry_id,
+                    self.planner_entry.entry_id,
                     {},
                 )
                 self._store_battery_cycle_state_snapshot(now)
                 await self._async_persist_runtime_state(runtime_state)
             if planner_kind == PLANNER_KIND_PRICE_WINDOW:
                 runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-                    self.config_entry.entry_id, {},
+                    self.planner_entry.entry_id, {},
                 )
                 if PRICE_PEAK_STATE_KEY in runtime_state:
                     await self._async_persist_runtime_state(runtime_state)
@@ -818,7 +827,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         import_price: float | None,
         export_price: float | None,
     ) -> None:
-        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self.config_entry.entry_id, {})
+        runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(self.planner_entry.entry_id, {})
         last_energy = _coerce_float(runtime_state.get("battery_profit_last_energy_kwh"))
         total_profit = _coerce_float(runtime_state.get("battery_profit_total_eur"), default=0.0) or 0.0
         tracked_energy = _coerce_float(runtime_state.get("battery_profit_tracked_energy_kwh"), default=0.0) or 0.0
@@ -874,7 +883,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
     ) -> dict[str, float]:
         """Maintain compact learned hourly demand stats and an expected table."""
         runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-            self.config_entry.entry_id, {}
+            self.planner_entry.entry_id, {}
         )
         stats: dict[str, dict[str, Any]] = dict(runtime_state.get(_EXPECTED_DEMAND_STATS_KEY) or {})
         table: dict[str, float] = dict(runtime_state.get(_EXPECTED_DEMAND_TABLE_KEY) or {})
@@ -1055,7 +1064,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             store = Store[dict[str, Any]](self.hass, STORAGE_VERSION, STORAGE_KEY)
             data = await store.async_load() or {}
             entry_state = {
-                **(data.get(self.config_entry.entry_id, {}) or {}),
+                **(data.get(self.planner_entry.entry_id, {}) or {}),
                 PRICE_PEAK_STATE_KEY: runtime_state.get(PRICE_PEAK_STATE_KEY, {}),
                 "battery_profit_total_eur": runtime_state.get("battery_profit_total_eur", 0.0),
                 "battery_profit_cost_basis_eur": runtime_state.get("battery_profit_cost_basis_eur", 0.0),
@@ -1075,7 +1084,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             }
             for legacy_key in _LEGACY_DEMAND_KEYS:
                 entry_state.pop(legacy_key, None)
-            data[self.config_entry.entry_id] = entry_state
+            data[self.planner_entry.entry_id] = entry_state
             await store.async_save(data)
 
 
@@ -1097,7 +1106,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     no_attributes=True,
                 )
 
-            history_result = await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
+            async def load():
+                return await get_recorder_instance(self.hass).async_add_executor_job(_load_history)
+            shared = getattr(self, 'shared_sources', None)
+            history_result = (await shared.async_cached(('battery_history', entity_id), load)
+                              if shared else await load())
         except Exception:
             return 0.0
 
@@ -1362,7 +1375,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             ) if not wants_most_expensive else None
             if wants_most_expensive:
                 runtime_state = self.hass.data.setdefault(RUNTIME_STATE, {}).setdefault(
-                    self.config_entry.entry_id, {},
+                    self.planner_entry.entry_id, {},
                 )
                 peak_state = plan_price_peaks(
                     all_windows if source_status.get("price_sensor") == "ok" else [],

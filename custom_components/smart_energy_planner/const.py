@@ -9,6 +9,12 @@ RUNTIME_STATE = f"{DOMAIN}_runtime"
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_runtime_store"
 
+PLANNER_KIND_HOUSEHOLD = "household"
+# Only the household owns these keys; planner policy remains child-local.
+SHARED_SOURCE_KEYS = frozenset({
+    "price_sensor", "export_price_sensor", "export_price_tax_deduction",
+    "solcast_today_sensor", "solcast_tomorrow_sensor", "total_energy_sensor",
+})
 CONF_PLANNER_NAME = "planner_name"
 CONF_PLANNER_KIND = "planner_kind"
 CONF_PRICE_SENSOR = "price_sensor"

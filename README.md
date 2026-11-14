@@ -9,7 +9,7 @@ Smart Energy Planner is a Home Assistant custom integration for:
 - optional home battery capacity and charge/discharge limits
 
 The integration exposes planner sensors that can be used in automations to shift loads to cheaper and greener moments.
-You can now add the integration multiple times and choose a separate planner type for battery and price window planning.
+Create one household configuration and add battery, price-window and consumption-forecast planners as Home Assistant config subentries. Existing standalone planners continue to work until you explicitly adopt them.
 
 ## Features
 
@@ -22,32 +22,27 @@ You can now add the integration multiple times and choose a separate planner typ
 
 ## Configuration
 
-Add the integration from the Home Assistant UI and choose one of these planner types:
+Add the integration from the Home Assistant UI and create a household, for example `Energieplanner Thuis`. Configure the shared import price sensor, optional export price sensor and export tax deduction, total home energy meter, Solcast forecasts for today/tomorrow there. Optional external consumption forecasts remain battery-specific. The total home meter must measure cumulative energy in kWh, not instantaneous power in W.
 
-- `Battery planner`
-- `Price window planner`
+From this household, add one or more config subentries:
 
-You can add the integration multiple times if you want separate battery and price window planners.
+- `Battery planner`: battery identity, capacity, SOC, power and cycle/profit policy.
+- `Price window planner`: cheapest or most expensive windows, duration and peak policy. Create separate subentries for different windows.
+- `Consumption forecast`: device energy meters, learned/fixed/cheap-start timing and forecast settings.
+
+Shared sources are inherited and do not appear again in the child forms. Changing household sources reloads its planners. An unavailable child does not prevent healthy siblings from starting. This is shared configuration and source acquisition, not a new joint optimizer or automatic switching of physical appliances. Consumption device rules remain under the consumption-forecast subentry; they are not standalone appliance controllers.
+
+### Adopt an existing planner without losing its identity
+
+Existing standalone configurations remain supported; they are not silently merged. Create a household with matching shared sources, add a subentry of the desired type, select the existing planner, and confirm adoption. Conflicting sources abort adoption rather than silently changing the old planner. Entity IDs and persisted battery/forecast/window identities are retained. The old entry is left as an inert archive after successful adoption, so interrupted adoption can resume without two controllers. Repeat for each existing planner.
+
+Manage shared sources through the household options and planner-specific settings through the subentry reconfigure action. Devices are grouped in the integration configuration; this does not create a physical Home Assistant device hierarchy.
+
 Thermostat control has been removed. Before updating, move any active heating or
 cooling control to another controller. Existing thermostat entries no longer load;
 remove them from Home Assistant. Existing switches are not changed by this update.
 
-Depending on the selected planner type, configure:
-
-- Energy price sensor
-- Solcast forecast sensor for today
-- Total home energy sensor
-- Contract price interval: hourly or quarter-hourly
-- Optional home battery support
-- Battery capacity
-- Minimum battery profit per kWh
-- Maximum battery charge power
-- Maximum battery discharge power
-
-After setup, you can open the integration settings again from Home Assistant and adjust the full configuration from the settings icon.
-The UI filters the entity choices so you mainly see compatible Nord Pool, Solcast, and energy sensors.
-
-The battery planner derives the estimated energy for today only from the history of your total home energy sensor. It does not split heating out separately and does not require a heating energy sensor.
+The UI filters entity choices for compatible price, Solcast and energy sensors. Battery planners derive estimated demand from total-home history unless an external demand forecast is configured. Household planners coalesce matching historical reads and invalidate cached inputs on source updates; each planner keeps its own results and policy.
 
 ## Exposed entities
 

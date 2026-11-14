@@ -59,8 +59,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Smart Energy Planner sensors."""
+    from .household import async_setup_platform
+    await async_setup_platform(hass, entry, async_add_entities, _async_setup_planner_sensors)
+
+
+async def _async_setup_planner_sensors(hass, entry, async_add_entities):
     coordinator: SmartEnergyPlannerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    planner_kind = coordinator.data.planner_kind
+    planner_kind = coordinator._config.get('planner_kind', 'battery')
     entities: list[PlannerSensor] = []
 
     if planner_kind == PLANNER_KIND_BATTERY:
@@ -111,6 +116,12 @@ class PlannerSensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], SensorEnti
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_native_unit_of_measurement = native_unit_of_measurement
         self._attr_icon = "mdi:home-lightning-bolt-outline"
+        if hasattr(entry, 'subentry_id'):
+            self._attr_device_info = {
+                'identifiers': {(DOMAIN, entry.entry_id)}, 'name': entry.title,
+                'manufacturer': 'Smart Energy Planner', 'model': coordinator._config['planner_kind'],
+                'via_device': (DOMAIN, entry.parent.entry_id),
+            }
 
     @property
     def native_value(self):

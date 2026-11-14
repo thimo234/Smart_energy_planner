@@ -89,7 +89,7 @@ class RestartTest(unittest.IsolatedAsyncioTestCase):
         # Evaluate the production setup mapping, so an omitted stored field
         # cannot pass by simply sharing the previous hass.data dictionary.
         source = Path('custom_components/smart_energy_planner/__init__.py').read_text(encoding='utf-8-sig')
-        setup = next(n for n in ast.parse(source).body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'async_setup_entry')
+        setup = next(n for n in ast.parse(source).body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_async_setup_planner')
         mapping = next(n.value for n in ast.walk(setup) if isinstance(n, ast.Assign)
                        and isinstance(n.value, ast.Dict) and any(isinstance(k, ast.Constant) and k.value == 'battery_cycle_state' for k in n.value.keys))
         restored = {key.value: eval(compile(ast.Expression(value), '<setup>', 'eval'), {'persisted_state': persisted})

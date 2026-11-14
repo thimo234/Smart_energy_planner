@@ -8,12 +8,29 @@ import math
 import voluptuous as vol
 
 from homeassistant.components.sensor import SensorDeviceClass
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, ConfigSubentryFlow, OptionsFlow
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
 from .const import (PLANNER_KIND_DEMAND, CONF_DEMAND_DEVICES, CONF_DEMAND_ENERGY_SENSORS,
                     CONF_DEMAND_FORECAST_SENSOR)
+from .const import PLANNER_KIND_HOUSEHOLD, SHARED_SOURCE_KEYS
+from .household import adoption_conflicts, child_data, merged_data
+
+
+def _build_household_schema(hass, data=None):
+    """Reuse source selectors; solar is optional for price/demand-only homes."""
+    fields = {}
+    for marker, value in _build_battery_schema(hass, data).schema.items():
+        key = marker.schema
+        if key not in SHARED_SOURCE_KEYS and key != CONF_PLANNER_NAME:
+            continue
+        if key in SHARED_SOURCE_KEYS - {CONF_PRICE_SENSOR, CONF_EXPORT_PRICE_TAX_DEDUCTION}:
+            current = (data or {}).get(key)
+            marker = vol.Optional(key, **({'default': current} if current else {}))
+        fields[marker] = value
+    return vol.Schema(fields)
+
 
 from .const import (
     CONF_PRICE_PEAK_MIN_DURATION_MINUTES, DEFAULT_PRICE_PEAK_MIN_DURATION_MINUTES,
@@ -131,27 +148,6 @@ def _entity_selector(
         config["include_entities"] = include_entities
 
     return selector.EntitySelector(selector.EntitySelectorConfig(**config))
-
-
-def _build_kind_schema(current_value: str | None = None) -> vol.Schema:
-    """Build the planner type selector schema."""
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_PLANNER_KIND,
-                default=current_value or DEFAULT_PLANNER_KIND,
-            ): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(value=PLANNER_KIND_BATTERY, label="Battery planner"),
-                        selector.SelectOptionDict(value=PLANNER_KIND_PRICE_WINDOW, label="Price window planner"),
-                        selector.SelectOptionDict(value=PLANNER_KIND_DEMAND, label="Consumption forecast"),
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            )
-        }
-    )
 
 
 def _base_defaults(user_input: dict[str, Any] | None) -> dict[str, Any]:
@@ -468,7 +464,8 @@ class DemandDeviceFlow:
         if not error and any(entity not in _demand_meter_ids(self.hass) for entity in selected):
             error = 'unsupported_energy_meter'
         if error:
-            return self.async_show_form(step_id=finish_step, data_schema=_build_demand_schema(self.hass, data), errors={'base': error})
+            schema = self._child_schema(data) if hasattr(self, '_child_schema') else _build_demand_schema(self.hass, data)
+            return self.async_show_form(step_id=finish_step, data_schema=schema, errors={'base': error})
         return await self.async_step_device()
 
     async def _save_demand_device(self, rule):
@@ -530,6 +527,99 @@ class DemandDeviceFlow:
                                    description_placeholders={'entity': entity})
 
 
+class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
+    """Add, explicitly adopt, or reconfigure a planner under its household."""
+
+    def _child_schema(self, data=None):
+        fields = _schema_for_kind(self.hass, self._subentry_type, data).schema
+        return vol.Schema({key: value for key, value in fields.items()
+                           if key.schema not in SHARED_SOURCE_KEYS})
+
+    def _legacy_choices(self):
+        result = []
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if (merged_data(entry).get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY) == self._subentry_type
+                    and not entry.data.get('_adopted_by')):
+                result.append(entry)
+        return result
+
+    async def async_step_user(self, user_input=None):
+        if merged_data(self._get_entry()).get(CONF_PLANNER_KIND) != PLANNER_KIND_HOUSEHOLD:
+            return self.async_abort(reason='unsupported_planner_kind')
+        if user_input is not None:
+            identity = user_input.get('legacy_entry_id', 'new')
+            if identity == 'new':
+                return await self.async_step_configure()
+            legacy = next((e for e in self._legacy_choices() if e.entry_id == identity), None)
+            if legacy is None:
+                return self.async_abort(reason='legacy_unavailable')
+            conflicts = adoption_conflicts(self._get_entry(), legacy)
+            if conflicts:
+                return self.async_abort(reason='shared_source_conflict',
+                    description_placeholders={'sources': ', '.join(sorted(conflicts))})
+            self._legacy_id = identity
+            return await self.async_step_adopt()
+        choices = [selector.SelectOptionDict(value='new', label='New planner')]
+        choices.extend(selector.SelectOptionDict(value=e.entry_id, label=e.title) for e in self._legacy_choices())
+        return self.async_show_form(step_id='user', data_schema=vol.Schema({
+            vol.Required('legacy_entry_id', default='new'): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=choices))}))
+
+    async def async_step_adopt(self, user_input=None):
+        legacy = self.hass.config_entries.async_get_entry(self._legacy_id)
+        if legacy is None or legacy.data.get('_adopted_by'):
+            return self.async_abort(reason='legacy_unavailable')
+        conflicts = adoption_conflicts(self._get_entry(), legacy)
+        if conflicts:
+            return self.async_abort(reason='shared_source_conflict',
+                description_placeholders={'sources': ', '.join(sorted(conflicts))})
+        if user_input is not None and user_input.get('confirm'):
+            data = {**child_data(merged_data(legacy)), '_legacy_entry_id': legacy.entry_id}
+            return self.async_create_entry(title=legacy.title, data=data)
+        return self.async_show_form(step_id='adopt', data_schema=vol.Schema({
+            vol.Required('confirm', default=False): selector.BooleanSelector()}),
+            description_placeholders={'planner': legacy.title, 'household': self._get_entry().title})
+
+    async def async_step_reconfigure(self, user_input=None):
+        self._editing = self._get_reconfigure_subentry()
+        if user_input is None:
+            return self.async_show_form(step_id='configure', data_schema=self._child_schema(self._editing.data))
+        return await self.async_step_configure(user_input)
+
+    async def async_step_configure(self, user_input=None):
+        errors = {}
+        if user_input is not None:
+            data = _normalize_selector_values(user_input)
+            # Never let stale child values override the shared household sources.
+            data = {**child_data(data), **{k: v for k, v in merged_data(self._get_entry()).items()
+                                         if k in SHARED_SOURCE_KEYS}, CONF_PLANNER_KIND: self._subentry_type}
+            if self._subentry_type == PLANNER_KIND_DEMAND and not getattr(self, '_demand_devices_complete', False):
+                return await self._start_demand_devices(data, 'configure')
+            if self._subentry_type == PLANNER_KIND_BATTERY:
+                if not (data.get(CONF_TOTAL_ENERGY_SENSOR) or data.get(CONF_DEMAND_FORECAST_SENSOR)):
+                    errors['base'] = 'demand_source_required'
+                if not data.get(CONF_SOLCAST_TODAY_SENSOR):
+                    errors['base'] = 'solar_source_required'
+                forecast = data.get(CONF_DEMAND_FORECAST_SENSOR)
+                if forecast:
+                    from .household import is_self_forecast
+                    editing = getattr(self, '_editing', None)
+                    identity = editing.data.get('_legacy_entry_id', editing.subentry_id) if editing else None
+                    if is_self_forecast(self.hass, identity, forecast):
+                        errors['base'] = 'self_forecast'
+            if not errors:
+                title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(self._subentry_type))
+                payload = child_data(data)
+                editing = getattr(self, '_editing', None)
+                if editing:
+                    # Persist adoption identity through every edit and HA restart.
+                    if '_legacy_entry_id' in editing.data:
+                        payload['_legacy_entry_id'] = editing.data['_legacy_entry_id']
+                    return self.async_update_and_abort(self._get_entry(), editing, title=title, data=payload)
+                return self.async_create_entry(title=title, data=payload)
+        return self.async_show_form(step_id='configure', data_schema=self._child_schema(user_input), errors=errors)
+
+
 class SmartEnergyPlannerConfigFlow(DemandDeviceFlow, ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Smart Energy Planner."""
 
@@ -538,47 +628,26 @@ class SmartEnergyPlannerConfigFlow(DemandDeviceFlow, ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Create the household; planners are real HA config subentries."""
         if user_input is not None:
-            if user_input.get(CONF_PLANNER_KIND) not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
+            if user_input.get(CONF_PLANNER_KIND, 'household') != 'household':
                 return self.async_abort(reason="unsupported_planner_kind")
-            self.context["planner_kind"] = user_input[CONF_PLANNER_KIND]
-            return await self.async_step_configure()
+            data = {**_normalize_selector_values(user_input), CONF_PLANNER_KIND: PLANNER_KIND_HOUSEHOLD}
+            return self.async_create_entry(title=data[CONF_PLANNER_NAME], data=data)
 
-        return self.async_show_form(step_id="user", data_schema=_build_kind_schema())
+        return self.async_show_form(step_id="user", data_schema=_build_household_schema(self.hass))
 
-    async def async_step_configure(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
-        """Configure the selected planner kind."""
-        planner_kind = self.context.get("planner_kind", DEFAULT_PLANNER_KIND)
-        if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
-            return self.async_abort(reason="unsupported_planner_kind")
+    @classmethod
+    def async_get_supported_subentry_types(cls, config_entry):
+        if merged_data(config_entry).get(CONF_PLANNER_KIND) != PLANNER_KIND_HOUSEHOLD:
+            return {}
+        return {kind: PlannerSubentryFlow for kind in (
+            PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND,
+        )}
 
-        if user_input is not None:
-            user_input = _normalize_selector_values(user_input)
-            if planner_kind == PLANNER_KIND_DEMAND and not getattr(self, '_demand_devices_complete', False):
-                return await self._start_demand_devices(user_input, 'configure')
-            if planner_kind == PLANNER_KIND_BATTERY and not (user_input.get(CONF_TOTAL_ENERGY_SENSOR) or user_input.get(CONF_DEMAND_FORECAST_SENSOR)):
-                return self.async_show_form(step_id='configure', data_schema=_build_battery_schema(self.hass, user_input), errors={'base': 'demand_source_required'})
-            data = {CONF_PLANNER_KIND: planner_kind, **user_input}
-            title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(planner_kind))
-            unique_anchor = (
-                user_input.get(CONF_BATTERY_SOC_SENSOR)
-                or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-                or user_input.get(CONF_PLANNER_NAME)
-                or user_input.get(CONF_PRICE_SENSOR)
-                or user_input.get(CONF_TOTAL_ENERGY_SENSOR)
-                or planner_kind
-            )
-            await self.async_set_unique_id(f"{DOMAIN}-{planner_kind}-{unique_anchor}")
-            self._abort_if_unique_id_configured()
-            return self.async_create_entry(title=title, data=data)
-
-        return self.async_show_form(
-            step_id="configure",
-            data_schema=_schema_for_kind(self.hass, planner_kind),
-        )
+    async def async_step_configure(self, user_input=None):
+        """Abort stale pre-household flows without creating a duplicate planner."""
+        return self.async_abort(reason="unsupported_planner_kind")
 
     @staticmethod
     def async_get_options_flow(config_entry):
@@ -595,6 +664,14 @@ class SmartEnergyPlannerOptionsFlow(DemandDeviceFlow, OptionsFlow):
         """Manage the options."""
         merged = {**self.config_entry.data, **self.config_entry.options}
         planner_kind = merged.get(CONF_PLANNER_KIND, DEFAULT_PLANNER_KIND)
+        if planner_kind == PLANNER_KIND_HOUSEHOLD:
+            if user_input is not None:
+                data = {**{key: None for key in SHARED_SOURCE_KEYS},
+                        CONF_EXPORT_PRICE_TAX_DEDUCTION: DEFAULT_EXPORT_PRICE_TAX_DEDUCTION,
+                        **_normalize_selector_values(user_input), CONF_PLANNER_KIND: PLANNER_KIND_HOUSEHOLD}
+                self.hass.config_entries.async_update_entry(self.config_entry, title=data[CONF_PLANNER_NAME])
+                return self.async_create_entry(title='', data=data)
+            return self.async_show_form(step_id='init', data_schema=_build_household_schema(self.hass, merged))
         if planner_kind not in (PLANNER_KIND_BATTERY, PLANNER_KIND_PRICE_WINDOW, PLANNER_KIND_DEMAND):
             return self.async_abort(reason="unsupported_planner_kind")
 

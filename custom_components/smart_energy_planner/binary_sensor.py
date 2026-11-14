@@ -38,8 +38,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Smart Energy Planner binary sensors."""
+    from .household import async_setup_platform
+    await async_setup_platform(hass, entry, async_add_entities, _async_setup_planner_binary_sensors)
+
+
+async def _async_setup_planner_binary_sensors(hass, entry, async_add_entities):
     coordinator: SmartEnergyPlannerCoordinator = hass.data[DOMAIN][entry.entry_id]
-    if coordinator.data.planner_kind != PLANNER_KIND_PRICE_WINDOW:
+    if coordinator._config.get('planner_kind', 'battery') != PLANNER_KIND_PRICE_WINDOW:
         return
 
     merged = {**entry.data, **entry.options}
@@ -77,6 +82,12 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
         self._attr_name = f"{entry.title} {name}".strip()
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_icon = icon
+        if hasattr(entry, 'subentry_id'):
+            self._attr_device_info = {
+                'identifiers': {(DOMAIN, entry.entry_id)}, 'name': entry.title,
+                'manufacturer': 'Smart Energy Planner', 'model': PLANNER_KIND_PRICE_WINDOW,
+                'via_device': (DOMAIN, entry.parent.entry_id),
+            }
         self._boundary_unsub = None
 
     async def async_added_to_hass(self) -> None:
@@ -93,6 +104,8 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
     @callback
     def _schedule_boundary(self) -> None:
         self._cancel_boundary()
+        if self.coordinator.data is None:
+            return
         now = dt_util.now()
         windows = self._peak_windows if self._is_peak_planner else [self._window or {}]
         boundaries = [at for window in windows for key in ("start", "end")
@@ -123,6 +136,8 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data is None:
+            return {}
         window = self._window or {}
         tomorrow_cheapest_window = self._tomorrow_cheapest_window or {}
         merged = {**self._entry.data, **self._entry.options}
@@ -169,7 +184,7 @@ class PriceWindowBinarySensor(CoordinatorEntity[SmartEnergyPlannerCoordinator], 
 
     @property
     def _is_peak_planner(self) -> bool:
-        return self.coordinator.data.price_window_type == PRICE_WINDOW_TYPE_MOST_EXPENSIVE
+        return getattr(self.coordinator.data, "price_window_type", None) == PRICE_WINDOW_TYPE_MOST_EXPENSIVE
 
     @property
     def _peak_windows(self) -> list[dict]:
