@@ -170,6 +170,34 @@ class ObservedAccountingTest(unittest.TestCase):
         self.assertIsNone(stock.lots[1][1])
         self.assertEqual(stock.credit, 0.)
 
+    def test_solar_above_forecast_does_not_inherit_legacy_grid_cost(self):
+        previous = self.state('laden_met_zonne_energie')
+        previous['credit'] = -.5
+        previous['actions'][0]['solar_kw'] = .04
+        # Forecast .01 kWh, measured .1 kWh: source is still the solar command.
+        stock = observed_stock(previous, self.end, 6.9, 0., .10)
+        self.assertEqual(stock.lots[0], [6.8, .377])
+        self.assertAlmostEqual(stock.lots[1][0], .1)
+        self.assertIsNone(stock.lots[1][1])
+        self.assertAlmostEqual(sum(q for q, _ in stock.lots), 6.9)
+        self.assertEqual(stock.credit, -.5)
+
+    def test_solar_command_with_zero_forecast_keeps_measured_solar_source(self):
+        previous = self.state('laden_met_zonne_energie')
+        previous['actions'][0]['solar_kw'] = 0.
+        stock = observed_stock(previous, self.end, 6.9, 0., .10)
+        self.assertEqual(stock.lots[0], [6.8, .377])
+        self.assertAlmostEqual(stock.lots[1][0], .1)
+        self.assertIsNone(stock.lots[1][1])
+
+    def test_mixed_source_excess_does_not_become_free_solar(self):
+        previous = self.state('laden_van_net')
+        previous['actions'][0].update(solar_kw=.02, grid_kw=.02, import_price=.4)
+        stock = observed_stock(previous, self.end, 6.9, 0., .10)
+        self.assertAlmostEqual(sum(q for q, c in stock.lots if c is None), .005)
+        self.assertAlmostEqual(sum(q for q, c in stock.lots if c is not None), 6.895)
+        self.assertEqual(stock.credit, 0.)
+
     def test_unknown_gain_is_not_assumed_to_be_free_solar(self):
         stock = observed_stock(self.state(), self.end, 6.9, 0., .10)
         self.assertAlmostEqual(sum(q for q, _ in stock.lots), 6.9)

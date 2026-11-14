@@ -134,6 +134,17 @@ def observed_stock(previous, now, energy, reserve, minimum):
     predicted_discharge = sum(a['power'] * h for a, h in elapsed
                               if a['mode'].startswith('ontladen'))
     charge_scale = min(1., max(0., delta) / predicted_charge) if predicted_charge > 0 else 0.
+    # Forecast power is not a cap on measured solar production. If the only
+    # elapsed source commands were solar-only, all confirmed gain has that
+    # source even when sunshine or quantized SOC exceeds the forecast. Mixed
+    # or unknown execution remains conservative and cannot acquire free stock.
+    solar_only = bool(elapsed) and all(
+        a['mode'] == 'laden_met_zonne_energie' and a['grid_kw'] == 0
+        for a, _ in elapsed)
+    if solar_only and predicted_charge > 0:
+        charge_scale = max(0., delta) / predicted_charge
+    elif solar_only and delta > 0:
+        stock.charge(delta, None)
     discharge_scale = min(1., max(0., -delta) / predicted_discharge) if predicted_discharge > 0 else 0.
     for action, hours in elapsed:
         if action['mode'].startswith('laden'):

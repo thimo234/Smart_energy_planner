@@ -18,7 +18,15 @@ uitvoering alleen binnen de gemeten SOC-verandering. Tussentijdse onveranderde
 SOC bewaart begrensde uitvoeringsintervallen met historische tarieven en bronmix,
 ook bij herplanning en herstart. Een onbekende voorraadafname is geen bewezen
 verkoop tegen nul euro en creëert geen nieuwe fictieve margeschuld. Bestaande
-gerealiseerde schuld blijft behouden. De volledige suite slaagt met 457 tests.
+gerealiseerde schuld blijft behouden.
+
+De gebruiker bevestigt dat de accu uitsluitend op planneropdracht laadt.
+Bij uitsluitend geregistreerde zonne-laadopdrachten mag de bronherkenning daarom
+niet begrensd worden door de voorspelde zonneproductie: extra gemeten SOC-winst
+blijft zonnelading, ook bij een nulprognose. Bij gemengde net-/zonopdrachten of
+ontbrekend bronbewijs blijft een onverklaard overschot conservatief gewaardeerd.
+De extra broncorrectie behoudt bestaande netlots en margeschuld; zij herwaardeert
+geen historische voorraad. De volledige suite slaagt met 460 tests.
 
 Nog open: betrouwbare bronherkenning bij lading buiten het geregistreerde plan,
 herwaardering van de betreffende historische zonnelading en bewijs van herstel
