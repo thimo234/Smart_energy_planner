@@ -95,19 +95,19 @@ class ReserveStockTest(unittest.TestCase):
             discharging=True, reserve=60, max_charge=2.5, profit=.1,
             snapshot_exports=True, isolated_cycles=True, instance=instance)
 
-    def test_supplied_snapshot_admits_new_refill_and_preserves_unsold_stock(self):
+    def test_supplied_snapshot_admits_full_refill_and_releases_reserve(self):
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         _, slots, result = self.replay(now)
-        self.assertEqual(result.battery_strategy, 'accu_uit')
+        self.assertEqual(result.battery_strategy, 'ontladen')
         self.assertTrue(result.planned_grid_charge_windows)
         self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
-        # Reaching reserve is not a started fill. Re-evaluate the new cycle
-        # rather than borrowing the continuation waiver to release reserve.
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        # A physically complete profitable new refill, not a continuation
+        # waiver, releases reserve before it starts.
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
-        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
         from test_battery_partial_cycle_economics import imported_margin
         ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=0.)
         self.assertGreaterEqual(ledger['margin'], .1, ledger)
@@ -127,12 +127,60 @@ class ReserveStockTest(unittest.TestCase):
         self.assertGreaterEqual(ledger['value']-ledger['sold']*ledger['average_cost'],
                                 ledger['sold']*.10)
 
-    def test_feedback_and_restart_keep_refill_after_releasing_reserve(self):
+    def test_fixed_cadence_feedback_releases_completed_fill(self):
+        self._assert_fixed_cadence_feedback()
+
+    def test_fixed_cadence_restart_during_fill_reconciles_completion(self):
+        self._assert_fixed_cadence_feedback(restart=True)
+
+    def _assert_fixed_cadence_feedback(self, restart=False):
+        c = coordinator()
+        c._charge_session_started, c._discharge_session_started = False, True
+        now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
+        energy, peak = 6., 6.
+        for index in range(52):
+            _, slots, result = self.replay(now, energy, c)
+            if index == 41:
+                self.assertFalse(c._charge_session_started)
+                self.assertTrue(c._discharge_session_started)
+            if restart and index == 40:
+                self.assertTrue(c._charge_session_started)
+                c.hass = SimpleNamespace(data={})
+                c.config_entry.entry_id = 'fixed-reserve-fill'
+                c._store_battery_cycle_state_snapshot(now)
+                restored = coordinator()
+                restored.hass, restored.config_entry = c.hass, c.config_entry
+                with patch.object(c._restore_recent_battery_cycle_state.__globals__['dt_util'],
+                                  'now', return_value=now):
+                    restored._restore_recent_battery_cycle_state()
+                self.assertTrue(restored._charge_session_started)
+                self.assertEqual(c._battery_margin_state, restored._battery_margin_state)
+                c = restored
+                del c.hass
+            until = now + timedelta(minutes=15)
+            commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
+                        for w in result.planned_battery_mode_windows
+                        if datetime.fromisoformat(w['start']) < until]
+            trace = energy_trace(now, slots, commands, initial=energy, max_charge=2.5)
+            self.assertTrue(trace)
+            self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+            self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
+            peak = max(peak, max(e for _, e, _ in trace))
+            energy = trace[-1][1]
+            now = until
+        self.assertAlmostEqual(peak, 10., delta=.005)
+        self.assertFalse(c._charge_session_started, (now, energy, result.battery_strategy))
+        self.assertTrue(c._discharge_session_started)
+        self.assertTrue(result.battery_strategy.startswith('ontladen'))
+        self.assertLess(energy, 9.763553326620002)  # Continued measured discharge, no topup loop.
+
+    def test_boundary_aligned_feedback_and_restart_keep_refill_after_releasing_reserve(self):
         c = coordinator()
         c._charge_session_started, c._discharge_session_started = False, True
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         energy, minimum, peak, saw_grid = 6., 6., 6., False
-        for index in range(48):
+        # Releasing another four kWh of reserve needs a longer real refill.
+        for index in range(52):
             _, slots, result = self.replay(now, energy, c)
             if index == 12:
                 c.hass = SimpleNamespace(data={})
@@ -147,7 +195,10 @@ class ReserveStockTest(unittest.TestCase):
                 del c.hass
                 _, slots, again = self.replay(now, energy, c)
                 self.assertEqual(result.planned_battery_mode_windows, again.planned_battery_mode_windows)
-            until = now + timedelta(minutes=15)
+            until = min([now + timedelta(minutes=15)] + [
+                datetime.fromisoformat(w['end'])
+                for w in result.planned_battery_mode_windows
+                if datetime.fromisoformat(w['start']) <= now < datetime.fromisoformat(w['end'])])
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                         for w in result.planned_battery_mode_windows
                         if datetime.fromisoformat(w['start']) < until]
@@ -157,10 +208,11 @@ class ReserveStockTest(unittest.TestCase):
             self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
             saw_grid |= any(w['mode'] == 'laden_van_net' for w in commands)
             energy = trace[-1][1]
-            minimum, peak = min(minimum, energy), max(peak, energy)
+            minimum = min(minimum, min(e for _, e, _ in trace))
+            peak = max(peak, max(e for _, e, _ in trace))
             now = until
         self.assertTrue(saw_grid)
-        self.assertGreaterEqual(minimum, 5.995)
+        self.assertAlmostEqual(minimum, 2., delta=.005)
         # Only a genuinely started fill gets continuation treatment. This
         # admitted refill now completes to maximum, then releases discharge.
         self.assertAlmostEqual(peak, 10., delta=.005)

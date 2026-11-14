@@ -66,12 +66,12 @@ class PartialCyclePolicyTest(unittest.TestCase):
         self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 8.)
         from bound_cycle_assertions import assert_bound_plan
         extrema, final = assert_bound_plan(
-            self, self.now, slots, modes, initial=2., floor=6., max_charge=2.5)
+            self, self.now, slots, modes, initial=2., floor=2., max_charge=2.5)
         self.assertAlmostEqual(max(extrema), 10., delta=.005)
-        self.assertAlmostEqual(final, 6., delta=.005)
+        self.assertAlmostEqual(final, 2., delta=.005)
         from test_battery_partial_cycle_economics import imported_margin
-        ledger = imported_margin(slots, modes, initial_usable=0., reserve_usable=4.)
-        self.assertAlmostEqual(ledger['sold'], 4., delta=.005)
+        ledger = imported_margin(slots, modes, initial_usable=0., reserve_usable=0.)
+        self.assertAlmostEqual(ledger['sold'], 8., delta=.005)
         self.assertGreaterEqual(ledger['margin'], .1)
 
     def test_partial_grid_still_requires_minimum_profit(self):

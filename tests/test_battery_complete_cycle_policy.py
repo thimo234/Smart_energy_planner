@@ -199,7 +199,7 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
-    def test_initial_below_reserve_holds_energy_until_partial_refill(self):
+    def test_initial_below_reserve_can_deplete_before_later_full_refill(self):
         self.c._discharge_session_started = True
         slots = self.slots(count=14, home=0.)
         slots[0].update(import_price=.60, demand_kwh=.13, net_solar_kwh=-.13)
@@ -208,10 +208,9 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         windows = self.build(slots, 3.5, [self.charge(2, 4, 5.), self.charge(8, 12, 8.)])
         charges = [w for w in windows if w['mode'].startswith('laden_')]
         self.assertTrue(charges)
-        self.assertEqual(datetime.fromisoformat(charges[0]['start']), self.now+timedelta(hours=2))
+        self.assertEqual(datetime.fromisoformat(charges[0]['start']), self.now+timedelta(hours=3))
         trace = energy_trace(self.now, slots, windows, initial=5.5, max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 5.5, delta=.005)
-        self.assertGreaterEqual(min(e for _, e, mode in trace if mode.startswith('ontladen')), 5.995)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
 
     def test_below_reserve_without_any_profitable_outlet_can_refill(self):

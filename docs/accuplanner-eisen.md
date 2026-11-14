@@ -63,6 +63,18 @@ laadfase behoudt haar veilige richting tot vol; een toekomstige opdracht alleen 
 geen waargenomen uitvoering. Historische kosten, echte verliezen en broninformatie
 blijven bewaard en worden niet gereset om ontladen mogelijk te maken.
 
+De opgeslagen hogere reserve is een terugvalgrens, geen onveranderlijke keuze.
+Bij een aantoonbaar haalbaar en rendabel **volledig nieuw laadblok** later in de
+horizon (ook morgen) mag een lopende gedeeltelijke ontlading alsnog tot de normale
+minimum-SOC gaan, vóór dat laadblok. De resterende voorraad gaat naar de duurste
+bekende uitvoerbare uren, onafhankelijk van historische kosten of margeschuld.
+Zonder zo'n laadblok blijft de ingestelde reserve gelden; een gedeeltelijke,
+onrendabele of fysiek te kleine laadkans is onvoldoende. Een begonnen laadfase
+blijft beschermd tot vol. De minimumwinst op nieuw laden, fysieke grenzen,
+bronadministratie en bekende-tarief-/exporttoestemmingen blijven ongewijzigd.
+Dit vervangt hieronder ook de historische onveranderlijkheid van een gekozen
+reserve en de migratieregel die een gedeeltelijk begonnen ontlading vastzette.
+
 De keuze tussen een rendabele volledige cyclus en de hogere reserve blijft bestaan;
 onderstaande historische winstbescherming voor bestaande energie boven reserve is
 met dit besluit vervangen. De fysieke grenzen en nieuwe-laadtoets blijven gelden.

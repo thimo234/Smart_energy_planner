@@ -48,7 +48,7 @@ class FullProfitReserveTest(unittest.TestCase):
             average_price=.30, average_export_price=.18, max_charge_kw=2,
             max_discharge_kw=3, no_charge_reserve_kwh=4, battery_min_profit=.10)
         trace = energy_trace(now, slots, windows, initial=8, max_charge=2)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
 
     def replay(self, now, soc, instance=None, reserve=60, profit=.10):

@@ -67,15 +67,15 @@ class November14LiveReplayTest(unittest.TestCase):
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in
             self.a['planned_battery_mode_windows'] + self.a['estimated_battery_mode_windows']))
 
-    def test_fresh_cost_state_does_discharge_and_stops_at_sixty_percent(self):
+    def test_fresh_cost_state_upgrades_reserve_for_profitable_refill(self):
         result = self.replay()
-        self.assertEqual(result.battery_strategy, 'ontladen')
+        self.assertEqual(result.battery_strategy, 'ontladen_naar_net')
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(self.now, self.slots, windows, initial=8.8, max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
         peak = datetime.fromisoformat('2026-11-14T18:00:00+01:00')
-        self.assertTrue(any(w['mode'] == 'ontladen' and datetime.fromisoformat(w['start']) <= peak
+        self.assertTrue(any(w['mode'].startswith('ontladen') and datetime.fromisoformat(w['start']) <= peak
                             < datetime.fromisoformat(w['end']) for w in windows))
 
     def test_unchanged_measurement_replay_is_idempotent_and_restart_preserves_bound(self):
@@ -94,7 +94,7 @@ class November14LiveReplayTest(unittest.TestCase):
             restarted._restore_recent_battery_cycle_state()
         self.c = restarted
         restored = self.replay()
-        self.assertEqual(self.c._battery_cycle_discharge_floor_kwh, 4.)
+        self.assertEqual(self.c._battery_cycle_discharge_floor_kwh, 0.)
         self.assertTrue(self.c._discharge_session_started)
         self.assertFalse(self.c._charge_session_started)
         self.assertEqual(first.planned_battery_mode_windows, restored.planned_battery_mode_windows)

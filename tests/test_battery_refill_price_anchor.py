@@ -34,7 +34,12 @@ class RefillPriceAnchorTest(unittest.TestCase):
         energy = 10.
         for _ in range(12):
             _, slots, result = self.replay(now.isoformat(), energy*10, c)
-            self.assertEqual(result.next_charge_window_start, '2026-09-28T11:30:00+02:00')
+            # Releasing fallback stock can admit an earlier profitable refill.
+            self.assertIsNotNone(result.next_charge_window_start)
+            self.assertGreater(datetime.fromisoformat(result.next_charge_window_start), now)
+            full_trace = energy_trace(now, slots, result.planned_battery_mode_windows,
+                                      initial=energy, max_charge=2.5)
+            self.assertAlmostEqual(max(e for _, e, _ in full_trace), 10., delta=.005)
             self.assertFalse(result.battery_no_charge_reserve_active)
             until = now + timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}

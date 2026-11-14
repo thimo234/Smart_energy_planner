@@ -28,32 +28,32 @@ class UnavoidableRemainderTest(unittest.TestCase):
         now, slots, result = replay(instance=c)
         # A future useful refill is not an executing partial fill yet.
         self.assertFalse(c._charge_session_started)
-        self.assertFalse(c._discharge_session_started)
+        self.assertTrue(c._discharge_session_started)
         self.assertEqual(c._battery_grid_charge_price, .30)
         charge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_')]
         self.assertTrue(charge)
         self.assertEqual(charge[0]['start'], '2026-10-02T11:45:00+02:00')
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=2.6, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 6, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
         self.assertGreater(max(e for _, e, _ in trace), 6.)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
-        # Once the refill reaches full, sunk-cost export is permitted.
+        # The profitable full refill releases the remainder before charging.
         for w in result.planned_battery_mode_windows:
             if w['mode'] == 'ontladen_naar_net':
-                self.assertGreaterEqual(w['start'], charge[-1]['end'])
+                self.assertLessEqual(w['end'], charge[0]['start'])
 
-    def test_profitable_export_cannot_spend_initial_energy_below_reserve(self):
+    def test_profitable_full_refill_releases_initial_energy_below_reserve(self):
         now, slots, result = replay(instance=instance_with_cost(.20))
         windows = result.planned_battery_mode_windows
         charge_start = result.next_charge_window_start
         self.assertIsNotNone(charge_start)
         trace = energy_trace(now, slots, [w for w in windows if w['end'] <= charge_start],
                              initial=2.6, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 2.6, delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
         for w in windows:
             if w['mode'] == 'ontladen_naar_net':
-                self.assertGreaterEqual(w['start'], charge_start)
+                self.assertLessEqual(w['end'], charge_start)
         self.assertGreaterEqual(min(e for _, e, _ in energy_trace(
             now, slots, windows, initial=2.6, max_charge=2.5)), 2-.005)
 

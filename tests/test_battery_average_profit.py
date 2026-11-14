@@ -38,7 +38,7 @@ class AverageProfitTest(unittest.TestCase):
         self.assertFalse(self.evaluate(prices=(.40,), demand=(1.,), export=.40)['profitable'])
         self.assertFalse(self.evaluate(prices=(.40,), demand=(0.,), export=.24)['profitable'])
 
-    def test_supplied_snapshot_reaches_full_and_retains_next_day_reserve(self):
+    def test_supplied_snapshot_reaches_full_and_releases_reserve_for_refill(self):
         now, slots, result = replay_full_plan('2026_10_10_short_cycles',
             '2026-10-10T09:15:10.729241+02:00', soc=20, reserve=60,
             profit=.10, max_charge=2.5, snapshot_exports=True, isolated_cycles=True)
@@ -48,7 +48,7 @@ class AverageProfitTest(unittest.TestCase):
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.01)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertGreaterEqual(trace[-1][1], 6.-.01)
+        self.assertGreaterEqual(trace[-1][1], 2.-.01)
         imported = cost = avoided = 0.
         for window in windows:
             for slot in slots:
@@ -61,7 +61,7 @@ class AverageProfitTest(unittest.TestCase):
                     cost += amount*slot['import_price']
                 elif window['mode'] == 'ontladen':
                     avoided += min(3., max(0., -net_kw))*hours*slot['import_price']
-        # Even with stock retained at 60% valued at zero, this emitted plan
+        # After the profitable refill releases reserve, this emitted plan
         # earns the configured mean margin over the complete grid purchase.
         self.assertGreater(imported, 4.)
         self.assertGreaterEqual(avoided-cost, imported*.10)

@@ -31,7 +31,8 @@ class DischargePolicyTest(unittest.TestCase):
         windows = [PlannerWindow(self.now+timedelta(hours=i), self.now+timedelta(hours=i+1), p, True)
                    for i, p in enumerate(prices)]
         exports = [PlannerWindow(w.start, w.end, w.price-.12, True) for w in windows]
-        sun = [SolarWindow(w.start, w.end, 3.5 if solar and i < 4 else 0., None, None)
+        sun = [SolarWindow(w.start, w.end,
+                           solar[i] if isinstance(solar, list) else 3.5 if solar and i < 4 else 0., None, None)
                for i, w in enumerate(windows)]
         demand = [dict(start=w.start.isoformat(), end=w.end.isoformat(), estimated_kwh=demand_kwh) for w in windows]
         c.config_entry = SimpleNamespace(entry_id='battery', data=dict(battery_enabled=True, battery_capacity_kwh=10,
@@ -67,6 +68,72 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertGreaterEqual(datetime.fromisoformat(discharge[0]['start']), self.now+timedelta(hours=4))
         self.assertEqual(c._battery_margin_state['lots'], [[8., .90]])
         self.assertEqual(c._battery_margin_state['credit'], -3.)
+
+    def test_partial_reserve_upgrades_before_profitable_tomorrow_refill(self):
+        prices = [.20]*4 + [.60]*8 + [.05]*4 + [.60]*8
+        c, result, slots = self.build(soc=80, prices=prices)
+        refill = min(datetime.fromisoformat(w['start']) for w in result.planned_grid_charge_windows)
+        trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=8, max_charge=2.5)
+        before = [e for at, e, _ in trace if datetime.fromisoformat(at) <= refill]
+        self.assertAlmostEqual(min(before), 2., delta=.005)
+        self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+        self.assertEqual(c._battery_margin_state['credit'], -3.)
+        self.assertEqual(c._battery_margin_state['lots'], [[6., .90]])
+
+    def test_refill_upgrade_rejects_missing_losing_and_insufficient_sources(self):
+        for prices in ([.20]*4+[.27]*8, [.60]*12+[.55]*4+[.60]*8,
+                       [.60]*12+[.05]+[.60]*8):
+            with self.subTest(prices=prices):
+                c, result, slots = self.build(soc=80, prices=prices)
+                trace = energy_trace(self.now, slots, result.planned_battery_mode_windows,
+                                     initial=8, max_charge=2.5)
+                self.assertEqual(c._battery_cycle_discharge_floor_kwh, 4.)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+
+    def test_profitable_tomorrow_solar_refill_releases_saved_reserve(self):
+        prices = [.60]*12+[.20]*4+[.60]*8
+        solar = [0.]*12+[3.5]*4+[0.]*8
+        c, result, slots = self.build(soc=80, prices=prices, solar=solar)
+        self.assertTrue(result.planned_solar_charge_windows)
+        trace = energy_trace(self.now, slots, result.planned_battery_mode_windows,
+                             initial=8, max_charge=2.5)
+        self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        self.assertGreaterEqual(max(e for _, e, _ in trace), 9.995)
+
+    def test_upgrade_preserves_unfinished_fill_protection(self):
+        c = self.instance()
+        c._charge_session_started = True
+        c._discharge_session_started = False
+        c, result, slots = self.build(c=c, soc=80,
+            prices=[.60]*12+[.05]*4+[.60]*8)
+        refill = min(datetime.fromisoformat(w['start']) for w in result.planned_grid_charge_windows)
+        trace = energy_trace(self.now, slots, result.planned_battery_mode_windows,
+                             initial=8, max_charge=2.5)
+        self.assertTrue(all(e >= 7.995 for at, e, _ in trace
+                            if datetime.fromisoformat(at) <= refill))
+
+    def test_upgrade_replans_and_json_restart_preserve_accounting(self):
+        prices = [.60]*12+[.05]*4+[.60]*8
+        c, result, _ = self.build(soc=80, prices=prices)
+        state = json.loads(json.dumps(c._battery_margin_state))
+        expected = result.planned_battery_mode_windows
+        for _ in range(2):
+            c, result, _ = self.build(c=c, soc=80, prices=prices)
+            self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+            self.assertEqual(result.planned_battery_mode_windows, expected)
+            self.assertEqual(c._battery_margin_state['credit'], state['credit'])
+            self.assertEqual(c._battery_margin_state['lots'], state['lots'])
+        c.hass = SimpleNamespace(data={})
+        c._store_battery_cycle_state_snapshot(self.now)
+        restored = self.instance()
+        restored.config_entry = c.config_entry
+        restored.hass = SimpleNamespace(data=json.loads(json.dumps(c.hass.data)))
+        ns = restored._restore_recent_battery_cycle_state.__globals__
+        with patch.object(ns['dt_util'], 'now', return_value=self.now):
+            restored._restore_recent_battery_cycle_state()
+        _, result, _ = self.build(c=restored, soc=80, prices=prices)
+        self.assertEqual(result.planned_battery_mode_windows, expected)
 
     def test_configured_non60_reserve(self):
         _, result, slots = self.build(reserve=70)

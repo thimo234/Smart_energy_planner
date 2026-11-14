@@ -43,7 +43,7 @@ class PreplannedRefillTest(unittest.TestCase):
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=9, max_charge=2.5)
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-                self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+                self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
                 self.assertGreaterEqual(trace[-1][1], 5.995)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
@@ -57,7 +57,7 @@ class PreplannedRefillTest(unittest.TestCase):
         trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                              initial=9, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
         self.assertGreaterEqual(trace[-1][1], 5.995)
         imported = cost = saved = 0.
         for window in result.planned_battery_mode_windows + result.estimated_battery_mode_windows:

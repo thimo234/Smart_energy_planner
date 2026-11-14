@@ -155,11 +155,18 @@ A started fill retains its direction until full; reaching the discharge boundary
 only makes a new fill eligible and never exempts it from profitability admission.
 Conversion losses and battery wear are not separately modeled.
 
-A selected solar or grid charge window releases the extra no-charge reserve.
-Unselected raw solar surplus does not. There is no separate reserve for grid-only
-cycles. After the last selected charging opportunity, the extra floor applies
-again. It prevents further discharge;
-it does not force charging if the battery is already below that floor.
+A saved higher reserve is a fallback, not an immutable discharge boundary.
+If a realizable, profitable **full new refill** is selected later (including
+tomorrow), the planner can upgrade a partial discharge to the normal minimum
+before that refill. Existing stock is ranked at the highest remaining known
+home/export opportunities without historical-cost or debt gating. A partial,
+unprofitable or physically insufficient refill does not release the reserve;
+raw unselected solar surplus does not count. A started fill still must reach
+its full target before downstream discharge. The normal minimum, maximum,
+known-tariff/export permissions and minimum-profit admission for new energy
+remain in force; accounting lots and realized losses are preserved. Existing
+profitable complete-cycle permissions are unchanged; without a qualifying new
+refill, a saved fallback is not upgraded.
 
 Battery options include **Minimum battery state of charge without a charging
 opportunity (%)**. This additional reserve applies when the remaining planning

@@ -142,10 +142,13 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         solar = result.planned_solar_charge_windows
         self.assertGreaterEqual(solar[0]["start"], "2026-09-25T11:45:00+02:00")
-        # Initial stock below the configured reserve is retained, not depleted
-        # to force an eight-kWh full-cycle refill.
-        self.assertLess(sum(w["charge_kwh"] for w in solar), 8.)
-        self.assertGreater(sum(w["charge_kwh"] for w in solar), 7.)
+        # The new full refill releases the saved reserve. A later small
+        # replenishment may add energy beyond the main eight-kWh refill.
+        self.assertGreaterEqual(sum(w["charge_kwh"] for w in solar), 8.)
+        trace = energy_trace(now, slots, result.planned_battery_mode_windows,
+                             initial=2.8, max_charge=2.5)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
+        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
         self.assertEqual(result.planned_grid_charge_windows, [])
         # All selected energy fits in slots <=22 ct; the earlier morning
         # surplus has a higher opportunity cost and must remain unselected.
@@ -227,6 +230,49 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertTrue(all(r.battery_strategy == "accu_uit" for _, r, _ in history))
         self.assertFalse(c._discharge_session_started)
         self.assertAlmostEqual(history[-1][2], 3., delta=.005)
+
+    def test_elapsed_fill_completion_requires_measurement_and_accepted_discharge(self):
+        import copy
+        now = datetime.fromisoformat('2026-10-26T04:15:00+01:00')
+        c = coordinator()
+        c.config_entry = SimpleNamespace(data={'battery_capacity_kwh': 10,
+            'battery_min_soc_percent': 20}, options={})
+        previous = dict(at=(now-timedelta(minutes=15)).isoformat(), energy=7.75,
+            reserve=0., lots=[[7.75, .1]], credit=-.25, actions=[
+                dict(start=(now-timedelta(minutes=15)).isoformat(),
+                     end=(now-timedelta(minutes=9)).isoformat(), mode='laden_van_net',
+                     solar_kw=0., grid_kw=2.5, power=0.),
+                dict(start=(now-timedelta(minutes=9)).isoformat(), end=now.isoformat(),
+                     mode='ontladen', solar_kw=0., grid_kw=0., power=1.)])
+        original = copy.deepcopy(previous)
+        # The accepted fill reached full, then used .15 kWh before sampling.
+        c._reconcile_elapsed_battery_phase(previous, now, 98.5)
+        self.assertFalse(c._charge_session_started)
+        self.assertTrue(c._discharge_session_started)
+        self.assertEqual(previous, original)  # No forecast lots or realized margin.
+        for soc in (95., 97., 99.5):
+            c._charge_session_started, c._discharge_session_started = True, False
+            c._reconcile_elapsed_battery_phase(previous, now, soc)
+            self.assertTrue(c._charge_session_started)
+            self.assertFalse(c._discharge_session_started)
+        # Matching a partial fill's endpoint is not proof of reaching maximum.
+        incomplete = copy.deepcopy(previous)
+        incomplete['energy'] = 7.5
+        c._charge_session_started, c._discharge_session_started = True, False
+        c._reconcile_elapsed_battery_phase(incomplete, now, 96.)
+        self.assertTrue(c._charge_session_started)
+        self.assertFalse(c._discharge_session_started)
+        # Future discharge alone must not release an incomplete fill.
+        future = copy.deepcopy(previous)
+        future['actions'][1]['start'] = now.isoformat()
+        future['actions'][1]['end'] = (now+timedelta(minutes=9)).isoformat()
+        c._reconcile_elapsed_battery_phase(future, now, 98.5)
+        self.assertTrue(c._charge_session_started)
+        # Nor may stationary SOC, even at the expected endpoint, prove execution.
+        stationary = copy.deepcopy(previous)
+        stationary['energy'] = 7.85
+        c._reconcile_elapsed_battery_phase(stationary, now, 98.5)
+        self.assertTrue(c._charge_session_started)
 
     def test_charge_start_between_refreshes_keeps_fill_direction(self):
         c = coordinator()
