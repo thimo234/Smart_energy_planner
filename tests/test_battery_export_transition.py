@@ -51,7 +51,9 @@ class ExportTransitionTest(unittest.TestCase):
                 exported = exports[0]
                 duration = (datetime.fromisoformat(exported["end"]) -
                             datetime.fromisoformat(exported["start"])).total_seconds()/3600
-                self.assertAlmostEqual(duration * (3-home_kw), .5, places=6)
+                # Home and export compete for the same stock: later export
+                # (.40) outranks earlier household demand (.30).
+                self.assertAlmostEqual(duration * (3-home_kw), .5+2*home_kw, places=6)
                 following = windows[windows.index(exported)+1]
                 self.assertEqual(following["mode"], "ontladen" if home_kw else "accu_uit")
                 self.assertEqual(following["start"], exported["end"])

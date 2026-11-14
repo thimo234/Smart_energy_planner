@@ -138,12 +138,11 @@ class TomorrowCycleTest(unittest.TestCase):
                     self.assertLess(tomorrow_peak, 9.995)
                 else:
                     self.assertAlmostEqual(tomorrow_peak, 10, delta=.005)
-                # Surplus export must use executable slots within eight hours
-                # before the next cycle, while still covering household demand.
+                # Sunk stock uses any remaining executable high-price slot,
+                # not the historical eight-hour profitable-export interval.
                 exports = [w for w in windows if w["mode"] == "ontladen_naar_net"]
                 self.assertTrue(exports)  # Profitable export completes the normal-minimum cycle.
                 for window in exports:
-                    gap = (datetime.fromisoformat(charge[0]["start"])
-                           - datetime.fromisoformat(window["start"])).total_seconds() / 3600
-                    self.assertGreater(gap, 0)
-                    self.assertLessEqual(gap, 8)
+                    self.assertGreaterEqual(datetime.fromisoformat(window["start"]), now)
+                    self.assertTrue(window['end'] <= charge[0]['start']
+                                    or window['start'] >= charge[-1]['end'])

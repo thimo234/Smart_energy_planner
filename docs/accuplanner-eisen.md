@@ -47,9 +47,37 @@ Dit verzoek omvat lokale software, tests en publicatie; geen live migratie,
 installatie of Home Assistant-herstart. Zie `docs/household-configuration-verification.md`
 voor de implementatiegrenzen en de werkelijk uitgevoerde controles.
 
-## Actueel beleid: vaste cyclusgrens vóór de cyclus kiezen
+## Actueel beleid: winsttoets op nieuw laden, geen historische ontlaadblokkade
 
-Deze nieuwste afspraak vervangt het hieronder bewaarde gedeeltelijke-cyclusbeleid.
+Nieuw expliciet gebruikersbesluit: bestaande energie wordt op de duurste resterende
+bekende uren ingezet, ongeacht historische laadkosten, negatief margesaldo of een
+actieve ontlaadcyclus. Zonder nieuw rendabel laadblok ontlaadt de planner tot de
+configureerbare hogere reserve (momenteel 60%), niet onmiddellijk op goedkope uren.
+Vergelijk vermeden netinkoop en toegestane teruglevering binnen één energiebudget;
+onbekende terugleverprijzen zijn geen toestemming voor export.
+
+Alleen nieuwe laadblokken moeten de ingestelde minimumwinst aantoonbaar halen.
+Bereiken van de reserve maakt een nieuwe laadfase mogelijk, maar bewijst niet dat
+laden al is begonnen of eerder financieel is toegelaten. Een daadwerkelijk begonnen
+laadfase behoudt haar veilige richting tot vol; een toekomstige opdracht alleen is
+geen waargenomen uitvoering. Historische kosten, echte verliezen en broninformatie
+blijven bewaard en worden niet gereset om ontladen mogelijk te maken.
+
+De keuze tussen een rendabele volledige cyclus en de hogere reserve blijft bestaan;
+onderstaande historische winstbescherming voor bestaande energie boven reserve is
+met dit besluit vervangen. De fysieke grenzen en nieuwe-laadtoets blijven gelden.
+
+Status: lokaal geïmplementeerd en getest met 473 geslaagde Python-tests en een
+frontendcontrole. Onafhankelijke review vond een nieuwe-laadbypass na reserve-
+voltooiing; die is met falende/passerende regressies gerepareerd. Publicatie volgt
+binnen de goedgekeurde scope; installatie en live venstercontrole zijn niet verricht.
+De huidige planner modelleert tariefmarges; omzettingsverlies en slijtage worden
+nog niet afzonderlijk gemodelleerd, dus dit is geen bewezen nettowinst na die kosten.
+
+## Historisch beleid: vaste cyclusgrens vóór de cyclus kiezen
+
+Deze eerdere afspraak verving het hieronder bewaarde gedeeltelijke-cyclusbeleid;
+voor historische ontlaadwinstblokkades gaat het actuele besluit hierboven voor.
 Voorkeur: een **volledige, haalbare en rendabele cyclus** van het ingestelde
 maximum naar de normale minimum-SOC. Is dat economisch niet haalbaar, kies dan
 maximum → **ingestelde hogere reserve**; die reserve is niet hardcoded 50%.

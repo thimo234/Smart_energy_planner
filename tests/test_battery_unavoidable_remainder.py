@@ -26,7 +26,8 @@ class UnavoidableRemainderTest(unittest.TestCase):
     def test_solar_refill_survives_stranded_remainder(self):
         c = instance_with_cost()
         now, slots, result = replay(instance=c)
-        self.assertTrue(c._charge_session_started)  # Legacy state below selected reserve starts a refill.
+        # A future useful refill is not an executing partial fill yet.
+        self.assertFalse(c._charge_session_started)
         self.assertFalse(c._discharge_session_started)
         self.assertEqual(c._battery_grid_charge_price, .30)
         charge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_')]
@@ -37,12 +38,14 @@ class UnavoidableRemainderTest(unittest.TestCase):
         self.assertGreater(max(e for _, e, _ in trace), 6.)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
-        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in result.planned_battery_mode_windows))
+        # Once the refill reaches full, sunk-cost export is permitted.
+        for w in result.planned_battery_mode_windows:
+            if w['mode'] == 'ontladen_naar_net':
+                self.assertGreaterEqual(w['start'], charge[-1]['end'])
 
     def test_profitable_export_cannot_spend_initial_energy_below_reserve(self):
         now, slots, result = replay(instance=instance_with_cost(.20))
         windows = result.planned_battery_mode_windows
-        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         charge_start = result.next_charge_window_start
         self.assertIsNotNone(charge_start)
         trace = energy_trace(now, slots, [w for w in windows if w['end'] <= charge_start],
@@ -50,9 +53,9 @@ class UnavoidableRemainderTest(unittest.TestCase):
         self.assertAlmostEqual(trace[-1][1], 2.6, delta=.005)
         for w in windows:
             if w['mode'] == 'ontladen_naar_net':
-                for s in slots:
-                    if s['start'] < datetime.fromisoformat(w['end']) and s['end'] > datetime.fromisoformat(w['start']):
-                        self.assertGreaterEqual(s['import_price']-.12+.000001, .20+.08)
+                self.assertGreaterEqual(w['start'], charge_start)
+        self.assertGreaterEqual(min(e for _, e, _ in energy_trace(
+            now, slots, windows, initial=2.6, max_charge=2.5)), 2-.005)
 
     def test_known_profit_or_home_demand_prevents_remainder_exception(self):
         c = instance_with_cost()

@@ -95,7 +95,7 @@ class ReserveStockTest(unittest.TestCase):
             discharging=True, reserve=60, max_charge=2.5, profit=.1,
             snapshot_exports=True, isolated_cycles=True, instance=instance)
 
-    def test_supplied_snapshot_prefers_complete_full_cycle_and_preserves_unsold_stock(self):
+    def test_supplied_snapshot_admits_new_refill_and_preserves_unsold_stock(self):
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         _, slots, result = self.replay(now)
         self.assertEqual(result.battery_strategy, 'accu_uit')
@@ -103,7 +103,9 @@ class ReserveStockTest(unittest.TestCase):
         self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(now, slots, windows, initial=6., max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        # Reaching reserve is not a started fill. Re-evaluate the new cycle
+        # rather than borrowing the continuation waiver to release reserve.
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         from test_battery_partial_cycle_economics import imported_margin
@@ -117,10 +119,11 @@ class ReserveStockTest(unittest.TestCase):
                                          initial_usable=4., reserve_usable=0.)
                 if prefix['sold'] > 1e-6:
                     self.assertGreaterEqual(prefix['margin'], .1 - 1e-9, prefix)
-        # The first fill has a feasible full-depth outlet. The later outlook
-        # retains four unsold kWh; retained imports stay stock, not sale revenue.
+        # The outlook retains four physical kWh, including solar. Retained
+        # imports remain stock, not fictitious sale revenue.
         self.assertGreater(ledger['imported'], 4.)
-        self.assertAlmostEqual(ledger['imported'] - ledger['sold'], 4., delta=.005)
+        self.assertGreater(ledger['imported'] - ledger['sold'], 0.)
+        self.assertLessEqual(ledger['imported'] - ledger['sold'], 4.005)
         self.assertGreaterEqual(ledger['value']-ledger['sold']*ledger['average_cost'],
                                 ledger['sold']*.10)
 
@@ -158,11 +161,11 @@ class ReserveStockTest(unittest.TestCase):
             now = until
         self.assertTrue(saw_grid)
         self.assertGreaterEqual(minimum, 5.995)
-        # Do not buy an unprofitable last fraction simply to meet a historical
-        # deadline: remain charging and complete with later useful solar.
-        self.assertGreater(peak, 6.)
-        self.assertTrue(c._charge_session_started)
-        self.assertFalse(c._discharge_session_started)
+        # Only a genuinely started fill gets continuation treatment. This
+        # admitted refill now completes to maximum, then releases discharge.
+        self.assertAlmostEqual(peak, 10., delta=.005)
+        self.assertFalse(c._charge_session_started)
+        self.assertTrue(c._discharge_session_started)
         future = energy_trace(now, slots,
             [{**w, 'start': max(now, datetime.fromisoformat(w['start'])).isoformat()}
              for w in result.planned_battery_mode_windows

@@ -228,6 +228,26 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertFalse(c._discharge_session_started)
         self.assertAlmostEqual(history[-1][2], 3., delta=.005)
 
+    def test_charge_start_between_refreshes_keeps_fill_direction(self):
+        c = coordinator()
+        c._charge_session_started = False
+        c._discharge_session_started = True
+        c._battery_cycle_discharge_floor_kwh = 4.
+        _, _, first = replay_full_plan(
+            "2026_09_23", "2026-09-24T16:40:04.999681+02:00",
+            soc=62.5, reserve=60, max_charge=2.5, instance=c, isolated_cycles=True,
+        )
+        self.assertFalse(c._charge_session_started)  # Future commands alone do not advance it.
+        self.assertTrue(any(w['mode'].startswith('laden_')
+                            and w['start'] < '2026-09-24T16:55:04.999681+02:00'
+                            for w in first.planned_battery_mode_windows))
+        _, _, result = replay_full_plan(
+            "2026_09_23", "2026-09-24T16:55:04.999681+02:00",
+            soc=62.18605176514447, reserve=60, max_charge=2.5, instance=c, isolated_cycles=True,
+        )
+        self.assertTrue(c._charge_session_started)
+        self.assertFalse(result.battery_strategy.startswith('ontladen'))
+
     def test_complete_charge_keeps_direction_until_boundary_across_updates(self):
         c, history = self.run_feedback_updates(
             "2026_09_23", "2026-09-23T13:55:04.999681+02:00", 81, 112, minutes=15,

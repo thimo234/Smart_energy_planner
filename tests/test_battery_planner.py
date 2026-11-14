@@ -1037,9 +1037,9 @@ class BatteryPlannerTest(unittest.TestCase):
             charge_safety_margin=0.0,
         )
 
-        # A useful partial fill is admitted even when 8 kWh cannot fit.
-        self.assertTrue(solar_windows)
-        self.assertLess(sum(w['charge_kwh'] for w in solar_windows), 8.)
+        # No profitable outlet follows this solar block. Solar is new charging
+        # too, not a free admission exception.
+        self.assertFalse(solar_windows)
         self.assertEqual(grid_windows, [])
 
     def test_discharge_window_turns_off_cheap_hours_when_energy_is_short(self):
@@ -1234,7 +1234,7 @@ class BatteryPlannerTest(unittest.TestCase):
         )
 
         today_end = day + timedelta(days=1)
-        self.assertTrue(solar_windows)
+        self.assertFalse(solar_windows)  # no profitable post-solar turnover
         self.assertFalse(any(datetime.fromisoformat(window["start"]) < today_end for window in grid_windows))
 
     def test_equal_effective_solar_prices_use_contiguous_early_slots(self):
@@ -1563,7 +1563,7 @@ class BatteryPlannerTest(unittest.TestCase):
         now = datetime(2026, 6, 26, 7, 30)
         slots = []
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        for hour in range(8, 18):
+        for hour in range(8, 24):
             start = day + timedelta(hours=hour)
             slots.append(
                 {
@@ -1572,9 +1572,9 @@ class BatteryPlannerTest(unittest.TestCase):
                     "import_price": 0.40 if hour >= 18 else 0.25,
                     "export_price": 0.05,
                     "hours": 1.0,
-                    "net_solar_kwh": 3.0,
-                    "demand_kwh": 1.0,
-                    "solar_kwh": 4.0,
+                    "net_solar_kwh": -2.0 if hour >= 18 else 3.0,
+                    "demand_kwh": 2.0 if hour >= 18 else 1.0,
+                    "solar_kwh": 0.0 if hour >= 18 else 4.0,
                 }
             )
 

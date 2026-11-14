@@ -1,4 +1,4 @@
-"""Profit protection above reserve; authorized full-cycle losses below it."""
+"""Sunk stock above reserve; existing authorized full-cycle completion below it."""
 import unittest
 from datetime import datetime
 import test_battery_bound_cycle_policy as helpers
@@ -17,11 +17,13 @@ class ReserveLossCompletionTest(unittest.TestCase):
         self.c._battery_margin_state = dict(at=self.now.isoformat(), energy=energy,
             reserve=0., lots=[[energy, .80]], credit=0., actions=[])
 
-    def test_loss_above_reserve_is_rejected(self):
+    def test_loss_above_reserve_reaches_selected_reserve(self):
         self.prepare(floor=4.)
         self.c._cycle_export_planning = True
-        windows = self.build(self.slots(count=8, home=1., price=.10), 8.)
-        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
+        slots = self.slots(count=8, home=1., price=.10)
+        windows = self.build(slots, 8.)
+        trace = energy_trace(self.now, slots, windows, initial=10.)
+        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
 
     def test_committed_full_cycle_rejects_loss_above_reserve_too(self):
         self.prepare()
@@ -70,13 +72,14 @@ class ReserveLossCompletionTest(unittest.TestCase):
         self.assertEqual(windows[0]['mode'], 'ontladen')
         self.assertEqual(windows[0]['end'], slots[1]['start'].replace(minute=30).isoformat())
 
-    def test_below_reserve_future_profit_cannot_fund_above_reserve_loss(self):
+    def test_sunk_stock_loss_does_not_require_future_profit_credit(self):
         self.prepare(energy=5.)
         self.c._battery_grid_charge_price = None
         slots = self.slots(count=5, home=1., price=2.)
         slots[0]['import_price'] = .10
         windows = self.build(slots, 5.)
-        self.assertEqual(windows[0]['mode'], 'accu_uit')
+        self.assertEqual(windows[0]['mode'], 'ontladen')
+        self.assertEqual(self.c._battery_margin_state['credit'], 0.)
 
     def test_incomplete_charge_still_cannot_discharge_at_loss(self):
         self.prepare(energy=3.)
@@ -108,8 +111,11 @@ class ReserveLossCompletionTest(unittest.TestCase):
         windows = self.build(self.slots(count=8, home=1., price=.10), 3.5)
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
-    def test_known_historical_cost_without_margin_state_is_not_free_stock(self):
+    def test_known_historical_cost_without_margin_state_does_not_block_fallback(self):
         self.prepare(floor=4.)
         self.c._battery_margin_state = None
         windows = self.build(self.slots(count=8, home=1., price=.10), 8.)
-        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
+        self.assertTrue(any(w['mode'].startswith('ontladen') for w in windows))
+        self.assertEqual(self.c._battery_margin_state['lots'], [[8., .80]])
+        self.assertEqual(self.c._battery_margin_state['credit'], 0.)
+        self.assertEqual(self.c._battery_grid_charge_price, .80)

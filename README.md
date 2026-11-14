@@ -133,12 +133,10 @@ Positive effective costs require a known later tariff with the minimum margin;
 unknown later prices do not justify a profitable cycle. Equal-price slots nearest
 the cheapest block are preferred. Partially filled
 cycles carry their remaining capacity into the next cycle's calculation.
-Once discharging starts, both solar and grid refills wait until the safe minimum
-is reached (within 0.05 kWh tolerance). A cheaper opportunity can be skipped if
-the discharge cycle is still incomplete. Charging pauses across expensive gaps
-without reversing direction while another selected charging window remains that
-day. After the final profitable window, evening discharge may start even if weak
-sun prevented a full charge. The additional reserve and minimum profit still apply.
+Once discharging starts, solar and grid refills wait until the selected cycle
+boundary is reached. A cheaper opportunity can be skipped while discharge is
+incomplete. Charging may pause across gaps but does not reverse before the full
+target is reached. A simulated endpoint is not measured completion.
 
 **Solar forecast safety margin (%)** now reduces the solar energy used throughout
 the battery plan, instead of merely padding charging duration. The default is
@@ -148,12 +146,14 @@ can bring charging and evening discharge forward while keeping price and cycle
 constraints. They are forecast safeguards, not an instantaneous power controller;
 unexpected peaks can still require grid power between updates or at power limits.
 
-After grid charging, discharge and export also respect the minimum price
-difference. The highest grid purchase price is retained across refreshes and
-restarts until the usable battery is depleted. This deliberately conservative
-rule also protects mixed battery energy. Historical energy with no recorded
-purchase price cannot be checked retroactively. The margin is a tariff
-difference per modeled kWh; conversion losses and battery wear are not modeled.
+New charging must meet the configured minimum tariff margin against executable
+later demand or export. Existing stored energy is scheduled at the most valuable
+remaining known hours regardless of historical acquisition cost or realized margin
+debt. Without a profitable new charging block, discharge stops at the configured
+higher reserve. Historical cost records are retained, not reset to unlock discharge.
+A started fill retains its direction until full; reaching the discharge boundary
+only makes a new fill eligible and never exempts it from profitability admission.
+Conversion losses and battery wear are not separately modeled.
 
 A selected solar or grid charge window releases the extra no-charge reserve.
 Unselected raw solar surplus does not. There is no separate reserve for grid-only
