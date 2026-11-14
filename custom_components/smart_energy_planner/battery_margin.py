@@ -3,7 +3,13 @@
 Unknown/pre-existing and solar stock never subsidize grid-import profits.
 Only observed execution (not a future projection) is carried across replans.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
+
+
+# Quantized SOC may lag execution. Keep only recent attribution evidence, never
+# forecast debt: expiry affects attribution, not purchased lots or realized credit.
+_UNCONFIRMED_WINDOW = timedelta(hours=1)
+_MAX_UNCONFIRMED_ACTIONS = 360
 
 
 class MarginStock:
@@ -13,6 +19,7 @@ class MarginStock:
         self.lots = [lot[:] for lot in lots if lot[0] > 1e-9] if lots is not None else (
             [[energy-reserve, None]] if energy-reserve > 1e-9 else [])
         self.credit = credit
+        self.pending_actions = []
 
     def charge(self, amount, cost):
         held = min(amount, max(0., self.reserve-self.energy))
@@ -93,17 +100,48 @@ def observed_stock(previous, now, energy, reserve, minimum):
     if not previous or previous['at'] > now.isoformat() or previous['reserve'] < reserve:
         return MarginStock(energy, reserve)
     stock = MarginStock(previous['energy'], previous['reserve'], previous['lots'], previous['credit'])
+    at = datetime.fromisoformat(previous['at'])
+    evidence = []
+    # Previously clipped intervals retain their historical prices even when
+    # the coordinator replaces the future action plan on every refresh.
+    for action in previous.get('pending_actions', []):
+        start = max(now - _UNCONFIRMED_WINDOW, datetime.fromisoformat(action['start']))
+        end = min(at, datetime.fromisoformat(action['end']))
+        if end > start:
+            evidence.append({**action, 'start': start.isoformat(), 'end': end.isoformat()})
     for action in previous['actions']:
-        start = max(datetime.fromisoformat(previous['at']), datetime.fromisoformat(action['start']))
+        start = max(at, datetime.fromisoformat(action['start']))
         end = min(now, datetime.fromisoformat(action['end']))
-        hours = max(0., (end-start).total_seconds()/3600)
-        if not hours:
-            continue
+        if end > start and action['mode'].startswith(('laden', 'ontladen')):
+            evidence.append({**action, 'start': start.isoformat(), 'end': end.isoformat()})
+    elapsed = [(a, (datetime.fromisoformat(a['end']) - datetime.fromisoformat(a['start'])).total_seconds()/3600)
+               for a in evidence]
+    # Commands and demand forecasts are not energy meters. In particular, a
+    # stationary/quantized SOC must not repeatedly sell and rebuy the same
+    # stock, accumulating invented debt at every coordinator refresh. With
+    # SOC alone, only the net observed change is evidence of execution.
+    delta = energy - previous['energy']
+    if abs(delta) <= 1e-9:
+        delta = 0.
+        for action in evidence[-_MAX_UNCONFIRMED_ACTIONS:]:
+            start = max(now - _UNCONFIRMED_WINDOW, datetime.fromisoformat(action['start']))
+            if start < datetime.fromisoformat(action['end']):
+                stock.pending_actions.append({**action, 'start': start.isoformat()})
+    # A measured change consumes the evidence once, including any excess or
+    # opposite-direction forecast. Never carry forecast debt past confirmation.
+    predicted_charge = sum((a['solar_kw'] + a['grid_kw']) * h for a, h in elapsed
+                           if a['mode'].startswith('laden'))
+    predicted_discharge = sum(a['power'] * h for a, h in elapsed
+                              if a['mode'].startswith('ontladen'))
+    charge_scale = min(1., max(0., delta) / predicted_charge) if predicted_charge > 0 else 0.
+    discharge_scale = min(1., max(0., -delta) / predicted_discharge) if predicted_discharge > 0 else 0.
+    for action, hours in elapsed:
         if action['mode'].startswith('laden'):
-            stock.charge(action['solar_kw']*hours, None)
-            stock.charge(action['grid_kw']*hours, action['import_price'])
+            stock.charge(action['solar_kw'] * hours * charge_scale, None)
+            stock.charge(action['grid_kw'] * hours * charge_scale, action['import_price'])
         elif action['mode'].startswith('ontladen'):
-            stock.discharge(action['power']*hours, action['sale_price'], minimum)
+            stock.discharge(action['power'] * hours * discharge_scale,
+                            action['sale_price'], minimum)
     if stock.reserve > reserve:
         # Full-cycle accounting exposes stock previously hidden by the reserve.
         # Retain purchased FIFO lots and realized debt; a policy migration is
@@ -122,9 +160,11 @@ def observed_stock(previous, now, energy, reserve, minimum):
         if difference > 0:
             stock.charge(difference, max(costs) if costs else None)
         else:
-            # Unobserved consumption has no proven realized sale value.
+            # Remove unobserved consumption from FIFO stock, but do not invent
+            # a zero-price sale or realized debt without an executed command.
+            credit = stock.credit
             stock.discharge(-difference, 0., minimum)
-            stock.credit = min(0., stock.credit)
+            stock.credit = credit
     stock.energy = energy
     return stock
 

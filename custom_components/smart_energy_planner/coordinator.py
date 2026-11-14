@@ -3460,7 +3460,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                                  for quantity, cost in margin_stock.lots]
         observed_margin_state = dict(at=now.isoformat(), energy=initial_usable_energy_kwh,
             reserve=0.0, lots=[lot[:] for lot in margin_stock.lots],
-            credit=margin_stock.credit)
+            credit=margin_stock.credit,
+            pending_actions=[action.copy() for action in margin_stock.pending_actions])
         hourly_modes: list[dict[str, str | float]] = []
         current_mode = "accu_uit"
         last_charge_mode = "accu_uit"

@@ -5,6 +5,26 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Laadbron en bescherming tegen foutieve kostenadministratie
+
+De gebruiker bevestigt dat de betrokken lading uit zon kwam en dat het verschil
+met de netinkoopprijs daarbij EUR 0,12/kWh was. Waardeer bewezen zonnelading
+tegen de toepasselijke terugleverprijs; trek niet standaard EUR 0,12 van alle
+voorraad af. Een verkeerde bron- of uitvoeringsboeking mag de accu niet blijvend
+blokkeren. Behoud echte inkoopkosten en gerealiseerde verliezen.
+
+Geïmplementeerd en offline getest: waargenomen voorraadadministratie boekt
+uitvoering alleen binnen de gemeten SOC-verandering. Tussentijdse onveranderde
+SOC bewaart begrensde uitvoeringsintervallen met historische tarieven en bronmix,
+ook bij herplanning en herstart. Een onbekende voorraadafname is geen bewezen
+verkoop tegen nul euro en creëert geen nieuwe fictieve margeschuld. Bestaande
+gerealiseerde schuld blijft behouden. De volledige suite slaagt met 457 tests.
+
+Nog open: betrouwbare bronherkenning bij lading buiten het geregistreerde plan,
+herwaardering van de betreffende historische zonnelading en bewijs van herstel
+van het ontbrekende live ontlaadvenster. Deze correctie reconstrueert die historie
+niet en wist het bestaande saldo niet. Geen live installatie of herstart verricht.
+
 ## Hoofdconfiguratie met gedeelde bronnen
 
 Nieuw gebruikersverzoek: één hoofdconfiguratie voor prijs-, hoofdverbruik- en
