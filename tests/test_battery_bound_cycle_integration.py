@@ -54,6 +54,46 @@ class BoundCycleIntegrationTest(unittest.TestCase):
                                if w['mode'].startswith('ontladen'))
         self.assertGreaterEqual(first_discharge, NOW+timedelta(hours=4))
 
+    def test_grid_admission_rejects_stock_without_executable_discharge(self):
+        c = self.new(charging=True)
+        c._battery_cycle_discharge_floor_kwh = 0.
+        slots = scenario(charging=True)
+        for row in slots[4:]:
+            row.update(demand_kwh=0., net_solar_kwh=0.)
+        slots[4].update(demand_kwh=1., net_solar_kwh=-1.)
+        result = replay(c, slots, soc=20.)
+        self.assertFalse(result.planned_grid_charge_windows,
+            'a cheap partial fill without executable post-full sale is not profitable admission')
+
+    def test_negative_import_price_does_not_bypass_executable_profit(self):
+        c = self.new(charging=True)
+        slots = scenario(charging=True)
+        for item in slots[:4]:
+            item['import_price'] = -.01
+        for item in slots[4:]:
+            item.update(import_price=.01, demand_kwh=0., net_solar_kwh=0.)
+        result = replay(c, slots, soc=20.)
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        self.assertFalse(any(w['mode'] == 'laden_van_net'
+                             for w in result.planned_battery_mode_windows))
+
+    def test_new_grid_charge_requires_forecast_margin_before_import(self):
+        # A below-reserve loss waiver is not admission to buy first and wait
+        # indefinitely for the desired ten-cent spread to appear.
+        for floor in (0., 5.):
+            for outlet, accepted in ((.19, False), (.21, True)):
+                with self.subTest(floor=floor, outlet=outlet):
+                    c = self.new(charging=True)
+                    c._battery_cycle_discharge_floor_kwh = floor
+                    slots = scenario(charging=True)
+                    for row in slots[4:]:
+                        row['import_price'] = outlet
+                    result = replay(c, slots, soc=20.)
+                    self.assertEqual(bool(result.planned_grid_charge_windows), accepted)
+                    if not accepted:
+                        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+                            result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
+
     def test_near_full_live_measurement_keeps_charging_phase(self):
         c = self.new(charging=True)
         replay(c, scenario(charging=True), soc=99.7)

@@ -158,4 +158,14 @@ class ReserveStockTest(unittest.TestCase):
             now = until
         self.assertTrue(saw_grid)
         self.assertGreaterEqual(minimum, 5.995)
-        self.assertGreaterEqual(peak, 9.95)
+        # Do not buy an unprofitable last fraction simply to meet a historical
+        # deadline: remain charging and complete with later useful solar.
+        self.assertGreater(peak, 6.)
+        self.assertTrue(c._charge_session_started)
+        self.assertFalse(c._discharge_session_started)
+        future = energy_trace(now, slots,
+            [{**w, 'start': max(now, datetime.fromisoformat(w['start'])).isoformat()}
+             for w in result.planned_battery_mode_windows
+             if datetime.fromisoformat(w['end']) > now],
+            initial=energy, max_charge=2.5)
+        self.assertAlmostEqual(max(e for _, e, _ in future), 10., delta=.005)

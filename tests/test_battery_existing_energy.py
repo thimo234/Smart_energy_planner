@@ -14,7 +14,7 @@ class ExistingEnergyTest(unittest.TestCase):
         c._battery_grid_charge_price = cost
         return c
 
-    def test_home_consumption_completes_cycle_before_refill(self):
+    def test_loss_making_home_above_reserve_does_not_unlock_refill(self):
         now = datetime(2026, 9, 29, 10)
         slots = slots_at(now)
         for i, slot in enumerate(slots):
@@ -23,25 +23,20 @@ class ExistingEnergyTest(unittest.TestCase):
         window = dict(start=(now+timedelta(hours=3)).isoformat(),
                       end=(now+timedelta(hours=4)).isoformat(), charge_kwh=2., usable_hours=1.)
         windows, _ = modes(self.instance(.5), now, slots, 2., [], [window])
-        self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
-    def test_feedback_reserve_cycle_allows_loss_export_without_crossing_reserve(self):
+    def test_feedback_reserve_cycle_keeps_profit_checks_above_reserve(self):
         now, slots, result = replay_full_plan(
             '2026_09_29_blocked_cycle', '2026-09-29T09:02:57.501039+02:00',
             soc=75, instance=self.instance(), reserve=60, max_charge=2.5,
             tax_deduction=.11, isolated_cycles=True,
         )
         windows = result.planned_battery_mode_windows
-        self.assertEqual(result.battery_strategy, 'ontladen_naar_net')
-        # Loss-taking may finish the reserve cycle before a later refill.
-        self.assertIsNotNone(result.next_charge_window_start)
-        before_refill = [w for w in windows if datetime.fromisoformat(w['start'])
-                         < datetime.fromisoformat(result.next_charge_window_start)]
-        before_trace = energy_trace(now, slots, before_refill, initial=7.5, max_charge=2.5)
-        self.assertAlmostEqual(before_trace[-1][1], 6., delta=.005)
+        self.assertEqual(result.battery_strategy, 'ontladen')
+        self.assertIsNone(result.next_charge_window_start)
         self.assertTrue(result.battery_no_charge_reserve_active)
-        self.assertTrue(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=7.5, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)

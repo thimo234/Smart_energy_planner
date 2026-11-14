@@ -8,21 +8,24 @@ from test_battery_energy_accounting import coordinator, energy_trace, replay_ful
 class SolarPreviewTest(unittest.TestCase):
     def replay(self, timestamp, soc, instance=None):
         return replay_full_plan('2026_10_10_short_cycles', timestamp, soc=soc,
-            # At 10 ct this snapshot now passes the agreed average-margin
-            # test. Use 15 ct to keep exercising rejection and reserve safety.
+            # Use 15 ct to exercise rejection and reserve safety.
             reserve=60, profit=.15, max_charge=2.5, snapshot_exports=True,
             isolated_cycles=True, instance=instance)
 
-    def test_preview_admits_only_independently_profitable_partial_grid_supplement(self):
+    def test_preview_rejects_partial_grid_supplement_but_retains_solar(self):
         now, slots, result = self.replay('2026-10-10T09:15:10.729241+02:00', 20)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
-        self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
         from test_battery_partial_cycle_economics import imported_margin
         ledger = imported_margin(slots, windows, initial_usable=0., reserve_usable=4.)
-        self.assertEqual(ledger['sold'], 0., 'unfinished refill cannot sell imported stock')
+        self.assertEqual(ledger['imported'], 0.)
+        self.assertEqual(ledger['sold'], 0.)
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
+        self.assertLess(max(e for _, e, _ in trace), 10.-.005)
+        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows),
+                         'retained partial solar must not reverse before full')
         # Rejecting an uneconomic grid supplement must not reject free PV.
         self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in windows))
         self.assertGreater(trace[-1][1], 2.)

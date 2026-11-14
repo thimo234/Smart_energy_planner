@@ -339,22 +339,27 @@ class EnergyAccountingTest(unittest.TestCase):
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=8.1, max_charge=2.5)
         self.assertGreaterEqual(min(row[1] for row in trace), 6.0 - .005)
 
-    def test_latest_feedback_partial_refill_has_independent_grid_margin(self):
+    def test_latest_feedback_rejects_partial_grid_refill_and_finishes_existing_discharge(self):
         now, slots, result = replay_full_plan(
             "2026_09_18_evening", "2026-09-18T19:24:56.329382+02:00",
             soc=95, discharging=True, reserve=20, max_charge=2.5,
         )
         from test_battery_partial_cycle_economics import imported_margin
-        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertFalse(result.planned_grid_charge_windows)
         ledger = imported_margin(slots, result.planned_battery_mode_windows,
                                  initial_usable=7.5, reserve_usable=0.)
         self.assertIsNone(ledger['margin'], ledger)
-        self.assertEqual(ledger['sold'], 0., 'no partial-cycle sale of newly imported stock')
+        self.assertEqual(ledger['imported'], 0.)
+        self.assertEqual(ledger['sold'], 0.)
+        self.assertFalse(any(w['mode'] == 'laden_van_net'
+                             for w in result.planned_battery_mode_windows))
         self.assertEqual(result.battery_strategy, "ontladen")
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9.5, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.+.005)
-        self.assertGreater(trace[-1][1], 2., 'unsold partial refill remains stored at acquisition cost')
+        # Existing stock can finish its discharge; a profitable isolated
+        # purchase without a complete refill must not start the next cycle.
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
 
     def test_higher_configured_profit_rejects_latest_grid_cycle(self):
         _, _, result = replay_full_plan(

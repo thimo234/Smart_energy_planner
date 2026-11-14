@@ -53,17 +53,26 @@ class PartialCyclePolicyTest(unittest.TestCase):
             self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
     def test_cheaper_useful_grid_still_beats_more_expensive_solar(self):
-        slots = [slot(self.now, 0, .10, .05),
-                 slot(self.now, 1, .50, .30, solar=1.),
-                 slot(self.now, 2, .80, .05, demand=4.)]
+        # Four cheap hours can physically fill eight usable kWh; the old
+        # single 2.5-kWh slot could never authorize a new complete grid fill.
+        slots = [*[slot(self.now, i, .10, .05) for i in range(4)],
+                 slot(self.now, 4, .50, .30, solar=1.),
+                 *[slot(self.now, i, .80, .05, demand=2.) for i in range(5, 9)]]
         _, solar, grid, modes = self.plan(slots, initial=0.)
         self.assertTrue(grid)
         self.assertEqual(grid[0]['start'], self.now.isoformat())
         self.assertEqual(modes[0]['mode'], 'laden_van_net')
         self.assertEqual(solar, [])
-        trace = energy_trace(self.now, slots, modes, initial=2., max_charge=2.5)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 8.)
+        from bound_cycle_assertions import assert_bound_plan
+        extrema, final = assert_bound_plan(
+            self, self.now, slots, modes, initial=2., floor=6., max_charge=2.5)
+        self.assertAlmostEqual(max(extrema), 10., delta=.005)
+        self.assertAlmostEqual(final, 6., delta=.005)
+        from test_battery_partial_cycle_economics import imported_margin
+        ledger = imported_margin(slots, modes, initial_usable=0., reserve_usable=4.)
+        self.assertAlmostEqual(ledger['sold'], 4., delta=.005)
+        self.assertGreaterEqual(ledger['margin'], .1)
 
     def test_partial_grid_still_requires_minimum_profit(self):
         slots = [slot(self.now, 0, .50, .05),
@@ -74,14 +83,15 @@ class PartialCyclePolicyTest(unittest.TestCase):
                 self.assertEqual(grid, [])
                 self.assertFalse(any(w['mode'] == 'laden_van_net' for w in modes))
 
-    def test_profitable_partial_grid_fill_is_allowed_without_full_target(self):
+    def test_profitable_partial_grid_fill_is_rejected_without_full_target(self):
+        # Four kWh of room, but only one 2.5-kWh charge hour: a profitable
+        # isolated sale is not executable after an unfinished new refill.
         slots = [slot(self.now, 0, .1, .01), slot(self.now, 1, .5, .01, demand=1.)]
         _, _, grid, windows = self.plan(slots, initial=4.)
-        self.assertTrue(grid)
+        self.assertEqual(grid, [])
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
         trace = energy_trace(self.now, slots, windows, initial=6., max_charge=2.5)
-        self.assertGreater(max(e for _, e, _ in trace), 6.)
-        self.assertLess(max(e for _, e, _ in trace), 10.)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertTrue(all(abs(e - 6.) < .005 for _, e, _ in trace))
 
 
 if __name__ == '__main__':

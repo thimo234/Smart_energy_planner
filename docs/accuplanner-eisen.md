@@ -19,15 +19,25 @@ maximum → **ingestelde hogere reserve**; die reserve is niet hardcoded 50%.
   ook tussen losse laadvensters mag geen tussentijdse ontlading plaatsvinden.
 - Ontladen blijft actief tot de gekozen ondergrens werkelijk is bereikt. Eerder
   herladen uit zon of net is niet toegestaan, ook niet bij een goedkope aanbieding.
-- Een gekozen reservecyclus mag met verlies ontladen tot de ingestelde hogere
-  reserve (nu 60%), inclusief teruglevering bij een negatieve exportprijs. Eerst
-  huisverbruik benutten; resterende noodzakelijke export op de beste bekende
-  exporttarieven plannen. Dit voorkomt dat de reservecyclus vastloopt.
-- Voor een gekozen volledige cyclus blijven rendabiliteit en exportbescherming
-  gelden; de verliesuitzondering mag niet onder de hogere reserve doorwerken.
-  Inkooplots en gerealiseerde verliezen blijven bewaard. Nieuwe netinkoop houdt
-  zijn winstvoorwaarden; verlies is geen fictief margekrediet. Een toekomstige
-  gesimuleerde voltooiing wijzigt nooit de live fase.
+- Boven de ingestelde hogere reserve (nu 60%) blijven minimumwinst en
+  exportbescherming gelden, ook in een gekozen volledige cyclus. Een
+  reservecyclus mag daar dus niet met verlies naartoe ontladen.
+- Alleen een gekozen volledige ontlaadcyclus mag op/onder die reserve met
+  verlies verder tot de normale minimum-SOC, inclusief teruglevering bij
+  negatieve bekende exporttarieven. Eerst huisverbruik benutten, daarna
+  noodzakelijke export tegen de beste beschikbare bekende tarieven. Dit
+  voorkomt blokkeren van het laatste deel van een volledige ontlading.
+- Volledige ontlading blijft de eerste keuze; de winsttoets vóór het kiezen
+  van een nieuwe cyclus mag deze voltooiingsuitzondering niet als winst tellen.
+  Nieuwe netinkoop moet vooraf volledig kunnen laden met de geselecteerde zon-
+  en netenergie, waarna daadwerkelijk uitvoerbare afname de ingestelde minimale
+  gemiddelde winst onderbouwt. Geen losse netlading die vóór volladen toch niet
+  ontladen kan worden; een negatieve importprijs omzeilt die toets niet.
+  Een volledig door zon gedekte netlaadopdracht is geen netinkoop. Bruikbare
+  zon blijft mogelijk als een netaanvulling wordt afgewezen, zonder voortijdige
+  omkering van de laadfase. Een werkelijk lopende netlading blijft apart behandeld.
+- Inkooplots en gerealiseerde verliezen blijven bewaard. Verlies is geen
+  fictief margekrediet. Een gesimuleerde voltooiing wijzigt nooit de live fase.
 - SOC-grafieken integreren de daadwerkelijk berekende opdrachten onafhankelijk,
   zonder cosmetische begrenzing. Uitvoerbare planning en vooruitblik sluiten
   fysiek aan, maar vooruitblik is niet uitvoerbaar en geen waargenomen toestand.

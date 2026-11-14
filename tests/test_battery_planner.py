@@ -200,7 +200,7 @@ class BatteryPlannerTest(unittest.TestCase):
                 )
                 self.assertEqual(grid, [])
 
-    def test_estimated_tail_can_support_full_topup_beyond_existing_energy(self):
+    def test_estimated_tail_does_not_authorize_unexecutable_grid_topup(self):
         data = json.loads((Path(__file__).parent / "fixtures" / "battery_2026_09_17.json").read_text())
         now = datetime.fromisoformat("2026-09-17T12:33:32+02:00")
         slots = []
@@ -237,19 +237,26 @@ class BatteryPlannerTest(unittest.TestCase):
                     max_discharge_kw=3.0, battery_min_profit=0.08,
                 )
                 today_grid = [w for w in grid_windows if datetime.fromisoformat(w["start"]).date() == now.date()]
-                # 8 October: estimated future demand is now allowed to
-                # support the known-price purchase beyond existing energy.
-                self.assertTrue(today_grid)
-                if tomorrow_solar:
-                    self.assertAlmostEqual(sum(w["charge_kwh"] for w in today_grid), 3.2)
-                _, mode = coordinator._build_mode_windows_from_hourly_plan(
+                # Estimated outlets can produce a candidate, but its selected
+                # quantity is not proof of an executable complete fill. Here
+                # existing stock cannot reach its discharge bound before the
+                # candidate starts; the mode builder must not reverse early.
+                self.assertEqual(bool(today_grid), tomorrow_solar)
+                windows, _ = coordinator._build_mode_windows_from_hourly_plan(
                     slots=selected_slots, now=now, planned_solar_charge_windows=solar_windows,
                     planned_grid_charge_windows=grid_windows, initial_usable_energy_kwh=4.8,
                     usable_capacity_kwh=8.0, battery_soc_percent=68.0,
                     average_price=0.30, average_export_price=0.20,
                     max_charge_kw=3.0, max_discharge_kw=3.0,
                 )
-                self.assertEqual(mode, "laden_van_net" if tomorrow_solar else "ontladen_naar_net")
+                self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+                self.assertTrue(any(w['mode'].startswith('ontladen') for w in windows))
+                from bound_cycle_assertions import assert_bound_plan
+                extrema, final = assert_bound_plan(
+                    self, now, selected_slots, windows, initial=6.8,
+                    floor=2., max_charge=3., charging=False)
+                self.assertAlmostEqual(max(extrema), 6.8, delta=.005)
+                self.assertAlmostEqual(final, 2., delta=.005)
 
     def test_today_demand_adjustment_uses_partial_current_hour(self):
         now = datetime(2026, 6, 30, 11, 30)

@@ -50,17 +50,14 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         self.assertTrue(any(w['mode'].startswith('laden_') for w in windows))
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
-    def test_recharge_waits_until_loss_export_reaches_selected_reserve(self):
+    def test_recharge_waits_when_only_loss_export_above_reserve_is_available(self):
         self.c._discharge_session_started = True
         slots = self.slots(home=0.)
         windows = self.build(slots, 6., [self.charge(1, 2, 2.)])
-        self.assertTrue(any(w['mode'].startswith('laden_') for w in windows))
-        first_charge = next(datetime.fromisoformat(w['start']) for w in windows if w['mode'].startswith('laden_'))
-        before = [w for w in windows if datetime.fromisoformat(w['start']) < first_charge]
-        before_trace = energy_trace(self.now, slots, before, initial=8., max_charge=2.5)
-        self.assertAlmostEqual(before_trace[-1][1], 6., delta=.005)
+        self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
+        self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
         trace = energy_trace(self.now, slots, windows, initial=8., max_charge=2.5)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertAlmostEqual(trace[-1][1], 8., delta=.005)
 
     def test_current_refill_respects_unfinished_discharge_latch(self):
         for start in (0, -.25):
@@ -70,7 +67,7 @@ class CompleteCyclePolicyTest(unittest.TestCase):
                 windows = self.build(self.slots(home=0.), 6., [self.charge(start, 1, 2.)])
                 self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
                 trace = energy_trace(self.now, self.slots(home=0.), windows, initial=8., max_charge=2.5)
-                self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+                self.assertAlmostEqual(trace[-1][1], 8., delta=.005)
 
     def test_legitimate_running_fill_is_preserved(self):
         for start in (0, -.25):
@@ -91,7 +88,7 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         before_refill = [w for w in windows if datetime.fromisoformat(w['start']) < self.now+timedelta(hours=6)]
         trace = energy_trace(self.now, slots, before_refill, initial=10., max_charge=2.5)
         self.assertAlmostEqual(trace[0][1], 9., delta=.005)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 8., delta=.005)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in before_refill))
 
     def test_later_grid_window_does_not_hide_current_solar_refill(self):
@@ -126,21 +123,22 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         trace = energy_trace(self.now, slots, windows, initial=6., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
 
-    def test_profitable_home_use_cannot_release_reserve_before_cheap_refill(self):
+    def test_profitable_above_reserve_then_loss_below_completes_full_cycle(self):
+        # Loss completion applies to an existing commitment, not admission.
+        self.c._battery_cycle_discharge_floor_kwh = 0.
         slots = self.slots(count=10)
         for slot in slots:
             slot['export_price'] = .08
         for slot in slots[:2]:
             slot.update(import_price=.60, demand_kwh=3., net_solar_kwh=-3.)
-        windows = self.build(slots, 8., [self.charge(6, 9, 6.)])
+        windows = self.build(slots, 8., [self.charge(6, 10, 8.)])
         before_refill = [w for w in windows if datetime.fromisoformat(w['start']) < self.now+timedelta(hours=6)]
         trace = energy_trace(self.now, slots, before_refill, initial=10., max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
-        self.assertTrue(all(w['mode'] == 'accu_uit' for w in before_refill
-                            if datetime.fromisoformat(w['start']) >= self.now+timedelta(hours=2)))
+        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        self.assertEqual(self.c._battery_cycle_discharge_floor_kwh, 0.)
         full_trace = energy_trace(self.now, slots, windows, initial=10., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in full_trace), 10., delta=.005)
-        self.assertGreaterEqual(min(e for _, e, _ in full_trace), 6.-.005)
+        self.assertGreaterEqual(min(e for _, e, _ in full_trace), 2.-.005)
         self.assertLessEqual(max(e for _, e, _ in full_trace), 10.+.005)
 
     def test_charge_pause_waits_for_full_and_preserves_next_topup(self):
@@ -167,21 +165,21 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         trace = energy_trace(self.now, slots, windows, initial=6., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 8.5, delta=.005)
 
-    def test_unprofitable_home_fallback_stops_at_reserve_before_future_refill(self):
+    def test_unprofitable_home_above_reserve_cannot_enable_future_refill(self):
         self.c._discharge_session_started = True
         slots = self.slots()
         windows = self.build(slots, 8., [self.charge(6, 8, 4.)])
         before_refill = [w for w in windows if datetime.fromisoformat(w['start']) < self.now+timedelta(hours=6)]
         trace = energy_trace(self.now, slots, before_refill, initial=10., max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
-        self.assertTrue(any(w['mode'] == 'ontladen' for w in before_refill))
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 10., delta=.005)
+        self.assertFalse(any(w['mode'] == 'ontladen' for w in before_refill))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in before_refill))
 
-    def test_unprofitable_home_without_refill_stops_at_reserve(self):
+    def test_unprofitable_home_above_reserve_without_refill_waits(self):
         slots = self.slots()
         windows = self.build(slots, 8.)
         trace = energy_trace(self.now, slots, windows, initial=10., max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 10., delta=.005)
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
     def test_preview_preserves_incomplete_charge_direction(self):

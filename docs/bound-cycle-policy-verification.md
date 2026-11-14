@@ -1,5 +1,35 @@
 # Fixed-boundary battery policy — local verification
 
+## Corrected profit tranche and executable-fill admission
+
+Verified in the publication worktree on 2026-11-14 after correcting the inverted
+60% loss exception. Above the configured higher reserve, profit protection stays
+active. Only a committed full cycle may complete below that reserve at a loss;
+full discharge to the normal configured minimum remains the first choice.
+
+New grid admission rejects selected quantities that cannot fill to maximum before
+any discharge is executable. It preserves usable PV when rejecting a supplement.
+Actual imported stock must pass the minimum average profit check even at negative
+purchase prices. The existing negative-price command preference remains only for
+fully PV-covered charging with zero actual import.
+
+Validation actually executed on this candidate:
+
+- `python -m unittest discover -s tests -p 'test_*.py' -q`: 387 tests, OK.
+- `node --test tests/test_frontend_card.js`: pass.
+- `python -m compileall -q custom_components tests`: pass.
+- `git diff --check`: pass.
+- Independent read-only review: no remaining blocking security or logic findings.
+
+New regressions were observed failing before the admission repair, including an
+unreachable partial grid fill and a negative-price purchase with no executable
+turnover. Superseded partial-fill assertions now check rejection or physically
+complete, profitable alternatives. Existing complete-cycle preference, reserve
+fallback, physical command integration and restart tests also pass.
+No Home Assistant installation/restart or new graph was performed.
+
+Earlier verification below is historical evidence, not the current loss policy.
+
 ## Reserve-loss amendment — local verification
 
 The user approved local implementation/testing of loss-making discharge to the
