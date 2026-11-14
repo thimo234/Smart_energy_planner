@@ -9,11 +9,11 @@ Werk het document bij wanneer de gebruiker een eis toevoegt of wijzigt. Maak
 onderscheid tussen gewenste werking, geïmplementeerde werking en nog te testen
 punten. Een nieuw expliciet gebruikersverzoek gaat voor op het document.
 
-Vóór committen of pushen: toon de gebruiker de berekende planning als grafiek
-in de opzet van de Lovelace-card en wacht op akkoord over de concrete wijziging.
-Toestemming voor een eerder voorstel geldt niet automatisch voor later gewijzigde
-werking. Commit en push na akkoord naar `main`, tenzij de gebruiker anders vraagt.
-Neem geen ongerelateerde wijzigingen mee.
+Een berekende grafiek en afzonderlijke grafiekgoedkeuring zijn niet verplicht
+vóór committen of pushen. Maak alleen een grafiek op verzoek of wanneer dat nodig
+is om een concrete afwijking te onderzoeken. Commit en push afgeronde, goed
+geteste wijzigingen naar `main` binnen de goedgekeurde scope, tenzij de gebruiker
+anders vraagt. Neem geen ongerelateerde wijzigingen mee.
 
 Houd controles compact (gebruikersverzoek 9 oktober): draai eerst alleen de
 regressies voor het gewijzigde gedrag. Draai de volledige suite alleen bij brede

@@ -34,6 +34,19 @@ def computed_cases():
         yield ('full' if full else 'reserve', NOW, inputs, result,
                floor, full, 'Synthetische controle: bekende tarieven, 10 kWh, reserve 70%, ' +
                ('volledige rendabele afzet.' if full else 'te weinig rendabele afzet voor normale minimumgrens.'))
+    c = BoundCycleIntegrationTest().new()
+    c._battery_cycle_discharge_floor_kwh = 4.
+    c._battery_grid_charge_price = .80
+    c._battery_margin_state = dict(at=NOW.isoformat(), energy=8., reserve=0.,
+        lots=[[8., .80]], credit=0., actions=[])
+    loss_slots = scenario(demand_hours=0)
+    for slot in loss_slots:
+        slot.update(import_price=.10, export_price=-.05)
+    loss_result = replay(c, loss_slots, reserve=60.)
+    yield ('reserve-loss', NOW, loss_slots, loss_result, 6., False,
+           'Synthetische verliescontrole: bestaande accu 100%, reserve 60%, '
+           'aangenomen inkoopkost €0,80/kWh, terugleverprijs −€0,05/kWh, geen huisvraag. '
+           'Ontladen moet exact bij 60% stoppen; onder de reserve geldt geen verliesuitzondering.')
     now, slots, result, _ = recorded_replay()
     # Captured fixture starts at 55%, below its configured 60% reserve:
     # the legacy discharge is already finished and a new fill is permitted.
@@ -128,7 +141,7 @@ def main():
     html = '''<!doctype html><html lang="nl"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Vaste cyclusgrenzen — offline preview</title>
 <style>body{font:16px Arial,sans-serif;color:#22343e;background:#f6f8f8;max-width:1200px;margin:32px auto;padding:0 18px}section{margin:36px 0}svg{width:100%;background:white}svg text{font:14px Arial,sans-serif;fill:#243942}svg .tick{font-size:11px}.warning{background:#fff0d6;padding:14px}.scroll{overflow:auto}td,th{border-bottom:1px solid #dce2e4;text-align:left;padding:8px;font:12px monospace}details{overflow:auto}@media(max-width:650px){svg{min-width:850px}}</style>
 <h1>Vaste cyclusgrenzen — berekende offline preview</h1><p class="warning">Lokale kandidaat, nog niet vrijgegeven. Grafiekreview door gebruiker vereist. Geen commit, push, deployment of live verificatie.</p>
-<p>Voorkeur: volledige rendabele cyclus maximum → normaal minimum. Anders maximum → ingestelde hogere reserve (hier 70% in de synthetische controle, niet hardcoded 50%). De gekozen grens blijft vast gedurende pauzes en prognosewijzigingen. Onvolledig laden geeft geen toestemming tot ontladen; een onvoltooide ontlading geeft geen toestemming tot herladen. Wachten is toegestaan; verliesgevende export niet.</p>
+<p>Voorkeur: volledige rendabele cyclus maximum → normaal minimum. Anders maximum → ingestelde hogere reserve (hier 70% in de synthetische controle, niet hardcoded 50%). De gekozen grens blijft vast gedurende pauzes en prognosewijzigingen. Onvolledig laden geeft geen toestemming tot ontladen; een onvoltooide ontlading geeft geen toestemming tot herladen. Wachten is toegestaan. Een gekozen reservecyclus mag met verlies ontladen en terugleveren tot de ingestelde hogere reserve; onder die reserve geldt deze uitzondering niet.</p>
 ''' + ''.join(sections) + '<p>Reproduceerbaar: <code>PYTHONPATH=tests python scripts/preview_bound_cycles.py</code>. JSON-bestanden naast deze zelfstandige HTML bevatten de exacte berekende data; docs/bound-cycle-policy-verification.md bevat de verificatiestatus.</p></html>'
     (OUT / 'index.html').write_text(html, encoding='utf-8')
     (OUT / 'verification.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')

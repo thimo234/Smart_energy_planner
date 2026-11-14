@@ -50,13 +50,17 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         self.assertTrue(any(w['mode'].startswith('laden_') for w in windows))
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
 
-    def test_recharge_above_selected_reserve_is_rejected(self):
+    def test_recharge_waits_until_loss_export_reaches_selected_reserve(self):
         self.c._discharge_session_started = True
         slots = self.slots(home=0.)
         windows = self.build(slots, 6., [self.charge(1, 2, 2.)])
-        self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
+        self.assertTrue(any(w['mode'].startswith('laden_') for w in windows))
+        first_charge = next(datetime.fromisoformat(w['start']) for w in windows if w['mode'].startswith('laden_'))
+        before = [w for w in windows if datetime.fromisoformat(w['start']) < first_charge]
+        before_trace = energy_trace(self.now, slots, before, initial=8., max_charge=2.5)
+        self.assertAlmostEqual(before_trace[-1][1], 6., delta=.005)
         trace = energy_trace(self.now, slots, windows, initial=8., max_charge=2.5)
-        self.assertAlmostEqual(max(e for _, e, _ in trace), 8., delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
 
     def test_current_refill_respects_unfinished_discharge_latch(self):
         for start in (0, -.25):
@@ -66,7 +70,7 @@ class CompleteCyclePolicyTest(unittest.TestCase):
                 windows = self.build(self.slots(home=0.), 6., [self.charge(start, 1, 2.)])
                 self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
                 trace = energy_trace(self.now, self.slots(home=0.), windows, initial=8., max_charge=2.5)
-                self.assertAlmostEqual(max(e for _, e, _ in trace), 8., delta=.005)
+                self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
 
     def test_legitimate_running_fill_is_preserved(self):
         for start in (0, -.25):

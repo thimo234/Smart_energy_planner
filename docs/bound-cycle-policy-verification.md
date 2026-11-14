@@ -1,5 +1,36 @@
 # Fixed-boundary battery policy — local verification
 
+## Reserve-loss amendment — local verification
+
+The user approved local implementation/testing of loss-making discharge to the
+configured higher reserve (currently 60%), including export. Only a committed
+reserve cycle receives the exception; full-cycle profitability, physical/power
+limits, incomplete-charge interlock and acquisition ledger remain protected.
+Household demand is allocated first; necessary residual export uses the best
+known export prices. Unknown export tariffs do not authorize export.
+
+Seven dedicated regressions cover loss-making household use, negative-price
+export, mixed demand/export, full-cycle loss rejection, incomplete charging,
+unknown export prices and below-reserve rejection. Superseded exact-window tests
+now independently verify reaching reserve before a newly possible refill.
+Household service during an unknown-price outlook retains its existing behavior;
+only export requires a known price.
+
+Executed: `python -m unittest discover -s tests -p 'test_*.py' -q`:
+379 tests passed. Preview generator also passed all independent energy/phase
+checks, with a new synthetic reserve-loss replay: assumed historical cost
+EUR 0.80/kWh, export tariff EUR -0.05/kWh, no household demand, initial 100%,
+computed minimum exactly 60%. Its economics helper measures new imported lots,
+not historical-stock losses; zero new imports is not evidence of zero loss.
+Standalone graph: `previews/bound-cycles/index.html`.
+Publication is now explicitly approved by the user. Publication preflight reran
+38 reserve-loss, bound-cycle, complete-cycle and existing-energy tests in this
+worktree: all passed. The user removed mandatory graph generation/approval
+before commits and pushes; computed graphs remain optional diagnostic artifacts.
+No deployment, restart or new live verification for this amendment.
+The publication history and older policy expectations below describe the prior
+version and are superseded where this explicit loss exception conflicts.
+
 ## Scope and status
 
 Publication candidate in `/opt/data/projects/homeserver/ha_energy_planner-rollback`,
@@ -162,5 +193,6 @@ cycle can wait through an adverse update without loss-making export. 0.005 kWh
 completion tolerance is a local numerical tolerance, not sensor calibration.
 No live timing, physical device/control behavior, performance under actual HA load,
 or frontend browser appearance is certified by these offline tests. The full
-suite takes approximately five minutes locally. Independent review and graph
-approval must precede any publication or deployment.
+suite takes approximately five minutes locally. Independent code review remains
+required before publication. Graph generation and separate graph approval are
+optional, not a publication gate. Deployment requires separate approval.

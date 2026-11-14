@@ -19,16 +19,24 @@ maximum → **ingestelde hogere reserve**; die reserve is niet hardcoded 50%.
   ook tussen losse laadvensters mag geen tussentijdse ontlading plaatsvinden.
 - Ontladen blijft actief tot de gekozen ondergrens werkelijk is bereikt. Eerder
   herladen uit zon of net is niet toegestaan, ook niet bij een goedkope aanbieding.
-- Wachten is toegestaan; geen verliesgevende export afdwingen om een grens te
-  bereiken. Inkooplots, gerealiseerde marge en netwinst-/exportbescherming blijven
-  behouden. Een toekomstige gesimuleerde voltooiing wijzigt nooit de live fase.
+- Een gekozen reservecyclus mag met verlies ontladen tot de ingestelde hogere
+  reserve (nu 60%), inclusief teruglevering bij een negatieve exportprijs. Eerst
+  huisverbruik benutten; resterende noodzakelijke export op de beste bekende
+  exporttarieven plannen. Dit voorkomt dat de reservecyclus vastloopt.
+- Voor een gekozen volledige cyclus blijven rendabiliteit en exportbescherming
+  gelden; de verliesuitzondering mag niet onder de hogere reserve doorwerken.
+  Inkooplots en gerealiseerde verliezen blijven bewaard. Nieuwe netinkoop houdt
+  zijn winstvoorwaarden; verlies is geen fictief margekrediet. Een toekomstige
+  gesimuleerde voltooiing wijzigt nooit de live fase.
 - SOC-grafieken integreren de daadwerkelijk berekende opdrachten onafhankelijk,
   zonder cosmetische begrenzing. Uitvoerbare planning en vooruitblik sluiten
   fysiek aan, maar vooruitblik is niet uitvoerbaar en geen waargenomen toestand.
 
-**Status:** gebruiker heeft na de berekende grafiek publicatie naar Git goedgekeurd.
-Deze versie wordt vanuit `ha_energy_planner-rollback` gepubliceerd; installatie
-of een Home Assistant-herstart is niet uitgevoerd en valt buiten deze goedkeuring. Zie
+**Status:** de eerdere vaste-cyclusversie is gepubliceerd als `37debc8`.
+De gebruiker heeft publicatie van de verliesuitzondering goedgekeurd en de
+verplichte grafiek vóór commit/push laten vervallen. Grafieken zijn optioneel;
+inhoudelijke regressietests blijven verplicht. Installatie of een Home Assistant-
+herstart is niet uitgevoerd en valt buiten deze goedkeuring. Zie
 `docs/bound-cycle-policy-verification.md` voor werkelijk uitgevoerde tests en
 classificatie van vervallen verwachtingen. Nieuwe berekende standalone preview:
 `previews/bound-cycles/index.html`; oudere previews blijven ongewijzigd.
@@ -377,11 +385,11 @@ gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
   een standaard door code gegenereerde grafiek is voldoende. Geen nieuwe
   grafiekcode of herhaalde browser-/mobiele controle per sensorreplay zolang de
   weergavecode gelijk blijft en er geen concrete weergavefout is.
-- **Vóór iedere commit/push:** toon een grafiek in de opzet van de Lovelace-card,
-  met prijzen, zonne- en verbruiksprognose, laad-/ontlaadvensters en berekende SOC.
-  Benoem of het echte aangeleverde prognoses of synthetische testscenario's zijn.
-- Wacht op het akkoord van de gebruiker over dat concrete resultaat.
-  Daarna mogen de bijbehorende wijzigingen naar `main` worden gecommit en gepusht.
+- Een grafiek en afzonderlijke grafiekgoedkeuring zijn niet verplicht vóór
+  commit/push. Maak alleen een grafiek op verzoek of bij een concrete diagnose.
+  Gebruik dan echte prognoses of duidelijk gelabelde synthetische scenario's.
+- Commit en push afgeronde, geteste wijzigingen binnen de goedgekeurde scope naar
+  `main`; inhoudelijke regressiecontroles blijven vereist.
 - Vermeld of alleen lokaal/simulatie is getest of ook in Home Assistant.
   Gepusht betekent niet dat de draaiende integratie al is bijgewerkt.
 
