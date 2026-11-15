@@ -27,10 +27,12 @@ Add the integration from the Home Assistant UI and create a household, for examp
 From this household, add one or more config subentries:
 
 - `Battery planner`: battery identity, capacity, SOC, power and cycle/profit policy.
-- `Price window planner`: cheapest or most expensive windows, duration and peak policy. Create separate subentries for different windows.
+- `Price window planner`: cheapest or most expensive windows, duration and peak policy. All price-window planners in the household appear together under one shared subentry, while each retains its own settings and schedule. Use the group's reconfigure action to edit, add or remove an individual planner; adding another price-window planner from the normal subentry menu also adds it to this group.
 - `Consumption forecast`: device energy meters, learned/fixed/cheap-start timing and forecast settings.
 
 Shared sources are inherited and do not appear again in the child forms. Changing household sources reloads its planners. An unavailable child does not prevent healthy siblings from starting. This is shared configuration and source acquisition, not a new joint optimizer or automatic switching of physical appliances. Consumption device rules remain under the consumption-forecast subentry; they are not standalone appliance controllers.
+
+Existing price-window subentries within the same household are consolidated during setup, preserving planner identities, entity IDs, device links, individual schedules and stored runtime. Standalone entries are not silently adopted. Removing a planner in the group asks for confirmation and only cleans up that planner's entities/devices on reload; other members and historical runtime remain. Home Assistant's delete action for the entire shared subentry deletes the whole group. See [household architecture and verification](docs/household-configuration-verification.md) for migration/retry details and offline-test limitations.
 
 ### Adopt an existing planner without losing its identity
 

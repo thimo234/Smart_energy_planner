@@ -172,7 +172,7 @@ async def async_get_config_entry_diagnostics(
         coordinator = planners.get(binding.entry_id)
         if subentry_id is not None:
             children = planners.get(entry.entry_id)
-            owned = children.get(subentry_id) if isinstance(children, dict) else None
+            owned = children.get(binding.runtime_key) if isinstance(children, dict) else None
             if owned is None or coordinator is not owned:
                 coordinator = None
         elif isinstance(coordinator, dict):

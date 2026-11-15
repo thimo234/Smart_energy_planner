@@ -115,7 +115,8 @@ class FlowContractTest(unittest.IsolatedAsyncioTestCase):
             get=lambda key: next((s for s in states if s.entity_id == key), None)),
             config_entries=NS(async_entries=lambda domain: [self.home, self.old],
                 async_get_entry=lambda identity: self.home if identity == 'home' else self.old,
-                async_update_entry=Mock()))
+                async_update_entry=Mock(),
+                async_update_subentry=Mock(side_effect=lambda p, s, **kw: s.__dict__.update(kw))))
 
     def flow(self, kind='battery'):
         flow = self.module.PlannerSubentryFlow()
@@ -166,9 +167,10 @@ class FlowContractTest(unittest.IsolatedAsyncioTestCase):
         flow = self.flow('price_window')
         flow.context = {'subentry_id': 'a'}
         await flow.async_step_reconfigure()
+        await flow.async_step_members({'member_id': 'a', 'action': 'edit'})
         result = await flow.async_step_configure({'planner_name': 'Three hours', 'price_window_duration_hours': 3})
         self.assertEqual(result['reason'], 'reconfigure_successful')
-        self.assertEqual(self.home.subentries['a'].data['price_window_duration_hours'], 3)
+        self.assertEqual(self.home.subentries['a'].data['_price_window_planners']['a']['price_window_duration_hours'], 3)
 
     async def test_adoption_requires_explicit_confirmation_and_blocks_source_conflicts(self):
         flow = self.flow()
@@ -271,7 +273,7 @@ def load_runtime():
     events = module('events', async_call_later=Mock(return_value=Mock()),
         async_track_state_change_event=Mock(return_value=Mock()),
         async_track_time_interval=Mock(return_value=Mock()))
-    dr = module('dr', async_get=lambda hass: NS(async_get_or_create=Mock()))
+    dr = module('dr', async_get=lambda hass: NS(devices={}, async_get_or_create=Mock()))
     er = module('er', async_get=lambda hass: NS(entities={}))
     helpers = module('helpers', device_registry=dr, entity_registry=er)
     doubles = {
@@ -417,11 +419,16 @@ class RuntimeContractTest(unittest.IsolatedAsyncioTestCase):
         hass = NS(data={}, state='starting', bus=NS(async_listen_once=Mock(return_value=Mock())),
             async_create_task=tasks.append, config_entries=NS(
                 async_get_entry=lambda identity: None,
+                async_entries=lambda domain: [home],
+                async_update_entry=Mock(side_effect=lambda e, **kw: e.__dict__.update(kw)),
+                async_update_subentry=Mock(side_effect=lambda p, s, **kw: s.__dict__.update(kw)),
+                async_remove_subentry=Mock(side_effect=lambda p, identity: p.subentries.pop(identity)),
                 async_forward_entry_setups=AsyncMock(), async_unload_platforms=AsyncMock(return_value=True),
                 async_reload=AsyncMock()))
         with patch.dict(sys.modules, doubles), self.assertLogs(runtime._LOGGER, 'ERROR'):
             self.assertTrue(await runtime.async_setup_entry(hass, home))
-        self.assertEqual(set(hass.data[DOMAIN]['home']), set(home.subentries) - {'broken'})
+        self.assertEqual(set(hass.data[DOMAIN]['home']), {'battery', 'three', 'one', 'expensive', 'unready', 'demand'})
+        self.assertEqual(set(home.subentries), {'battery', 'three', 'demand', 'broken'})
         self.assertIsNone(hass.data[DOMAIN]['unready'].data)
         self.assertEqual(hass.data[RUNTIME_STATE]['battery']['battery_profit_total_eur'], 44)
         self.assertEqual(hass.data[RUNTIME_STATE]['demand']['demand_devices_state'], {'meter': 123})
@@ -443,7 +450,7 @@ class RuntimeContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hass.data[DOMAIN], {})
         self.assertEqual(hass.data[RUNTIME_STATE], {})
         # Actual reload after removing a child and changing shared sources.
-        del home.subentries['three']
+        del home.subentries['three'].data['_price_window_planners']['three']
         del home.subentries['broken']
         home.options['price_sensor'] = 'sensor.new_price'
         with patch.dict(sys.modules, doubles):

@@ -1,4 +1,9 @@
 {
+  "selector": {
+    "price_window_action": {
+      "options": {"edit": "Edit planner", "add": "Add planner", "remove": "Remove planner"}
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -245,6 +250,16 @@
       "entry_type": "Price window planner",
       "initiate_flow": {"user": "Add price window planner"},
       "step": {
+        "members": {
+          "title": "Price window planners",
+          "description": "Planners share one group but retain independent settings and schedules. Select a planner to edit or remove, or add another planner.",
+          "data": {"member_id": "Planner", "action": "Action"}
+        },
+        "remove_member": {
+          "title": "Remove price window planner",
+          "description": "Remove only the selected planner and its entities. Other planners are not changed. Stored runtime history is retained.",
+          "data": {"confirm": "Confirm removal"}
+        },
         "user": {
           "title": "Price window planner",
           "description": "Create a new planner or explicitly adopt an existing standalone planner. Shared sources come from the household.",

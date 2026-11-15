@@ -39,7 +39,8 @@ from .const import (
 )
 from .coordinator import SmartEnergyPlannerCoordinator
 from .const import PLANNER_KIND_HOUSEHOLD
-from .household import SharedSources, async_adopt_legacy, planner_bindings
+from .household import (SharedSources, async_adopt_legacy, planner_bindings,
+                        consolidate_price_windows, cleanup_removed_price_windows)
 from .const import PLANNER_KIND_DEMAND, CONF_DEMAND_FORECAST_SENSOR, CONF_DEMAND_DEVICES
 from .frontend_resource import (
     async_load_and_upsert_card_resource,
@@ -224,6 +225,8 @@ async def _async_setup_household(hass, entry):
     """Keep child refreshes, failures and state independent under one HA entry."""
     from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+    consolidate_price_windows(hass, entry, er.async_get(hass), dr.async_get(hass))
+    cleanup_removed_price_windows(hass, entry, er.async_get(hass), dr.async_get(hass))
     await _async_register_frontend(hass)
     shared = SharedSources()
     children = {}
@@ -243,7 +246,7 @@ async def _async_setup_household(hass, entry):
         previous = hass.data.get(DOMAIN, {}).get(binding.entry_id)
         previous_state = hass.data.get(RUNTIME_STATE, {}).get(binding.entry_id)
         try:
-            children[binding.subentry_id] = await _async_setup_planner(hass, binding, shared)
+            children[binding.runtime_key] = await _async_setup_planner(hass, binding, shared)
         except Exception:
             _LOGGER.exception("Unable to set up child %s; other planners remain active", binding.title)
             planners = hass.data.get(DOMAIN, {})

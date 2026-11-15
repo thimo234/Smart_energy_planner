@@ -1,4 +1,9 @@
 {
+  "selector": {
+    "price_window_action": {
+      "options": {"edit": "Planner wijzigen", "add": "Planner toevoegen", "remove": "Planner verwijderen"}
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -245,6 +250,16 @@
       "entry_type": "Prijsblokplanner",
       "initiate_flow": {"user": "Prijsblokplanner toevoegen"},
       "step": {
+        "members": {
+          "title": "Prijsblokplanners",
+          "description": "Deze planners delen één groep, maar behouden eigen instellingen en planning. Kies een planner om te bewerken of verwijderen, of voeg een planner toe.",
+          "data": {"member_id": "Planner", "action": "Actie"}
+        },
+        "remove_member": {
+          "title": "Prijsblokplanner verwijderen",
+          "description": "Verwijder alleen de gekozen planner en zijn entiteiten. Andere planners blijven ongewijzigd. Opgeslagen runtimehistorie blijft bewaard.",
+          "data": {"confirm": "Verwijderen bevestigen"}
+        },
         "user": {
           "title": "Prijsblokplanner",
           "description": "Maak een nieuwe planner of neem bewust een bestaande losse planner over. Het huishouden levert de gedeelde bronnen.",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 import math
+from uuid import uuid4
 
 import voluptuous as vol
 
@@ -15,7 +16,8 @@ from homeassistant.helpers import selector
 from .const import (PLANNER_KIND_DEMAND, CONF_DEMAND_DEVICES, CONF_DEMAND_ENERGY_SENSORS,
                     CONF_DEMAND_FORECAST_SENSOR)
 from .const import PLANNER_KIND_HOUSEHOLD, SHARED_SOURCE_KEYS
-from .household import adoption_conflicts, child_data, legacy_available, merged_data
+from .household import (adoption_conflicts, child_data, legacy_available, merged_data,
+                        PRICE_WINDOW_MEMBERS, price_window_members, price_window_source_retired)
 
 
 def _build_household_schema(hass, data=None):
@@ -544,6 +546,8 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
         return result
 
     async def async_step_user(self, user_input=None):
+        if self._subentry_type == PLANNER_KIND_PRICE_WINDOW:
+            self._price_group()
         if merged_data(self._get_entry()).get(CONF_PLANNER_KIND) != PLANNER_KIND_HOUSEHOLD:
             return self.async_abort(reason='unsupported_planner_kind')
         if user_input is not None:
@@ -576,18 +580,103 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
         if user_input is not None and user_input.get('confirm'):
             data = {**child_data(merged_data(legacy)), '_legacy_entry_id': legacy.entry_id}
             data.pop('_adopted_by', None)
+            if self._subentry_type == PLANNER_KIND_PRICE_WINDOW:
+                return self._save_price_member(data, legacy.entry_id)
             return self.async_create_entry(title=legacy.title, data=data)
         return self.async_show_form(step_id='adopt', data_schema=vol.Schema({
             vol.Required('confirm', default=False): selector.BooleanSelector()}),
             description_placeholders={'planner': legacy.title, 'household': self._get_entry().title})
 
+    def _price_group(self):
+        # Bind the flow to its original group, not whichever group exists later.
+        entries = self._get_entry().subentries
+        if not hasattr(self, '_price_group_id'):
+            group = next((s for s in entries.values()
+                          if s.subentry_type == PLANNER_KIND_PRICE_WINDOW), None)
+            self._price_group_id = self.context.get('subentry_id') or (group.subentry_id if group else None)
+        group = entries.get(self._price_group_id)
+        if group is None or group.subentry_type != PLANNER_KIND_PRICE_WINDOW:
+            return None
+        # Journaled sources are no longer authoritative after snapshotting.
+        if price_window_source_retired(self._get_entry(), group.subentry_id):
+            return None
+        return group
+
+    def _save_price_member(self, payload, identity=None):
+        group = self._price_group()
+        if group is None:
+            if self._price_group_id is not None or any(
+                    s.subentry_type == PLANNER_KIND_PRICE_WINDOW
+                    for s in self._get_entry().subentries.values()):
+                return self.async_abort(reason='legacy_unavailable')
+            return self.async_create_entry(title=payload[CONF_PLANNER_NAME], data=payload)
+        # Re-read current data at submission; concurrent flows must not erase peers.
+        members = price_window_members(group)
+        identity = identity or payload.get('_legacy_entry_id') or uuid4().hex
+        if getattr(self, '_member_id', None) and identity not in members:
+            return self.async_abort(reason='legacy_unavailable')
+        if identity in members and not getattr(self, '_member_id', None):
+            return self.async_abort(reason='legacy_unavailable')
+        members[identity] = {**payload, '_legacy_entry_id': identity}
+        self.hass.config_entries.async_update_subentry(self._get_entry(), group,
+            title='Price Windows', data={**group.data, PRICE_WINDOW_MEMBERS: members})
+        return self.async_abort(reason='reconfigure_successful', translation_domain='homeassistant')
+
+    async def async_step_members(self, user_input=None):
+        group = self._price_group()
+        if group is None:
+            return self.async_abort(reason='legacy_unavailable')
+        members = price_window_members(group)
+        if not members:
+            return await self.async_step_configure()
+        if user_input is not None:
+            if user_input.get('action') == 'add':
+                self._member_id = None
+                return await self.async_step_user()
+            identity = user_input.get('member_id')
+            if identity not in members:
+                return self.async_abort(reason='legacy_unavailable')
+            self._member_id = identity
+            if user_input.get('action') == 'remove':
+                return await self.async_step_remove_member()
+            return self.async_show_form(step_id='configure', data_schema=self._child_schema(members[identity]))
+        return self.async_show_form(step_id='members', data_schema=vol.Schema({
+            vol.Required('member_id', default=next(iter(members))): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=[selector.SelectOptionDict(
+                    value=identity, label=data.get(CONF_PLANNER_NAME, identity))
+                    for identity, data in members.items()])),
+            vol.Required('action', default='edit'): selector.SelectSelector(
+                selector.SelectSelectorConfig(options=['edit', 'add', 'remove'],
+                    translation_key='price_window_action'))}))
+
+    async def async_step_remove_member(self, user_input=None):
+        group = self._price_group()
+        if group is None or self._member_id not in price_window_members(group):
+            return self.async_abort(reason='legacy_unavailable')
+        if user_input is not None and user_input.get('confirm'):
+            members = price_window_members(group)
+            del members[self._member_id]
+            self.hass.config_entries.async_update_subentry(self._get_entry(), group,
+                title='Price Windows', data={**group.data, PRICE_WINDOW_MEMBERS: members,
+                    '_removed_price_window_planners': list(dict.fromkeys([
+                        *group.data.get('_removed_price_window_planners', []), self._member_id]))})
+            return self.async_abort(reason='reconfigure_successful', translation_domain='homeassistant')
+        return self.async_show_form(step_id='remove_member', data_schema=vol.Schema({
+            vol.Required('confirm', default=False): selector.BooleanSelector()}))
+
     async def async_step_reconfigure(self, user_input=None):
+        if self._subentry_type == PLANNER_KIND_PRICE_WINDOW:
+            if self._price_group() is None:
+                return self.async_abort(reason='legacy_unavailable')
+            return await self.async_step_members(user_input)
         self._editing = self._get_reconfigure_subentry()
         if user_input is None:
             return self.async_show_form(step_id='configure', data_schema=self._child_schema(self._editing.data))
         return await self.async_step_configure(user_input)
 
     async def async_step_configure(self, user_input=None):
+        if self._subentry_type == PLANNER_KIND_PRICE_WINDOW:
+            self._price_group()
         errors = {}
         if user_input is not None:
             data = _normalize_selector_values(user_input)
@@ -611,6 +700,8 @@ class PlannerSubentryFlow(DemandDeviceFlow, ConfigSubentryFlow):
             if not errors:
                 title = str(data.get(CONF_PLANNER_NAME) or _title_for_kind(self._subentry_type))
                 payload = child_data(data)
+                if self._subentry_type == PLANNER_KIND_PRICE_WINDOW:
+                    return self._save_price_member(payload, getattr(self, '_member_id', None))
                 editing = getattr(self, '_editing', None)
                 if editing:
                     # Persist adoption identity through every edit and HA restart.
