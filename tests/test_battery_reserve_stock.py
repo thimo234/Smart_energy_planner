@@ -107,7 +107,10 @@ class ReserveStockTest(unittest.TestCase):
         # waiver, releases reserve before it starts.
         self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        # That permission ended at the refill; the successor has no next fill.
+        self.assertGreaterEqual(trace[-1][1], 5.995)
+        full_at = next(t for t, e, _ in trace if e >= 9.995)
+        self.assertGreaterEqual(min(e for t, e, _ in trace if t >= full_at), 5.995)
         from test_battery_partial_cycle_economics import imported_margin
         ledger = imported_margin(slots, windows, initial_usable=4., reserve_usable=0.)
         self.assertGreaterEqual(ledger['margin'], .1, ledger)

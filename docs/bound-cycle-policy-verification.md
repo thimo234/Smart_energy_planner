@@ -1,5 +1,54 @@
 # Fixed-boundary battery policy — local verification
 
+## November 15 horizon and cycle-permission corrections (local only)
+
+- Rejected refill proposals no longer truncate the discharge allocation horizon
+  when the current discharge cannot physically reach its floor beforehand.
+- Completing a fill ends the old cycle's full-depth permission. The successor
+  cycle needs its own next executable profitable full refill; otherwise it uses
+  the configured higher reserve. Existing committed current-cycle permission is
+  retained through refresh/restart until the fill actually executes.
+- Outlook replay carries the fill transition across horizon boundaries. Review
+  exposed a positive-case regression at the exact full boundary: the old charge
+  latch blocked admission of a genuine next refill. A failing outlook regression
+  now protects the source-selection reset as well as the no-next-refill cases.
+- Independent-review blockers are covered by RED/GREEN regressions: direct
+  measured 20% → 100% feedback (also after JSON restart) resets the prior
+  cycle's floor to the configured reserve before releasing the charge latch.
+  A true next full refill still authorizes full-depth discharge; without it
+  the 70% reserve holds.
+  The same reset now covers a fill and subsequent discharge between SOC
+  samples: accepted commands fill by +3.2 h and discharge from +4 h, followed
+  by 90% SOC at +5 h. Both live feedback and a five-hour JSON restart reselect
+  the 70% reserve (5 kWh usable, 7 kWh total) without a next refill; a genuine
+  next profitable full refill still permits the normal 20% minimum. The new
+  regression failed on both no-refill variants before the narrow reconciliation
+  fix and passed all four live/restart and refill/no-refill variants afterwards.
+  Horizon reachability now excludes unknown or execution-suppressed export,
+  including the 30-minute imminent-charge veto. A rejected 0.125 kWh refill no
+  longer makes a cheap current slot discharge instead of later expensive demand.
+  Ranking can look through a rejected proposal, while execution still revisits
+  its boundary using updated stock; valid later refills and reserve exports
+  remain executable. Cold full startup without a committed floor stays independent.
+- `tests/fixtures/battery_2026_11_15_outlook.json` contains only sanitized numerical
+  forecasts, non-identifying configuration/cycle state, and selected historical
+  summary attributes. The later diagnostic ledger is deliberately excluded.
+  Backdated replay is counterfactual, not an exact historical reconstruction.
+- With the captured 10 kWh configuration (20% normal minimum, 60% higher reserve,
+  2.5 kW charge, 3 kW discharge, 20% solar/demand margins, EUR 0.12 export tax
+  deduction), replay's first discharge starts at 14:45 at EUR 0.376/kWh. Tomorrow
+  reaches 10 kWh, then stops at 6 kWh without a subsequent refill.
+- Verification: `python -m unittest discover -s tests -v` passed **497 tests**
+  in **466.891 seconds**. Full log:
+  `/opt/data/cache/scratch/planner-review-elapsed-refill-boundary-complete.log`.
+  The first foreground attempt exceeded the tool's 420-second limit; the complete
+  background rerun above exited zero. Targeted integration/scope suite: **18 tests**
+  passed. `node --check
+  custom_components/smart_energy_planner/frontend/smart-energy-planner-card.js`,
+  `node tests/test_frontend_card.js`, and `git diff --check` passed.
+- No deployment, Home Assistant restart, ledger deletion, commit or push.
+
+
 ## Corrected profit tranche and executable-fill admission
 
 Verified in the publication worktree on 2026-11-14 after correcting the inverted

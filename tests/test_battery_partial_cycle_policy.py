@@ -68,10 +68,11 @@ class PartialCyclePolicyTest(unittest.TestCase):
         extrema, final = assert_bound_plan(
             self, self.now, slots, modes, initial=2., floor=2., max_charge=2.5)
         self.assertAlmostEqual(max(extrema), 10., delta=.005)
-        self.assertAlmostEqual(final, 2., delta=.005)
+        # The imported fill starts a new cycle without another full refill.
+        self.assertAlmostEqual(final, 6., delta=.005)
         from test_battery_partial_cycle_economics import imported_margin
         ledger = imported_margin(slots, modes, initial_usable=0., reserve_usable=0.)
-        self.assertAlmostEqual(ledger['sold'], 8., delta=.005)
+        self.assertAlmostEqual(ledger['sold'], 4., delta=.005)
         self.assertGreaterEqual(ledger['margin'], .1)
 
     def test_partial_grid_still_requires_minimum_profit(self):

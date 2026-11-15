@@ -75,6 +75,19 @@ bronadministratie en bekende-tarief-/exporttoestemmingen blijven ongewijzigd.
 Dit vervangt hieronder ook de historische onveranderlijkheid van een gekozen
 reserve en de migratieregel die een gedeeltelijk begonnen ontlading vastzette.
 
+De toestemming om tot de normale minimum-SOC te ontladen hoort alleen bij de
+huidige ontlaadcyclus. Een al toegekende volledige cyclus blijft geldig bij
+herplanning en herstart, ook als het toekomstige laadblok wegvalt. Zodra de
+volgende laadfase werkelijk vol is, wordt voor de nieuwe ontlaadcyclus opnieuw
+gekeken naar haar **volgende** uitvoerbare, rendabele volledige laadblok. De
+zojuist afgeronde lading en de grens van de vorige cyclus zijn daarvoor geen
+bewijs. Zonder volgend laadblok stopt de nieuwe ontlading op de hogere reserve.
+Dit geldt ook voor de vooruitblik en voor een horizonovergang midden in laden.
+
+Een laadvoorstel dat door de onafgemaakte ontlaadcyclus niet kan starten, mag de
+prijsvergelijking niet afkappen: duurdere uitvoerbare uren na dat afgewezen
+laadvoorstel blijven meedingen naar dezelfde resterende voorraad.
+
 De keuze tussen een rendabele volledige cyclus en de hogere reserve blijft bestaan;
 onderstaande historische winstbescherming voor bestaande energie boven reserve is
 met dit besluit vervangen. De fysieke grenzen en nieuwe-laadtoets blijven gelden.

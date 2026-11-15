@@ -40,19 +40,98 @@ class BoundCycleIntegrationTest(unittest.TestCase):
         c._battery_cycle_discharge_floor_kwh = None
         return c
 
-    def test_full_pipeline_prefers_complete_cycle_and_preserves_observed_phase(self):
+    def test_full_pipeline_new_fill_keeps_reserve_without_next_refill(self):
         c, slots = self.new(charging=True), scenario(charging=True)
         result = replay(c, slots, soc=20.)
         trace = energy_trace(NOW, slots, result.planned_battery_mode_windows, initial=2., max_charge=2.5)
         self.assertTrue(result.planned_grid_charge_windows)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        self.assertAlmostEqual(trace[-1][1], 7., delta=.005)
+        # Future completion does not overwrite the still-observed fill state.
         self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
         self.assertTrue(c._charge_session_started, 'future simulated completion is not observed full')
         self.assertFalse(c._discharge_session_started)
         first_discharge = next(datetime.fromisoformat(w['start']) for w in result.planned_battery_mode_windows
                                if w['mode'].startswith('ontladen'))
         self.assertGreaterEqual(first_discharge, NOW+timedelta(hours=4))
+
+    def test_refill_feedback_and_restart_cannot_inherit_old_full_permission(self):
+        c = self.new(charging=True)
+        c._battery_cycle_discharge_floor_kwh = 0.
+        slots = scenario(charging=True)
+        replay(c, slots, soc=20.)
+        replay(c, slots, soc=80.)
+        self.assertTrue(c._charge_session_started)
+        restarted = self.restore_after_downtime(c, 1)
+        for target in (c, restarted):
+            result = replay(target, slots, soc=100.)
+            trace = energy_trace(NOW, slots, result.planned_battery_mode_windows,
+                                 initial=10., max_charge=2.5)
+            self.assertAlmostEqual(min(e for _, e, _ in trace), 7., delta=.005)
+            self.assertEqual(target._battery_cycle_discharge_floor_kwh, 5.)
+        self.assertEqual(c._discharge_session_started, restarted._discharge_session_started)
+
+    def test_direct_empty_to_full_reselects_floor_live_and_after_json_restart(self):
+        for next_refill in (False, True):
+            with self.subTest(next_refill=next_refill):
+                c = self.new(charging=True)
+                c._battery_cycle_discharge_floor_kwh = 0.
+                replay(c, scenario(charging=True), soc=20.)
+                self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+                self.assertTrue(c._charge_session_started)
+                restarted = self.restore_after_downtime(c, 24*60)
+                slots = scenario(count=24 if next_refill else 16, charging=True)
+                if next_refill:
+                    for row in slots[12:16]:
+                        row['import_price'] = .10
+                    for row in slots[16:]:
+                        row.update(demand_kwh=1., net_solar_kwh=-1.)
+                for target in (c, restarted):
+                    result = replay(target, slots, soc=100.)
+                    trace = energy_trace(NOW, slots, result.planned_battery_mode_windows,
+                                         initial=10., max_charge=2.5)
+                    self.assertEqual(target._battery_cycle_discharge_floor_kwh,
+                                     0. if next_refill else 5.)
+                    self.assertAlmostEqual(min(e for _, e, _ in trace),
+                                           2. if next_refill else 7., delta=.005)
+                    self.assertEqual(bool(result.planned_grid_charge_windows), next_refill)
+                self.assertEqual(c._discharge_session_started, restarted._discharge_session_started)
+
+    def test_fill_between_soc_samples_reselects_floor_live_and_after_json_restart(self):
+        for next_refill in (False, True):
+            for restart in (False, True):
+                with self.subTest(next_refill=next_refill, restart=restart):
+                    c = self.new(charging=True)
+                    slots = scenario(charging=True)
+                    previous = replay(c, slots, soc=20.)
+                    fill_end = max(datetime.fromisoformat(w['end'])
+                                   for w in previous.planned_grid_charge_windows)
+                    self.assertEqual(fill_end, NOW+timedelta(hours=3.2))
+                    first_discharge = next(datetime.fromisoformat(w['start'])
+                        for w in previous.planned_battery_mode_windows
+                        if w['mode'].startswith('ontladen'))
+                    self.assertEqual(first_discharge, NOW+timedelta(hours=4))
+                    self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+                    self.assertTrue(c._charge_session_started)
+                    if restart:
+                        c = self.restore_after_downtime(c, 300)
+                    if next_refill:
+                        slots = scenario(count=24, charging=True)
+                        for row in slots[12:16]:
+                            row['import_price'] = .10
+                        for row in slots[16:]:
+                            row.update(demand_kwh=1., net_solar_kwh=-1.)
+                    now = NOW+timedelta(hours=5)
+                    result = replay(c, slots, soc=90., now=now)
+                    trace = energy_trace(now, slots, result.planned_battery_mode_windows,
+                                         initial=9., max_charge=2.5)
+                    self.assertEqual(c._battery_cycle_discharge_floor_kwh,
+                                     0. if next_refill else 5.)
+                    self.assertAlmostEqual(min(e for _, e, _ in trace),
+                                           2. if next_refill else 7., delta=.005)
+                    self.assertEqual(bool(result.planned_grid_charge_windows), next_refill)
+                    self.assertFalse(c._charge_session_started)
+                    self.assertTrue(c._discharge_session_started)
 
     def test_grid_admission_rejects_stock_without_executable_discharge(self):
         c = self.new(charging=True)

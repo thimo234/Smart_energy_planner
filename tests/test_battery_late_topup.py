@@ -27,9 +27,9 @@ class LateTopupTest(unittest.TestCase):
         trace = energy_trace(now, slots, windows, initial=10., max_charge=2.5)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertLessEqual(max(e for t, e, _ in trace if start.isoformat() <= t <= end.isoformat()), 10.005)
-        # The admitted full cycle may now complete below reserve, including
-        # export, but only after physically reaching the configured maximum.
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)
+        # This refill ended the old full-depth permission. Without another
+        # executable full refill the new discharge stops at the higher reserve.
+        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         self.assertAlmostEqual(max(e for t, e, _ in trace if start.isoformat() <= t <= end.isoformat()), 10., delta=.005)
         imported = cost = used = value = 0.
         for w in windows:

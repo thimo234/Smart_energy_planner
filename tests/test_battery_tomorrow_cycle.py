@@ -49,9 +49,13 @@ class TomorrowCycleTest(unittest.TestCase):
                 self.assertTrue(preview)
                 self.assertEqual(preview[0]["start"], charge[-1]["end"])
                 self.assertTrue(any(w['mode'].startswith('ontladen') for w in preview))
-                # Skipped near-full candidates must not turn into an invented
-                # extra refill cycle later in the same sunny afternoon.
-                self.assertFalse(any(w["mode"].startswith("laden_") for w in preview))
+                # The successor can reach its higher reserve and admit another
+                # physical solar fill, but never a premature direction switch.
+                for window in preview:
+                    if window['mode'].startswith('laden_'):
+                        prior = [w for w in preview if w['end'] <= window['start']]
+                        energy = energy_trace(now, slots, prior, initial=10.)[-1][1]
+                        self.assertAlmostEqual(energy, 6., delta=.005)
 
     def test_cycle_boundary_ignores_pauses_and_charging_source_changes(self):
         modes = ["laden_met_zonne_energie", "accu_uit", "laden_van_net",
@@ -120,8 +124,8 @@ class TomorrowCycleTest(unittest.TestCase):
                 tomorrow = [w for w in windows if w["start"].startswith("2026-09-26")]
                 charge = [w for w in tomorrow if w["mode"] == "laden_met_zonne_energie"]
                 self.assertTrue(charge)
-                after_fill = [w for w in tomorrow if w['start'] >= charge[-1]['end']]
-                self.assertTrue(any(w['mode'] == 'ontladen' for w in after_fill))
+                after_fill = [w for w in tomorrow if w['start'] >= charge[0]['end']]
+                self.assertTrue(any(w['mode'].startswith('ontladen') for w in after_fill))
                 before = [w for w in windows if w["end"] <= charge[0]["start"]]
                 before_trace = energy_trace(now, slots, before, initial=soc / 10)
                 self.assertAlmostEqual(before_trace[-1][1], 2, delta=.05)
@@ -129,9 +133,8 @@ class TomorrowCycleTest(unittest.TestCase):
                 self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
                 self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
                 tomorrow_peak = max(e for t, e, _ in trace if t.startswith('2026-09-26'))
-                if soc == 100:
-                    gained = sum(energy_trace(now, slots, [w], initial=0)[-1][1] for w in charge)
-                    self.assertAlmostEqual(tomorrow_peak, 2 + gained, delta=.005)
+                # Later reserve-bound solar top-ups are separate fills, not
+                # extra capacity in the first refill.
                 self.assertAlmostEqual(tomorrow_peak, 10, delta=.005)
                 # Sunk stock uses any remaining executable high-price slot,
                 # not the historical eight-hour profitable-export interval.
@@ -140,4 +143,4 @@ class TomorrowCycleTest(unittest.TestCase):
                 for window in exports:
                     self.assertGreaterEqual(datetime.fromisoformat(window["start"]), now)
                     self.assertTrue(window['end'] <= charge[0]['start']
-                                    or window['start'] >= charge[-1]['end'])
+                                    or window['start'] >= charge[0]['end'])

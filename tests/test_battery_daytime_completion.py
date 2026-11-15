@@ -157,7 +157,7 @@ class DaytimeCompletionTest(unittest.TestCase):
         preview = result.estimated_battery_mode_windows
         solar = [w for w in preview if w['mode'] == 'laden_met_zonne_energie']
         grid = [w for w in preview if w['mode'] == 'laden_van_net']
-        self.assertFalse(solar, 'unfinished discharge blocks tomorrow refill')
+        self.assertTrue(solar, 'new-cycle reserve can complete before solar refill')
         self.assertFalse(grid)
         # Partial opportunities do not require a completion at an exact tariff boundary.
         self.assertTrue(all(w['start'] >= solar[0]['start'] for w in grid))
@@ -170,7 +170,9 @@ class DaytimeCompletionTest(unittest.TestCase):
         tomorrow = [(t, e) for t, e, _ in trace if t.startswith('2026-10-06')]
         # Full-cycle loss completion may cross reserve before midnight; it
         # need not begin tomorrow at exactly the historical reserve floor.
-        self.assertLessEqual(max(e for _, e in tomorrow), 6.005)
+        from bound_cycle_assertions import assert_bound_plan
+        assert_bound_plan(self, now, slots, windows, initial=9.2, floor=6., charging=True)
+        self.assertLessEqual(max(e for _, e in tomorrow), 10.005)
         self.assertGreaterEqual(min(e for _, e in tomorrow), 1.995)
 
     def test_forecast_drop_updates_and_restart_complete_real_commands(self):
