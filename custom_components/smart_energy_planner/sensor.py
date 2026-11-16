@@ -348,6 +348,8 @@ class DemandForecastSensor(PlannerSensor):
                     forecast_generated_at=data.forecast_generated_at if ready else None,
                     estimated_hourly_home_demand=data.estimated_hourly_home_demand if ready else [],
                     demand_components=data.demand_components if ready else {},
+                    demand_accuracy=getattr(data, 'demand_accuracy', None) if ready else {},
+                    demand_weather_sources=getattr(data, 'demand_weather_sources', None),
                     source_status=data.source_status, source_errors=data.source_errors)
 
 

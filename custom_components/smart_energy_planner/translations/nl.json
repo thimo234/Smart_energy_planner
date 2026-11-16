@@ -13,6 +13,8 @@
           "price_sensor": "Energieprijs sensor",
           "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
+          "weather_entity": "Weersverwachting (optioneel, per uur)",
+          "outdoor_temperature_sensor": "Historische buitentemperatuur (optioneel)",
           "total_energy_sensor": "Totale energieverbruik sensor",
           "planner_name": "Naam",
           "solcast_tomorrow_sensor": "Solcast-zonvoorspelling voor morgen",
@@ -30,6 +32,8 @@
           "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "battery_soc_sensor": "Accu laadstatus sensor",
+          "weather_entity": "Weersverwachting (optioneel, per uur)",
+          "outdoor_temperature_sensor": "Historische buitentemperatuur (optioneel)",
           "total_energy_sensor": "Totale energieverbruik sensor",
           "price_resolution": "Prijsinterval energiecontract",
           "price_window_type": "Type prijsvenster",
@@ -64,17 +68,18 @@
       },
       "device": {
         "title": "Apparaatverbruik",
-        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
         "data": {
           "timing": "Startwijze"
         }
       },
       "device_schedule": {
         "title": "Apparaatverbruik",
-        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
         "data": {
           "start_time": "Vaste starttijd",
           "offset_hours": "Uren na begin goedkoopste blok",
+          "shiftable_fraction": "Prijsresponsief aandeel (0 = klokprofiel, 1 = volledige verschuiving)",
           "weekdays": "Actieve weekdagen"
         }
       }
@@ -100,6 +105,8 @@
           "export_price_sensor": "Terugleverprijs sensor",
           "solcast_today_sensor": "Solcast zonneverwachting voor vandaag",
           "battery_soc_sensor": "Accu laadstatus sensor",
+          "weather_entity": "Weersverwachting (optioneel, per uur)",
+          "outdoor_temperature_sensor": "Historische buitentemperatuur (optioneel)",
           "total_energy_sensor": "Totale energieverbruik sensor",
           "price_resolution": "Prijsinterval energiecontract",
           "price_window_type": "Type prijsvenster",
@@ -135,17 +142,18 @@
       },
       "device": {
         "title": "Apparaatverbruik",
-        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
         "data": {
           "timing": "Startwijze"
         }
       },
       "device_schedule": {
         "title": "Apparaatverbruik",
-        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+        "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
         "data": {
           "start_time": "Vaste starttijd",
           "offset_hours": "Uren na begin goedkoopste blok",
+          "shiftable_fraction": "Prijsresponsief aandeel (0 = klokprofiel, 1 = volledige verschuiving)",
           "weekdays": "Actieve weekdagen"
         }
       }
@@ -216,17 +224,18 @@
         },
         "device": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "timing": "Startwijze"
           }
         },
         "device_schedule": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "start_time": "Vaste starttijd",
             "offset_hours": "Uren na begin goedkoopste blok",
+          "shiftable_fraction": "Prijsresponsief aandeel (0 = klokprofiel, 1 = volledige verschuiving)",
             "weekdays": "Actieve weekdagen"
           }
         }
@@ -310,17 +319,18 @@
         },
         "device": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "timing": "Startwijze"
           }
         },
         "device_schedule": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "start_time": "Vaste starttijd",
             "offset_hours": "Uren na begin goedkoopste blok",
+          "shiftable_fraction": "Prijsresponsief aandeel (0 = klokprofiel, 1 = volledige verschuiving)",
             "weekdays": "Actieve weekdagen"
           }
         }
@@ -394,17 +404,18 @@
         },
         "device": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "timing": "Startwijze"
           }
         },
         "device_schedule": {
           "title": "Apparaatverbruik",
-          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten.",
+          "description": "Instellingen voor {entity}. Energie en duur worden uit de historie geleerd. Een vaste start of prijsblok verplaatst het geleerde profiel; dit schakelt geen apparaten. Kies voor continue verwarming een prijsresponsief aandeel onder 1 om de overige klokgebonden basis te behouden; 0 schakelt verschuiving uit. Dit aandeel is ingesteld, niet uit actuele prijzen afgeleid.",
           "data": {
             "start_time": "Vaste starttijd",
             "offset_hours": "Uren na begin goedkoopste blok",
+          "shiftable_fraction": "Prijsresponsief aandeel (0 = klokprofiel, 1 = volledige verschuiving)",
             "weekdays": "Actieve weekdagen"
           }
         }

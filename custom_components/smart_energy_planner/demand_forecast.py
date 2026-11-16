@@ -100,7 +100,17 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
     A scheduled device's first sustained active hour is the historical anchor.
     Standby stays at its clock time; the mean excess curve moves with the anchor.
     This is an estimate from hourly energy, not cycle detection or device control.
+    A cheap rule with shiftable_fraction < 1 retains a learned clock-time base
+    and shifts only that configured share of excess, conserving each day's energy.
+    The split is not a learned causal price response without archived prices.
     """
+    timing = rule.get('timing', 'learned')
+    try:
+        fraction = float(rule.get('shiftable_fraction', 1)) if timing == 'cheap' else 1.0
+        if not math.isfinite(fraction) or not 0 <= fraction <= 1:
+            raise ValueError
+    except (TypeError, ValueError) as err:
+        raise ValueError('invalid_shiftable_fraction') from err
     history = _days(hours, now.tzinfo)
     if len(history) < 2:
         raise ValueError(f'insufficient_history: {len(history)} complete days from {len(hours)} hourly values; at least 2 complete days required')
@@ -126,6 +136,7 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
     # Include yesterday's scheduled tail when it crosses midnight.
     for offset in range(-1, days):
         day_start = start+timedelta(days=offset)
+        day_end = day_start+timedelta(days=1)
         samples = _samples(history, day_start.date())
         if not samples:
             raise ValueError('insufficient_history')
@@ -149,6 +160,27 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
             clock_profile = [min(v) for v in samples]
             clock_profile = [fmean(clock_profile)]*24
             anchor = None
+        if fraction < 1:
+            # A mixed continuous load is not an appliance cycle. Keep its learned
+            # clock-time heating base (not merely its minimum/standby draw).
+            # The fraction is explicit configuration, NOT inferred price causality:
+            # current/future prices cannot identify historical price response.
+            if offset < 0:
+                continue
+            day_end = day_start + timedelta(days=1)
+            seconds = day_end.timestamp() - day_start.timestamp()
+            if seconds != 86400:
+                anchor = None
+                warnings.append(f'{day_start.date()}: mixed_schedule_dst_clock_fallback')
+            if anchor is None or fraction == 0:
+                for h, value in enumerate(clock_profile):
+                    a = day_start + timedelta(hours=h)
+                    distribute(a, a + timedelta(hours=1), value)
+                continue
+            warnings.append(f'{day_start.date()}: configured_price_response; shiftable_fraction={fraction:g}; historical_price_response_not_fitted')
+            for h, value in enumerate(clock_profile):
+                a = day_start + timedelta(hours=h)
+                distribute(a, a + timedelta(hours=1), (1-fraction)*value)
         if anchor is None:
             if offset >= 0:
                 for h, value in enumerate(clock_profile):
@@ -170,15 +202,28 @@ def component_forecast(hours, rule, *, now, prices, days=3, duration=5, whole_ho
         if offset >= 0:
             for h in range(24):
                 a = day_start+timedelta(hours=h)
-                distribute(a, a+timedelta(hours=1), base)
+                distribute(a, a+timedelta(hours=1), base*fraction)
         for h, value in enumerate(shape):
             a = anchor+timedelta(hours=h)
-            distribute(a, a+timedelta(hours=1), value)
+            if fraction < 1:
+                # Wrap only the responsive portion inside this forecast day.
+                # Fractional offsets keep exact quarter-hour overlap and energy;
+                # no borrowed tail from a day with a different learned total.
+                utc_start = day_start.astimezone(timezone.utc)
+                a = utc_start + timedelta(seconds=(a.timestamp()-utc_start.timestamp()) % 86400)
+                b = a + timedelta(hours=1)
+                end = day_end.astimezone(timezone.utc)
+                distribute(a, min(b, end), value*fraction*min(1, (end-a).total_seconds()/3600))
+                if b > end:
+                    distribute(utc_start, utc_start+(b-end), value*fraction*(b-end).total_seconds()/3600)
+            else:
+                distribute(a, a+timedelta(hours=1), value)
     return result, warnings
 
 
 def build_demand_forecast(histories, devices, *, total_entity, now, prices,
-                         duration=5, whole_hour=True, hourly_statistics=None):
+                         duration=5, whole_hour=True, hourly_statistics=None,
+                         temperature_history=None, temperature_forecast=None, diagnostics=None):
     ids = [r['entity_id'] for r in devices]
     if len(ids) != len(set(ids)) or total_entity in ids:
         raise ValueError('duplicate_energy_source')
@@ -233,6 +278,12 @@ def build_demand_forecast(histories, devices, *, total_entity, now, prices,
                                                 duration=duration, whole_hour=whole_hour)
         except ValueError as err:
             raise ValueError(f'{entity}: {err}') from err
+        if diagnostics is not None:
+            from .demand_weather import correct_component
+            profile, diagnostics[entity] = correct_component(
+                profile, hours[entity], temperature_history or {},
+                temperature_forecast or {},
+                {**rule, 'intraday_allowed': entity in ('remaining_home', total_entity)}, now=now)
         components[entity] = profile
         warnings[entity] = notes
         for t, value in profile.items():

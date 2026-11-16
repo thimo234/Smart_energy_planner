@@ -38,7 +38,7 @@ _CONFIG_DEFAULTS = {
 _SOURCE_KEYS = (
     'price_sensor', 'export_price_sensor', 'solcast_today_sensor',
     'solcast_tomorrow_sensor', 'total_energy_sensor', 'battery_soc_sensor',
-    'demand_forecast_sensor',
+    'demand_forecast_sensor', 'weather_entity', 'outdoor_temperature_sensor',
 )
 _CYCLE_KEYS = (
     'charge_session_started', 'discharge_session_started', 'initialized',

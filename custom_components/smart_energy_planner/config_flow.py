@@ -31,6 +31,15 @@ def _build_household_schema(hass, data=None):
             current = (data or {}).get(key)
             marker = vol.Optional(key, **({'default': current} if current else {}))
         fields[marker] = value
+    for key, domain, device_class in (
+            ('weather_entity', 'weather', None),
+            ('outdoor_temperature_sensor', 'sensor', 'temperature')):
+        current = (data or {}).get(key)
+        filters = {'domain': domain}
+        if device_class:
+            filters['device_class'] = device_class
+        fields[vol.Optional(key, **({'default': current} if current else {}))] = selector.EntitySelector(
+            selector.EntitySelectorConfig(**filters))
     return vol.Schema(fields)
 
 
@@ -511,7 +520,8 @@ class DemandDeviceFlow:
                 rule = dict(timing=timing, start_time=user_input['start_time'],
                             weekdays=[int(d) for d in user_input['weekdays']])
             else:
-                rule = dict(timing=timing, offset_hours=user_input['offset_hours'])
+                rule = dict(timing=timing, offset_hours=user_input['offset_hours'],
+                            shiftable_fraction=user_input.get('shiftable_fraction', 1))
             return await self._save_demand_device(rule)
         entity = self._demand_queue[0]
         defaults = next((r for r in self._demand_data.get(CONF_DEMAND_DEVICES, [])
@@ -525,6 +535,8 @@ class DemandDeviceFlow:
         else:
             fields[vol.Required('offset_hours', default=defaults.get('offset_hours', 0))] = selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=23, step=.25, mode=selector.NumberSelectorMode.BOX))
+            fields[vol.Required('shiftable_fraction', default=defaults.get('shiftable_fraction', 1))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=1, step=.05, mode=selector.NumberSelectorMode.BOX))
         return self.async_show_form(step_id='device_schedule', data_schema=vol.Schema(fields),
                                    description_placeholders={'entity': entity})
 

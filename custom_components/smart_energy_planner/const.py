@@ -14,6 +14,7 @@ PLANNER_KIND_HOUSEHOLD = "household"
 SHARED_SOURCE_KEYS = frozenset({
     "price_sensor", "export_price_sensor", "export_price_tax_deduction",
     "solcast_today_sensor", "solcast_tomorrow_sensor", "total_energy_sensor",
+    "weather_entity", "outdoor_temperature_sensor",
 })
 CONF_PLANNER_NAME = "planner_name"
 CONF_PLANNER_KIND = "planner_kind"
@@ -24,6 +25,8 @@ DEFAULT_EXPORT_PRICE_TAX_DEDUCTION = 0.11
 CONF_SOLCAST_TODAY_SENSOR = "solcast_today_sensor"
 CONF_SOLCAST_TOMORROW_SENSOR = "solcast_tomorrow_sensor"
 CONF_TOTAL_ENERGY_SENSOR = "total_energy_sensor"
+CONF_WEATHER_ENTITY = "weather_entity"
+CONF_OUTDOOR_TEMPERATURE_SENSOR = "outdoor_temperature_sensor"
 CONF_PRICE_RESOLUTION = "price_resolution"
 CONF_PRICE_WINDOW_TYPE = "price_window_type"
 CONF_PRICE_WINDOW_DURATION_HOURS = "price_window_duration_hours"

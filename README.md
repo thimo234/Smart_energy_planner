@@ -32,6 +32,94 @@ From this household, add one or more config subentries:
 
 Shared sources are inherited and do not appear again in the child forms. Changing household sources reloads its planners. An unavailable child does not prevent healthy siblings from starting. This is shared configuration and source acquisition, not a new joint optimizer or automatic switching of physical appliances. Consumption device rules remain under the consumption-forecast subentry; they are not standalone appliance controllers.
 
+### Mixed heating and price response
+
+A heat pump can run during normal/expensive hours as well as cheap hours. In the
+consumption-forecast subentry's **Reconfigure** flow, choose its energy meter,
+select **Start relative to cheapest block**, then set **Price-responsive fraction**
+(`shiftable_fraction`) between 0 and 1. This is per device, not a hardcoded heat-pump
+entity. Use 0 to retain the learned clock-time heating profile; use a value below
+1 only when a partial price response is known. For example, 0.25 retains at least
+75% of every learned quarter-hour's heating demand at its clock time and moves
+only 25% of the learned above-standby curve. Standby itself remains at clock time.
+The example is an assumption, not a recommended or measured fraction.
+
+The background shape, standby, excess curve and daily energy are learned from
+completed consumption days. The split is **explicit configuration**, not an
+inference from today's prices: the captured dataset has no archived historical
+prices with which to validate a causal price-response fraction. Schedule notes
+report `configured_price_response` and `historical_price_response_not_fitted`.
+Without a known split, choose **Learn clock time and weekly routine** or fraction
+0 rather than assuming all heating can move to cheap hours.
+
+For a partial response, the shifted excess wraps within the same day, conserving
+daily energy even with fractional offsets and midnight crossings. Missing prices
+and DST-transition days fall back to the learned clock profile. Weather correction
+scales the **whole mixed profile uniformly per day**, preserving normal/expensive
+hour heating and the mix; it never moves the base to cheap hours. This structural
+conservation is regression-tested, not a claim of live intraday prediction accuracy.
+The default fraction is 1 for backward compatibility with existing full-cycle
+schedules; fixed starts and existing non-heating schedules are unchanged. No live
+configuration or device control is changed automatically.
+
+### Optional weather-aware consumption forecasts
+
+The household form also accepts **Weather forecast (optional, hourly)** and
+**Outdoor temperature history (optional)**. Select your own weather entity and
+outdoor temperature sensor; neither has a default. Weather must support Home
+Assistant's hourly `weather.get_forecasts` read API. Temperature history is read
+from Recorder states and hourly mean statistics, including older observations
+after detailed state history has been purged; the current sensor value is never
+substituted for missing completed history. Completed observations take precedence
+over overlapping provider forecasts. For the **current hour only**, a valid
+current outdoor sensor reading (or the weather entity's current temperature)
+can supply an explicit Celsius daily-mean proxy; it is never added to training
+history or used to fill arbitrary past gaps. `demand_weather_sources.current_hour`
+identifies that input; without it, current-hour provider coverage is used.
+Celsius and Fahrenheit are supported. No appliances are switched, no entities
+are configured automatically, and battery policies are unchanged.
+
+Consumption forecasts continue working without either source. Historical
+completed-day component consumption is compared with same-day outdoor
+temperature. A bounded heating-degree correction is enabled **per component**
+only after at least 14 earlier complete training days, seven chronological
+held-out predictions, positive heating sensitivity, and held-out MAE reduced by
+more than 10% and 0.05 kWh against the historical baseline. This does not multiply
+all appliances by a household-wide temperature factor: a temperature-independent
+dishwasher keeps
+its own learned/scheduled forecast. Fixed/cheap-start components retain their
+schedule; only a validated component's daily energy changes, by at most 50%.
+Days with missing temperature coverage (including incomplete future forecasts)
+use the existing component forecast, never zero demand. DST transition days are
+excluded from the 24-hour daily fit rather than compressed or duplicated.
+
+A separate intraday adjustment uses at least three **completed** observed hours,
+with at least 0.3 kWh of expected consumption. It adjusts only future hours today,
+by at most 20%, only for the aggregate/unassigned learned household component;
+it does not rescale individually scheduled appliances. Recorder energy and
+temperature caches refresh on each completed-hour boundary.
+
+The demand sensor exposes `demand_weather_sources` and per-component
+`demand_accuracy`: source availability, training/validation counts, baseline and
+candidate MAE, signed bias, WAPE, activation/fallback reason, and intraday factor.
+`temperature_model_status=validated` means the historical gate passed, not that
+every forecast day was corrected. `temperature_days` reports each day's actual
+activation or fallback; overall `temperature_status` is `active`,
+`partially_active`, or `missing_forecast_coverage` after validation, and
+`forecast_days_corrected` counts the days actually scaled. Configured optional
+source failures appear in normal `source_status` / `source_errors` as
+`ready_with_warnings`; the underlying consumption forecast remains usable.
+`baseline_history` remains available without weather when energy history permits.
+The validation uses only earlier days to predict each later day. Temperature
+validation uses **historical observed temperatures**, not archived weather
+forecasts: it measures a component relationship, not end-to-end forecast-provider
+accuracy. The intraday adjustment is bounded but is not included in these daily
+validation scores. No accuracy improvement on your installation is claimed until
+its own sufficiently covered history passes these gates. See the
+[offline captured-data validation](docs/weather-demand-validation.md) for measured
+component errors and the limits of those results.
+
+
 Existing price-window subentries within the same household are consolidated during setup, preserving planner identities, entity IDs, device links, individual schedules and stored runtime. Standalone entries are not silently adopted. Removing a planner in the group asks for confirmation and only cleans up that planner's entities/devices on reload; other members and historical runtime remain. Home Assistant's delete action for the entire shared subentry deletes the whole group. See [household architecture and verification](docs/household-configuration-verification.md) for migration/retry details and offline-test limitations.
 
 ### Adopt an existing planner without losing its identity

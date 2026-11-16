@@ -175,6 +175,16 @@ class DiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(by_subentry['failed-child']['coordinator_available'])
         self.assertIsNone(by_subentry['failed-child']['runtime_state'])
 
+    async def test_optional_weather_source_presence_is_redacted(self):
+        for weather, sensor in [('weather.private', {'entity_id':'sensor.private'}), (None, None)]:
+            old = entry('demand', 'demand', weather_entity=weather,
+                        outdoor_temperature_sensor=sensor)
+            result = await async_get_config_entry_diagnostics(NS(data={}), old)
+            config = result['planners'][0]['effective_config']
+            self.assertEqual(config['weather_entity'], '**REDACTED**' if weather else None)
+            self.assertEqual(config['outdoor_temperature_sensor'], '**REDACTED**' if sensor else None)
+            self.assertNotIn('private', json.dumps(result))
+
     async def test_missing_data_is_read_only(self):
         hass, old = NS(data={}), entry('legacy', 'battery')
         report = await async_get_config_entry_diagnostics(hass, old)

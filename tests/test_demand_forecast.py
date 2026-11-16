@@ -78,6 +78,64 @@ class DemandForecastTest(unittest.TestCase):
         for i, row in enumerate(forecast):
             self.assertAlmostEqual(row['estimated_kwh'], sum(v[i]['estimated_kwh'] for v in components.values()), places=5)
 
+    def test_partial_price_response_preserves_clock_base_and_daily_energy(self):
+        now, histories, prices, _ = fixtures()
+        hours = meter_hours(histories['pump'], now=now)
+        # Continuous heating with a daytime peak; cheap hours move to late night.
+        hours = {t: v + .4 + (.3 if t.hour == 7 else 0) for t, v in hours.items()}
+        prices = [PlannerWindow(now+timedelta(hours=i), now+timedelta(hours=i+1),
+                  .1 if i % 24 >= 21 else .4) for i in range(72)]
+        clock, _ = component_forecast(hours, {}, now=now, prices=prices)
+        mixed, notes = component_forecast(hours, dict(timing='cheap', offset_hours=2.25,
+            shiftable_fraction=.25), now=now, prices=prices)
+        self.assertNotEqual(clock, mixed)
+        for at, value in clock.items():
+            self.assertGreaterEqual(mixed[at] + 1e-12, .75*value)
+        for day in range(3):
+            ticks = [t for t in clock if t.astimezone(now.tzinfo).date() == (now+timedelta(days=day)).date()]
+            self.assertAlmostEqual(sum(mixed[t] for t in ticks), sum(clock[t] for t in ticks))
+        self.assertTrue(any('configured_price_response' in note for note in notes))
+
+    def test_partial_price_response_zero_missing_prices_and_legacy_defaults(self):
+        now, histories, prices, _ = fixtures()
+        hours = meter_hours(histories['pump'], now=now)
+        clock, _ = component_forecast(hours, {}, now=now, prices=prices)
+        for fraction in (0, .35):
+            actual, _ = component_forecast(hours, dict(timing='cheap', shiftable_fraction=fraction),
+                                           now=now, prices=[])
+            self.assertEqual(actual, clock)
+        zero, _ = component_forecast(hours, dict(timing='cheap', shiftable_fraction=0), now=now, prices=prices)
+        self.assertEqual(zero, clock)
+        legacy, _ = component_forecast(hours, dict(timing='cheap', offset_hours=2), now=now, prices=prices)
+        full, _ = component_forecast(hours, dict(timing='cheap', offset_hours=2, shiftable_fraction=1), now=now, prices=prices)
+        self.assertEqual(legacy, full)
+
+    def test_partial_price_response_dst_uses_unmodified_clock_fallback(self):
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo('Europe/Amsterdam')
+        now = datetime(2026, 10, 25, tzinfo=zone)
+        _, histories, _, _ = fixtures()
+        hours = meter_hours(histories['pump'], now=datetime(2026, 10, 18, tzinfo=timezone.utc))
+        # Shift the fixture's completed history to directly precede the DST day.
+        hours = {t+timedelta(days=7): v+.2 for t, v in hours.items()}
+        utc = now.astimezone(timezone.utc)
+        prices = [PlannerWindow(utc+timedelta(hours=i), utc+timedelta(hours=i+1),
+                               .1 if i % 24 >= 20 else .4) for i in range(75)]
+        clock, _ = component_forecast(hours, {}, now=now, prices=prices)
+        mixed, notes = component_forecast(hours, dict(timing='cheap', shiftable_fraction=.3),
+                                         now=now, prices=prices)
+        self.assertTrue(any('mixed_schedule_dst_clock_fallback' in note for note in notes))
+        for at in clock:
+            if at.astimezone(zone).date() == now.date():
+                self.assertEqual(mixed[at], clock[at])
+
+    def test_invalid_partial_price_response_is_rejected(self):
+        now, histories, prices, _ = fixtures()
+        hours = meter_hours(histories['pump'], now=now)
+        for value in (-.1, 1.1, float('nan'), float('inf'), None, 'invalid'):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'invalid_shiftable_fraction'):
+                component_forecast(hours, dict(timing='cheap', shiftable_fraction=value), now=now, prices=prices)
+
     def test_duplicate_or_overlapping_sources_rejected(self):
         now, histories, prices, devices = fixtures()
         for bad in (devices+[devices[0]], devices+[dict(entity_id='house')]):

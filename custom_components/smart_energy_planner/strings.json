@@ -13,6 +13,8 @@
           "price_sensor": "Energy price sensor",
           "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
+          "weather_entity": "Weather forecast (optional, hourly)",
+          "outdoor_temperature_sensor": "Outdoor temperature history (optional)",
           "total_energy_sensor": "Total home energy sensor",
           "planner_name": "Name",
           "solcast_tomorrow_sensor": "Solcast solar forecast for tomorrow",
@@ -30,6 +32,8 @@
           "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "battery_soc_sensor": "Battery state of charge sensor",
+          "weather_entity": "Weather forecast (optional, hourly)",
+          "outdoor_temperature_sensor": "Outdoor temperature history (optional)",
           "total_energy_sensor": "Total home energy sensor",
           "price_resolution": "Energy contract price interval",
           "price_window_type": "Price window type",
@@ -63,17 +67,18 @@
       },
       "device": {
         "title": "Appliance consumption",
-        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
         "data": {
           "timing": "Timing"
         }
       },
       "device_schedule": {
         "title": "Appliance consumption",
-        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
         "data": {
           "start_time": "Fixed start time",
           "offset_hours": "Hours after cheapest block starts",
+          "shiftable_fraction": "Price-responsive fraction (0 = clock profile, 1 = full shift)",
           "weekdays": "Active weekdays"
         }
       }
@@ -99,6 +104,8 @@
           "export_price_sensor": "Export price sensor",
           "solcast_today_sensor": "Solcast solar forecast for today",
           "battery_soc_sensor": "Battery state of charge sensor",
+          "weather_entity": "Weather forecast (optional, hourly)",
+          "outdoor_temperature_sensor": "Outdoor temperature history (optional)",
           "total_energy_sensor": "Total home energy sensor",
           "price_resolution": "Energy contract price interval",
           "price_window_type": "Price window type",
@@ -133,17 +140,18 @@
       },
       "device": {
         "title": "Appliance consumption",
-        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
         "data": {
           "timing": "Timing"
         }
       },
       "device_schedule": {
         "title": "Appliance consumption",
-        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+        "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
         "data": {
           "start_time": "Fixed start time",
           "offset_hours": "Hours after cheapest block starts",
+          "shiftable_fraction": "Price-responsive fraction (0 = clock profile, 1 = full shift)",
           "weekdays": "Active weekdays"
         }
       }
@@ -213,17 +221,18 @@
         },
         "device": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "timing": "Timing"
           }
         },
         "device_schedule": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "start_time": "Fixed start time",
             "offset_hours": "Hours after cheapest block starts",
+          "shiftable_fraction": "Price-responsive fraction (0 = clock profile, 1 = full shift)",
             "weekdays": "Active weekdays"
           }
         }
@@ -306,17 +315,18 @@
         },
         "device": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "timing": "Timing"
           }
         },
         "device_schedule": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "start_time": "Fixed start time",
             "offset_hours": "Hours after cheapest block starts",
+          "shiftable_fraction": "Price-responsive fraction (0 = clock profile, 1 = full shift)",
             "weekdays": "Active weekdays"
           }
         }
@@ -389,17 +399,18 @@
         },
         "device": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "timing": "Timing"
           }
         },
         "device_schedule": {
           "title": "Appliance consumption",
-          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices.",
+          "description": "Settings for {entity}. Energy and duration are learned from history. A fixed start or price block moves the learned profile; this does not control devices. For continuous heating, set a price-responsive fraction below 1 to keep the remaining clock-time base; 0 disables shifting. The fraction is configured, not inferred from current prices.",
           "data": {
             "start_time": "Fixed start time",
             "offset_hours": "Hours after cheapest block starts",
+          "shiftable_fraction": "Price-responsive fraction (0 = clock profile, 1 = full shift)",
             "weekdays": "Active weekdays"
           }
         }

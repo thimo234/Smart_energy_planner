@@ -9,7 +9,7 @@ from test_planner_types import load_function
 class DemandConfigTest(unittest.IsolatedAsyncioTestCase):
     def make_flow(self, data):
         marker = lambda key, **kw: key
-        factory = lambda *args, **kw: kw
+        factory = lambda *args, **kw: args[0] if args else kw
         vol = SimpleNamespace(Required=marker, Schema=lambda obj: obj)
         selector = SimpleNamespace(SelectSelector=factory, SelectSelectorConfig=factory,
             SelectOptionDict=factory, SelectSelectorMode=SimpleNamespace(DROPDOWN='dropdown'),
@@ -34,13 +34,24 @@ class DemandConfigTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(form['description_placeholders']['entity'],'dish')
         self.assertEqual(set(form['data_schema']), {'timing'})
         form = await flow.async_step_device(dict(timing='cheap'))
-        self.assertEqual(set(form['data_schema']), {'offset_hours'})
+        self.assertEqual(set(form['data_schema']), {'offset_hours', 'shiftable_fraction'})
         form = await flow.async_step_device_schedule(dict(offset_hours=0))
         self.assertEqual(form['description_placeholders']['entity'],'pump')
         await flow.async_step_device(dict(timing='cheap'))
         saved = await flow.async_step_device_schedule(dict(offset_hours=2))
         self.assertEqual([r['offset_hours'] for r in saved['demand_devices']],[0,2])
         self.assertNotIn('weekdays', saved['demand_devices'][1])
+
+    async def test_partial_price_response_is_saved_per_device_and_preserved_as_default(self):
+        flow, start = self.make_flow(dict(demand_energy_sensors=['pump'], price_sensor='prices',
+            demand_devices=[dict(entity_id='pump', timing='cheap', shiftable_fraction=.3)]))
+        await start()
+        form = await flow.async_step_device(dict(timing='cheap'))
+        self.assertEqual(form['data_schema']['shiftable_fraction']['min'], 0)
+        self.assertEqual(form['data_schema']['shiftable_fraction']['max'], 1)
+        saved = await flow.async_step_device_schedule(dict(offset_hours=2, shiftable_fraction=.3))
+        self.assertEqual(saved['demand_devices'][0]['shiftable_fraction'], .3)
+        self.assertEqual(saved['demand_devices'][0]['entity_id'], 'pump')
 
     async def test_fixed_fields_and_switch_to_learned_remove_stale_rules(self):
         flow, start = self.make_flow(dict(demand_energy_sensors=['cook'],
@@ -85,11 +96,27 @@ class DemandConfigTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['errors']['base'],'unsupported_energy_meter')
                 self.assertEqual(result['step_id'],finish)
 
+    def test_household_optional_weather_selectors_without_global_defaults(self):
+        from test_support import install_package_stub
+        install_package_stub()
+        from custom_components.smart_energy_planner.const import SHARED_SOURCE_KEYS
+        self.assertTrue({'weather_entity','outdoor_temperature_sensor'} <= SHARED_SOURCE_KEYS)
+        class Marker:
+            def __init__(self,key,**kwargs):
+                self.schema,self.kwargs=key,kwargs
+        vol=SimpleNamespace(Optional=Marker,Schema=lambda fields:SimpleNamespace(schema=fields))
+        selector=SimpleNamespace(EntitySelector=lambda config:config,EntitySelectorConfig=lambda **kwargs:kwargs)
+        build=load_function('config_flow.py','_build_household_schema',vol=vol,selector=selector,
+            _build_battery_schema=lambda hass,data:SimpleNamespace(schema={}))
+        result=build(None).schema
+        self.assertEqual({m.schema for m in result},{'weather_entity','outdoor_temperature_sensor'})
+        self.assertTrue(all('default' not in m.kwargs for m in result))
+
     def test_meter_filter_accepts_supplied_meters_and_rejects_wrong_semantics(self):
         states=[]
         for entity,unit,kind,value in [
-            ('sensor.buiten_kerstboom_opsomming_afgeleverd','kWh','total_increasing','72.68'),
-            ('sensor.warmtepomp_verbruik_energie','kWh','total_increasing','2720.77'),
+            ('sensor.example_outdoor_lights_energy','kWh','total_increasing','70'),
+            ('sensor.example_heat_pump_energy','kWh','total_increasing','2700'),
             ('sensor.wh','Wh','total','123'),
             ('sensor.power','W','measurement','100'),
             ('sensor.forecast','kWh',None,'10'),

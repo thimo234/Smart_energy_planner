@@ -39,6 +39,10 @@ def demand_plan(*, inconsistent_meters=False):
 class DemandIntegrationTest(unittest.TestCase):
     def setUp(self):
         # A real registry always implements both async_get entry points.
+        # Keep this module runnable independently of test_sensor's HA stubs.
+        import types
+        sys.modules.setdefault('homeassistant.helpers.entity_registry',
+                               types.ModuleType('homeassistant.helpers.entity_registry'))
         from homeassistant.helpers import entity_registry
         registry = SimpleNamespace(async_get=lambda entity_id: None)
         lookup = patch.object(entity_registry, 'async_get', return_value=registry, create=True)
@@ -135,6 +139,147 @@ class DemandIntegrationTest(unittest.TestCase):
         self.assertEqual(result.status, 'waiting_for_demand_forecast')
         self.assertFalse(result.planned_battery_mode_windows)
         self.assertTrue(any('forecast_unavailable' in e for e in result.source_errors))
+
+    def test_recorder_refreshes_on_completed_hour_boundary(self):
+        now,histories,_,devices=fixtures()
+        now=now+timedelta(minutes=50)
+        c=coordinator()
+        c.config_entry=SimpleNamespace(data={'demand_devices':devices,'total_energy_sensor':'house'},options={})
+        c.hass=SimpleNamespace(states=SimpleNamespace(get=lambda entity:histories[entity][-1]))
+        async def load(job):
+            return job()
+        with patch.object(demand_coordinator,'get_instance',return_value=SimpleNamespace(async_add_executor_job=load)), \
+             patch.object(demand_coordinator,'load_hourly_statistics',return_value={}), \
+             patch.object(demand_coordinator.history,'get_significant_states',return_value=histories,create=True) as query:
+            asyncio.run(async_demand_result(c,now))
+            asyncio.run(async_demand_result(c,now+timedelta(minutes=15)))
+            self.assertEqual(query.call_count,2)
+
+    def test_completed_observations_override_overlapping_provider_forecast(self):
+        now = fixtures()[0].replace(hour=10, minute=30)
+        start = now.replace(hour=0, minute=0)
+        observed = {start+timedelta(hours=h): 5 for h in range(10)}
+        c = coordinator()
+        c.config_entry = SimpleNamespace(data={'weather_entity':'weather.test',
+            'outdoor_temperature_sensor':'sensor.temp'}, options={})
+        states = {'weather.test':SimpleNamespace(state='sunny', attributes={
+            'supported_features':2, 'temperature_unit':'°C', 'temperature':8}),
+            'sensor.temp':SimpleNamespace(state='50', attributes={'unit_of_measurement':'°F'})}
+        service = AsyncMock(return_value={'weather.test':{'forecast':[
+            {'datetime':(start+timedelta(hours=h)).isoformat(),'temperature':20}
+            for h in range(24) if h != 10]}})
+        c.hass = SimpleNamespace(states=SimpleNamespace(get=states.get),
+                                 services=SimpleNamespace(async_call=service))
+        c._demand_temperature_cache = ('sensor.temp', int(now.timestamp()//3600), observed)
+        history, combined, sources = asyncio.run(demand_coordinator.async_weather_inputs(c,now))
+        self.assertEqual(history, observed)
+        self.assertEqual(combined[start], 5)
+        self.assertEqual(combined[start+timedelta(hours=10)], 10)
+        self.assertEqual(len(combined), 24)
+        self.assertNotIn(start+timedelta(hours=10), history)
+        self.assertEqual(sources['current_hour'], 'outdoor_temperature_sensor')
+        # Invalid sensor can use the weather entity's explicitly Celsius value.
+        states['sensor.temp'].state = 'unavailable'
+        _, combined, sources = asyncio.run(demand_coordinator.async_weather_inputs(c,now))
+        self.assertEqual(combined[start+timedelta(hours=10)], 8)
+        self.assertEqual(sources['current_hour'], 'weather_entity')
+        # A missing completed hour must not be fabricated from current weather.
+        del observed[start+timedelta(hours=9)]
+        c._demand_weather_cache = ('weather.test', int(now.timestamp()//3600), {
+            start+timedelta(hours=h):20 for h in range(11,24)})
+        _, combined, _ = asyncio.run(demand_coordinator.async_weather_inputs(c,now))
+        self.assertNotIn(start+timedelta(hours=9), combined)
+
+    def test_optional_weather_read_only_service_and_failure_fallback(self):
+        now,histories,_,devices=fixtures()
+        c=coordinator()
+        c.config_entry=SimpleNamespace(data={'demand_devices':devices,'total_energy_sensor':'house',
+            'weather_entity':'weather.test','outdoor_temperature_sensor':'sensor.temp'},options={})
+        states={e:v[-1] for e,v in histories.items()}
+        states['weather.test']=SimpleNamespace(state='cloudy',attributes={'temperature_unit':'°F','supported_features':3})
+        states['sensor.temp']=SimpleNamespace(state='50',attributes={'unit_of_measurement':'°F'})
+        service=AsyncMock(return_value={'weather.test':{'forecast':[{'datetime':now.isoformat(),'temperature':50}]}})
+        c.hass=SimpleNamespace(states=SimpleNamespace(get=states.get),services=SimpleNamespace(async_call=service))
+        async def load(job):
+            return job()
+        with patch.object(demand_coordinator,'get_instance',return_value=SimpleNamespace(async_add_executor_job=load)), \
+             patch.object(demand_coordinator,'load_hourly_statistics',return_value={}), \
+             patch.object(demand_coordinator.history,'get_significant_states',return_value=histories,create=True):
+            result=asyncio.run(async_demand_result(c,now))
+            service.assert_awaited_once_with('weather','get_forecasts',
+                {'entity_id':'weather.test','type':'hourly'},blocking=True,return_response=True)
+            self.assertEqual(result.demand_weather_sources['forecast'],'ok')
+            self.assertTrue(result.demand_accuracy)
+            service.side_effect=RuntimeError('provider down')
+            fallback=asyncio.run(async_demand_result(c,now+timedelta(hours=1)))
+            self.assertTrue(fallback.estimated_hourly_home_demand)
+            self.assertEqual(fallback.demand_weather_sources['forecast'],'unavailable: RuntimeError')
+
+    def test_optional_weather_bad_sources_do_not_block_ready_forecast(self):
+        now,histories,_,devices=fixtures()
+        for state,attrs,expected in [('unknown',{},'unavailable'),
+                ('sunny',{'supported_features':None},'hourly_not_supported'),
+                ('sunny',{'supported_features':1},'hourly_not_supported'),
+                ('sunny',{'supported_features':2,'temperature_unit':'K'},'invalid_or_empty')]:
+            with self.subTest(expected=expected):
+                c=coordinator()
+                c.config_entry=SimpleNamespace(data={'demand_devices':devices,'total_energy_sensor':'house',
+                    'weather_entity':'weather.bad'},options={})
+                states={e:v[-1] for e,v in histories.items()}
+                states['weather.bad']=SimpleNamespace(state=state,attributes=attrs)
+                service=AsyncMock(return_value={'weather.bad':{'forecast':[{'datetime':now.isoformat(),'temperature':10}]}})
+                c.hass=SimpleNamespace(states=SimpleNamespace(get=states.get),services=SimpleNamespace(async_call=service))
+                async def load(job):
+                    return job()
+                with patch.object(demand_coordinator,'get_instance',return_value=SimpleNamespace(async_add_executor_job=load)), \
+                     patch.object(demand_coordinator,'load_hourly_statistics',return_value={}), \
+                     patch.object(demand_coordinator.history,'get_significant_states',return_value=histories,create=True):
+                    result=asyncio.run(async_demand_result(c,now))
+                self.assertTrue(result.estimated_hourly_home_demand)
+                self.assertEqual(result.demand_weather_sources['forecast'],expected)
+                self.assertEqual(result.status, 'ready_with_warnings')
+                self.assertEqual(result.source_status['weather_entity'], expected)
+                self.assertTrue(any('weather_entity' in e for e in result.source_errors))
+                if expected != 'invalid_or_empty':
+                    service.assert_not_awaited()
+
+    def test_optional_recorder_error_cause_survives_same_hour_cache(self):
+        now = fixtures()[0]
+        c = coordinator()
+        c.config_entry = SimpleNamespace(data={'outdoor_temperature_sensor':'sensor.temp'}, options={})
+        c.hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity: None))
+        async def load(job):
+            return job()
+        with patch.object(demand_coordinator, 'get_instance', return_value=SimpleNamespace(async_add_executor_job=load)), \
+             patch.object(demand_coordinator.history, 'get_significant_states', side_effect=RuntimeError('private recorder cause'), create=True), \
+             patch.object(demand_coordinator, 'load_temperature_statistics', side_effect=ValueError('private stats cause')):
+            first = asyncio.run(demand_coordinator.async_weather_inputs(c, now))[2]
+            again = asyncio.run(demand_coordinator.async_weather_inputs(c, now+timedelta(minutes=1)))[2]
+        self.assertEqual(first['history'], 'unavailable: RuntimeError')
+        self.assertEqual(again['history'], first['history'])
+        self.assertEqual(again['statistics'], 'unavailable: ValueError')
+        self.assertNotIn('private', json.dumps(again))
+
+    def test_statistics_temperature_fallback_survives_purged_state_history(self):
+        now,histories,_,devices=fixtures()
+        c=coordinator()
+        c.config_entry=SimpleNamespace(data={'demand_devices':devices,'total_energy_sensor':'house',
+            'outdoor_temperature_sensor':'sensor.temp'},options={})
+        states={e:v[-1] for e,v in histories.items()}
+        c.hass=SimpleNamespace(states=SimpleNamespace(get=states.get))
+        async def load(job):
+            return job()
+        rows={'sensor.temp':[{'start':(now-timedelta(hours=h)).replace(minute=0,second=0,microsecond=0).timestamp(),
+                              'mean':9.0} for h in range(1,25)]}
+        with patch.object(demand_coordinator,'get_instance',return_value=SimpleNamespace(async_add_executor_job=load)), \
+             patch.object(demand_coordinator,'load_hourly_statistics',return_value={}), \
+             patch.object(demand_coordinator,'load_temperature_statistics',return_value=rows) as stats, \
+             patch.object(demand_coordinator.history,'get_significant_states',return_value=histories,create=True):
+            result=asyncio.run(async_demand_result(c,now))
+        stats.assert_called_once_with(c.hass,'sensor.temp',now)
+        self.assertEqual(result.demand_weather_sources['history'],'ok')
+        self.assertEqual(result.demand_weather_sources['temperature_history_hours'],24)
+        self.assertTrue(result.estimated_hourly_home_demand)
 
     def test_predictor_uses_recorder_and_caches_history(self):
         now, histories, prices, devices = fixtures()
