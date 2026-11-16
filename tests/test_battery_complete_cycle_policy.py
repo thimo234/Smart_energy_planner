@@ -53,6 +53,9 @@ class CompleteCyclePolicyTest(unittest.TestCase):
     def test_partial_refill_does_not_override_reserve_discharge(self):
         self.c._discharge_session_started = True
         slots = self.slots(home=0.)
+        # This phase-continuity case needs a permitted above-reserve outlet.
+        for slot in slots:
+            slot['export_price'] = .50
         windows = self.build(slots, 6., [self.charge(1, 2, 2.)])
         # The candidate cannot fill from the selected reserve to full.
         # Allowing loss export does not authorize an incomplete new cycle.
@@ -66,9 +69,12 @@ class CompleteCyclePolicyTest(unittest.TestCase):
             with self.subTest(start=start):
                 self.setUp()
                 self.c._discharge_session_started = True
-                windows = self.build(self.slots(home=0.), 6., [self.charge(start, 1, 2.)])
+                slots = self.slots(home=0.)
+                for slot in slots:
+                    slot['export_price'] = .50
+                windows = self.build(slots, 6., [self.charge(start, 1, 2.)])
                 self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
-                trace = energy_trace(self.now, self.slots(home=0.), windows, initial=8., max_charge=2.5)
+                trace = energy_trace(self.now, slots, windows, initial=8., max_charge=2.5)
                 self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
 
     def test_legitimate_running_fill_is_preserved(self):
@@ -208,7 +214,10 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         windows = self.build(slots, 3.5, [self.charge(2, 4, 5.), self.charge(8, 12, 8.)])
         charges = [w for w in windows if w['mode'].startswith('laden_')]
         self.assertTrue(charges)
-        self.assertEqual(datetime.fromisoformat(charges[0]['start']), self.now+timedelta(hours=3))
+        # An already committed full cycle below reserve may now export at a
+        # loss, finishing before this refill instead of waiting for household
+        # demand until hour 3. The full/minimum bounds below still apply.
+        self.assertEqual(datetime.fromisoformat(charges[0]['start']), self.now+timedelta(hours=2))
         trace = energy_trace(self.now, slots, windows, initial=5.5, max_charge=2.5)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)

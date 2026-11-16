@@ -1,4 +1,4 @@
-"""Sunk stock can serve home/export; new charging retains profit checks."""
+"""Sunk stock serves home; export and new charging retain profit checks."""
 from datetime import datetime, timedelta
 import unittest
 
@@ -26,7 +26,7 @@ class ExistingEnergyTest(unittest.TestCase):
         self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
 
-    def test_feedback_reserve_cycle_does_not_gate_sunk_stock_on_profit(self):
+    def test_feedback_reserve_cycle_preserves_home_but_guards_loss_export(self):
         now, slots, result = replay_full_plan(
             '2026_09_29_blocked_cycle', '2026-09-29T09:02:57.501039+02:00',
             soc=75, instance=self.instance(), reserve=60, max_charge=2.5,
@@ -34,11 +34,11 @@ class ExistingEnergyTest(unittest.TestCase):
         )
         windows = result.planned_battery_mode_windows
         self.assertTrue(result.battery_strategy.startswith('ontladen'))
-        # Loss export no longer strands this stock: a later solar fill can
-        # become executable once the selected reserve has been reached.
-        self.assertIsNotNone(result.next_charge_window_start)
+        # Home avoidance remains executable, but loss export above reserve
+        # may not be used to manufacture room for a future solar fill.
+        self.assertIsNone(result.next_charge_window_start)
         self.assertTrue(result.battery_no_charge_reserve_active)
-        self.assertTrue(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=7.5, max_charge=2.5)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)

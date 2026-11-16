@@ -312,7 +312,9 @@ class EnergyAccountingTest(unittest.TestCase):
             "2026_09_19_morning", "2026-09-19T12:30:00+02:00", 20, 60, reserve=20,
         )
         self.assertTrue(all(r.battery_strategy == "laden_van_net" for _, r, _ in history[2:36]))
-        self.assertGreaterEqual(history[-1][2], 9.995)
+        # Real bundling may complete the fill earlier and then serve home.
+        # The feedback helper checks that no discharge starts before full.
+        self.assertGreaterEqual(max(energy for _, _, energy in history), 9.995)
 
     def test_active_grid_cycle_still_rechecks_profit(self):
         c, history = self.run_feedback_updates(
@@ -348,7 +350,8 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         grid = result.planned_grid_charge_windows
         self.assertEqual(len(grid), 1)
-        self.assertEqual(grid[0]["start"], "2026-09-19T12:36:27.360000+02:00")
+        # The selected price band is now genuinely packed, not chart-merged.
+        self.assertEqual(grid[0]["start"], "2026-09-19T12:30:00+02:00")
         self.assertGreater(grid[0]["charge_kwh"], 0.)
         self.assertLessEqual(grid[0]["charge_kwh"], 7.856)
         self.assertAlmostEqual(result.planned_solar_charge_windows[0]["charge_kwh"], .144)

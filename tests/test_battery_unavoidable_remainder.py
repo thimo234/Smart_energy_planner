@@ -25,6 +25,9 @@ def replay(now=NOW, soc=26, instance=None):
 class UnavoidableRemainderTest(unittest.TestCase):
     def test_solar_refill_survives_stranded_remainder(self):
         c = instance_with_cost()
+        # Loss export below reserve requires an explicitly committed full
+        # cycle, not merely a discharge latch with an unselected boundary.
+        c._battery_cycle_discharge_floor_kwh = 0.
         now, slots, result = replay(instance=c)
         # A future useful refill is not an executing partial fill yet.
         self.assertFalse(c._charge_session_started)

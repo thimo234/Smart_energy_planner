@@ -43,7 +43,7 @@ from .battery_models import SolarWindow
 from .battery_profit import grid_supplement_profit
 from .battery_margin import observed_stock, execution_actions, charge_stock
 from .battery_planner import (
-    PRICE_CONTINUITY_BAND,
+    bundle_slot_allocations,
     build_battery_mode_schedule,
     build_charge_window_lookup,
     merge_planned_windows,
@@ -3015,39 +3015,24 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and item["start"] < last_end
                     and not any(other["start"] == item["start"] and other["kind"] != kind
                                 for other in selected_for_cycle)), key=lambda item: item["start"])
-                bands = []
-                for candidate in candidates:
-                    cost = float(candidate["cost"])
-                    if (not bands or candidate["start"] != bands[-1][-1]["end"]
-                            or max(cost, *(float(item["cost"]) for item in bands[-1]))
-                            - min(cost, *(float(item["cost"]) for item in bands[-1]))
-                            > PRICE_CONTINUITY_BAND + 1e-9):
-                        bands.append([])
-                    bands[-1].append(candidate)
-                for band in bands:
-                    band_starts = {item["start"] for item in band}
-                    amounts = {item["start"]: float(item["charge_kwh"]) for item in same_source}
-                    already_contiguous = all(
-                        item["start"] in amounts and (index == 0 or
-                            amounts[item["start"]] >= float(item["charge_kwh"]) - 1e-6)
-                        for index, item in enumerate(band)
-                    )
-                    if already_contiguous:
-                        continue
-                    remaining_kwh = sum(amounts.get(item["start"], 0.) for item in band)
-                    selected_for_cycle = [item for item in selected_for_cycle
-                                          if item["start"] not in band_starts]
-                    for candidate in band:
-                        take = min(remaining_kwh, float(candidate["charge_kwh"]))
-                        if take > 1e-9:
-                            selected_for_cycle.append({**candidate, "charge_kwh": round(take, 6)})
-                            remaining_kwh -= take
+                amounts = bundle_slot_allocations(
+                    [{**item, "price": item["cost"],
+                      "capacity_kwh": item["charge_kwh"]} for item in candidates],
+                    {item["start"]: float(item["charge_kwh"]) for item in same_source},
+                )
+                candidate_starts = {item["start"] for item in candidates}
+                selected_for_cycle = [item for item in selected_for_cycle
+                    if item["kind"] != kind or item["start"] not in candidate_starts]
+                selected_for_cycle.extend({**item, "charge_kwh": round(amounts[item["start"]], 6)}
+                    for item in candidates if amounts.get(item["start"], 0.) > 1e-9)
 
             # A complete extra arbitrage cycle has a stronger requirement than
             # an individually profitable slot: all usable energy must still be
             # sellable at its new maximum import cost before the next refill.
             bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
-            if bundled_grid and not continuing_grid_cycle:
+            # A running charge latch protects the eligible original continuation,
+            # not newly redistributed imports with a worse executable margin.
+            if bundled_grid:
                 bundled_end = max(item["end"] for item in selected_for_cycle)
                 bundled_profit = grid_supplement_profit(
                     selected=selected_for_cycle, slots=future_slots, after=bundled_end,
@@ -3075,6 +3060,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         if period[0] == charge_end and period[1] == cheaper_refill else period
                         for period in self._full_arbitrage_intervals]
 
+            if not selected_for_cycle:
+                # Sub-millisecond clipped remainders may round to zero kWh.
+                cursor = charge_end
+                cycle_index += 1
+                continue
             selected_start = min(item["start"] for item in selected_for_cycle)
             if (previous_charge_end is not None and previous_charge_cost is not None
                     and previous_charge_shortfall_kwh <= .05
@@ -3608,6 +3598,18 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # upgrading from a version without persisted margin lots.
             margin_stock.lots = [[quantity, grid_cost_floor if cost is None else cost]
                                  for quantity, cost in margin_stock.lots]
+        def export_profitable(slot):
+            # Tariffs are already net. Protect every remaining purchased lot
+            # conservatively; household avoidance has a different policy.
+            costs = [float(cost) for quantity, cost in margin_stock.lots
+                     if quantity > 1e-9 and cost is not None]
+            if grid_cost_floor is not None:
+                costs.append(grid_cost_floor)
+            return (slot.get("price_known", True)
+                    and float(slot["export_price"]) > 0
+                    and (not costs or float(slot["export_price"]) + 1e-9
+                         >= max(costs) + battery_min_profit))
+
         observed_margin_state = dict(at=now.isoformat(), energy=initial_usable_energy_kwh,
             reserve=0.0, lots=[lot[:] for lot in margin_stock.lots],
             credit=margin_stock.credit,
@@ -3837,15 +3839,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and candidate_slot["end"] == first_charge_phase_start - timedelta(minutes=30)):
                     imminent_fill = False
                 loss_export = (self._cycle_export_enabled and loss_completion_enabled
-                               and not (getattr(self, "_battery_rank_sunk_stock", True)
-                                        and before_fill and cycle_floor <= 0.005
-                                        and not simulated_charge_incomplete)
+                               and (not before_fill or
+                                    getattr(self, '_battery_cycle_discharge_floor_kwh', None) == 0.)
                                and sim_usable_energy_kwh - reachable_discharge_kwh <= no_charge_reserve_kwh)
                 # The imminent-fill veto is an execution constraint, not an
                 # export price test. Only committed below-reserve completion
                 # can override it, exactly as in the execution loop below.
                 export_reachable = (candidate_slot.get("price_known", True)
-                    and float(candidate_slot["export_price"]) > 0
+                    and (export_profitable(candidate_slot) or loss_export)
                     and (not imminent_fill or loss_export))
                 if not simulated_charge_incomplete:
                     reachable_discharge_kwh += power_kwh if export_reachable else home_kwh
@@ -3929,9 +3930,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and not (before_first_charge_phase and first_charge_phase_start is not None
                                  and s["end"] > first_charge_phase_start - timedelta(minutes=30))
                         and s.get("price_known", True)
-                        and float(s["export_price"]) > 0
-                        and (grid_cost_floor is None or
-                             float(s["export_price"]) + 1e-9 >= grid_cost_floor + battery_min_profit)
+                        and export_profitable(s)
                     )],
                     available_energy_kwh=discharge_budget_kwh,
                     total_segment_demand_kwh=total_segment_battery_demand_kwh,
@@ -3951,7 +3950,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     power_kwh = max_discharge_kw * float(s["hours"])
                     home_kwh = min(power_kwh, max(0.0, -float(s["net_solar_kwh"])))
                     offers.append((float(s["import_price"]), s["start"], "home", home_kwh))
-                    if self._cycle_export_enabled:
+                    if self._cycle_export_enabled and export_profitable(s):
                         offers.append((float(s["export_price"]), s["start"], "export",
                                        max(0.0, power_kwh - home_kwh)))
                 planned_discharge_kwh = {}
@@ -3962,6 +3961,32 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     target = planned_discharge_kwh if kind == "home" else forced_export_kwh
                     target[start] = target.get(start, 0.0) + allocated
                     remaining -= allocated
+
+            # Compact the actual budgets, before suffix reservations and command
+            # durations are computed. No chart-only filling of idle windows.
+            home_bundle_candidates = [
+                {**s, "price": s["import_price"], "capacity_kwh": min(
+                    max_discharge_kw * float(s["hours"]),
+                    max(0., -float(s["net_solar_kwh"])))}
+                for s in segment_slots if s.get("price_known", True)
+                and not any(s['end'] > w['start'] and s['start'] < w['end']
+                            for w in charge_windows)]
+            planned_discharge_kwh = bundle_slot_allocations(
+                home_bundle_candidates, planned_discharge_kwh,
+            )
+            forced_export_kwh = bundle_slot_allocations(
+                [{**s, "price": s["export_price"], "capacity_kwh": max(0.,
+                    max_discharge_kw * float(s["hours"])
+                    - min(max_discharge_kw * float(s["hours"]),
+                          max(0., -float(s["net_solar_kwh"]))))}
+                 for s in segment_slots if export_profitable(s)
+                 and not any(s['end'] > w['start'] and s['start'] < w['end']
+                             for w in charge_windows)
+                 and (_export_allowed_from is None or s['start'] >= _export_allowed_from)
+                 and not (before_first_charge_phase and first_charge_phase_start is not None
+                          and s['end'] > first_charge_phase_start - timedelta(minutes=30))],
+                forced_export_kwh,
+            )
 
             # Precompute suffix discharge sums: remaining_planned_discharge[s] =
             # total planned discharge for all segment slots that start AFTER s.
@@ -3989,8 +4014,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 segment_end_index)
             for segment_slot in slots[slot_index:execution_end_index]:
                 energy_before_slot = sim_usable_energy_kwh
-                reserve_loss_allowed = (loss_completion_enabled and not sunk_stock_before_refill
-                                        and energy_before_slot <= no_charge_reserve_kwh)
+                reserve_loss_allowed = (loss_completion_enabled
+                                        and (not sunk_stock_before_refill or
+                                             getattr(self, '_battery_cycle_discharge_floor_kwh', None) == 0.)
+                                        and energy_before_slot <= no_charge_reserve_kwh + 1e-9)
                 segment_slot_start = segment_slot["start"]
                 segment_slot_end = segment_slot["end"]
                 segment_discharge_kwh = float(planned_discharge_kwh.get(segment_slot_start, 0.0))
@@ -4002,7 +4029,22 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         available_energy_kwh=max(0.0, energy_before_slot - cycle_floor),
                         max_discharge_kw=max_discharge_kw,
                     )
-                    planned_discharge_kwh.update(remaining_home)
+                    # Keep the executable bundled suffix when it still uses the
+                    # fresh physical home budget. Re-ranking that same budget
+                    # would undo a bridge after its first slot has executed.
+                    bundled_remaining = {s['start']: planned_discharge_kwh.get(s['start'], 0.0)
+                                         for s in remaining_slots}
+                    if abs(sum(bundled_remaining.values()) - sum(remaining_home.values())) <= 1e-9:
+                        remaining_home = bundled_remaining
+                    else:
+                        remaining_home = bundle_slot_allocations(
+                            [s for s in home_bundle_candidates if s['start'] >= segment_slot_start],
+                            remaining_home,
+                        )
+                    # Replace the entire suffix, including zeroed allocations;
+                    # stale reservations must not consume later export headroom.
+                    planned_discharge_kwh.update({s['start']: remaining_home.get(s['start'], 0.0)
+                                                  for s in remaining_slots})
                     segment_discharge_kwh = float(remaining_home.get(segment_slot_start, 0.0))
                     remaining_planned_discharge_kwh = sum(
                         value for start, value in remaining_home.items() if start > segment_slot_start)
@@ -4028,21 +4070,42 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if (reserve_fallback or sunk_stock_before_refill) and self._cycle_export_enabled:
                     within_export_window = (segment_slot.get("price_known", True)
                                             and not charge_phase_imminent)
+                # Sunk-stock ranking cannot override the above-reserve guard.
+                within_export_window = within_export_window and export_profitable(segment_slot)
                 if reserve_loss_allowed and self._cycle_export_enabled:
                     # Reallocate from the actual remaining stock, not from an
                     # earlier above-reserve forecast that may have been capped.
                     remaining = max(0.0, energy_before_slot - cycle_floor
                                     - segment_discharge_kwh - remaining_planned_discharge_kwh)
-                    for candidate in sorted(
-                            (s for s in segment_slots if s['start'] >= segment_slot_start),
-                            key=lambda s: float(s['export_price']), reverse=True):
-                        if not candidate.get('price_known', True):
-                            continue
-                        headroom = max(0.0, max_discharge_kw * float(candidate['hours'])
-                                       - planned_discharge_kwh.get(candidate['start'], 0.0))
-                        amount = min(remaining, headroom)
-                        forced_export_kwh[candidate['start']] = amount
+                    # Loss completion has its own eligible candidates: the
+                    # above-reserve profitability filter must not exclude them.
+                    # Share physical power with the freshly planned household
+                    # suffix, then preserve its already bundled export allocation
+                    # whenever that allocation still fits the actual budget.
+                    export_candidates = [
+                        {**s, 'price': s['export_price'], 'capacity_kwh': max(
+                            0.0, max_discharge_kw * float(s['hours'])
+                            - planned_discharge_kwh.get(s['start'], 0.0))}
+                        for s in remaining_slots if s.get('price_known', True)]
+                    remaining_export = {}
+                    for candidate in sorted(export_candidates,
+                                            key=lambda s: (-float(s['export_price']), s['start'])):
+                        amount = min(remaining, candidate['capacity_kwh'])
+                        remaining_export[candidate['start']] = amount
                         remaining -= amount
+                    bundled_export = {s['start']: forced_export_kwh.get(s['start'], 0.0)
+                                      for s in remaining_slots}
+                    capacities = {s['start']: s['capacity_kwh'] for s in export_candidates}
+                    if (abs(sum(bundled_export.values()) - sum(remaining_export.values())) <= 1e-9
+                            and all(0.0 <= amount <= capacities.get(start, 0.0) + 1e-9
+                                    for start, amount in bundled_export.items())):
+                        remaining_export = bundled_export
+                    else:
+                        remaining_export = bundle_slot_allocations(export_candidates, remaining_export)
+                    # Clear ineligible/zeroed reservations as well as allocated
+                    # ones, so no stale suffix can overdraw the physical stock.
+                    forced_export_kwh.update({s['start']: remaining_export.get(s['start'], 0.0)
+                                              for s in remaining_slots})
                     within_export_window = segment_slot.get('price_known', True)
                 drain_before_charge_phase = (
                     before_first_charge_phase

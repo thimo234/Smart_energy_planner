@@ -260,7 +260,10 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertFalse(c._discharge_session_started)
 
     def test_export_fallback_without_home_demand_uses_expensive_hours(self):
-        _, result, slots = self.build(demand_kwh=0.)
+        c = self.instance()
+        c._battery_grid_charge_price = .01
+        c._battery_margin_state['lots'] = [[8., .01]]
+        _, result, slots = self.build(c=c, demand_kwh=0.)
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=10, max_charge=2.5)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         export = [w for w in result.planned_battery_mode_windows if w['mode'] == 'ontladen_naar_net']
@@ -268,7 +271,10 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertGreaterEqual(datetime.fromisoformat(export[0]['start']), self.now+timedelta(hours=4))
 
     def test_late_export_beats_cheaper_early_home_use(self):
-        _, result, slots = self.build(demand_kwh=.5, prices=[.08]*4+[.25]*4)
+        c = self.instance()
+        c._battery_grid_charge_price = .01
+        c._battery_margin_state['lots'] = [[8., .01]]
+        _, result, slots = self.build(c=c, demand_kwh=.5, prices=[.08]*4+[.25]*4)
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=10, max_charge=2.5)
         self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
         discharge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('ontladen')]

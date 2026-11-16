@@ -47,16 +47,68 @@ Dit verzoek omvat lokale software, tests en publicatie; geen live migratie,
 installatie of Home Assistant-herstart. Zie `docs/household-configuration-verification.md`
 voor de implementatiegrenzen en de werkelijk uitgevoerde controles.
 
-## Actueel beleid: winsttoets op nieuw laden, geen historische ontlaadblokkade
+## Actueel beleid: exportwinst boven reserve en uitvoerbaar bundelen
 
-Nieuw expliciet gebruikersbesluit: bestaande energie wordt op de duurste resterende
-bekende uren ingezet, ongeacht historische laadkosten, negatief margesaldo of een
-actieve ontlaadcyclus. Zonder nieuw rendabel laadblok ontlaadt de planner tot de
+Deze aanvulling vervangt eerdere uitspraken dat historische kosten iedere
+teruglevering ongemoeid laten. **Export van bestaande voorraad boven de hogere
+reserve** (standaard 60% SOC) moet de ingestelde minimumwinst boven de bekende
+acquisitiekosten halen. Bij EUR 0,268/kWh inkoop, EUR 0,283/kWh netto export en
+EUR 0,10/kWh minimumwinst is export dus niet toegestaan. Exportprijzen zijn al
+belastinggecorrigeerd; trek die correctie niet opnieuw af. Huishoudelijk verbruik
+(vermeden inkoop) blijft op de duurste uitvoerbare uren toegestaan zonder deze
+exportblokkade. Historische lots, broninformatie en gerealiseerde schuld blijven
+ongewijzigd; een winstblokkade is geen reden om boekingen te wissen.
+
+Alleen een **al toegekende volledige ontlaadcyclus** mag onder de hogere reserve
+verlieslatend naar de normale minimum-SOC exporteren. Een reservecyclus wordt
+daardoor geen volledige cyclus. Richting, grens en herstel na herstart blijven
+behouden. Nieuwe netlading blijft aan minimumwinst en uitvoerbare volledige
+afronding gebonden.
+
+Bundelen verandert de werkelijke energieverdeling en opdrachten, niet alleen
+de grafiek. Overbrug een uit-/idle-gat uitsluitend bij dezelfde richting aan
+beide kanten en een gat van **strikt minder dan 15 minuten**. Een gat van
+precies 15 minuten blijft bestaan. Aangrenzende blokken met dezelfde richting
+krijgen een gezamenlijke prijsband van maximaal **EUR 0,01/kWh over de hele
+groep**; vergelijk niet alleen ieder paar opeenvolgende prijzen. Zo vormen
+0,400 / 0,409 / 0,418 geen groep met een totale band van één cent.
+
+Herdistributie behoudt het energiebudget en respecteert laad-/ontlaadvermogen,
+SOC-grenzen, huishoudvraag, bron, bekende prijzen, exporttoestemming en
+winsttoetsen. Onbekende of onrendabele tussenliggende uren, tegengestelde
+laadrichting, onvoldoende energie om het gat uit te voeren, of een niet
+uitvoerbare volledige nieuwe laadcyclus zijn harde grenzen: dan blijft het gat
+terecht bestaan. Er wordt geen energie toegevoegd om continuïteit te tekenen.
+
+Ook bij een al lopende netlaadcyclus (met of zonder exportplanning) wordt de
+marge na herverdeling opnieuw getoetst. Daalt die onder de ingestelde grens,
+dan blijft de oorspronkelijke toegelaten laadverdeling behouden. Onder de
+reserve bewaart de verliesvoltooiing van een toegekende volledige cyclus de
+gebundelde huishoud- en exportverdeling zolang die bij de werkelijke resterende
+voorraad past; een noodzakelijk nieuw budget wordt opnieuw gebundeld. Export
+wordt daarbij per slot begrensd op het fysieke ontlaadvermogen na gepland
+huisverbruik en totaal op de aanwezige energie boven de vaste cyclusvloer.
+Opnieuw rangschikken mag een eerder uitvoerbaar kort gat niet ongemerkt
+terugbrengen. Regressies dekken verliesexport met 10-minutenslots
+(EUR 0,40/0,20/0,50), refresh/JSON-herstel, huisverbruik, precies 15 minuten,
+onbekende prijzen en niet-transitieve ééncentbanden.
+
+De lokale exporttoets beschermt conservatief de duurste resterende bekende lot
+en de historische netinkoopprijs; zij optimaliseert geen aparte verkoop van
+alleen goedkope deel-lots. Dit kan export uitstellen maar geen te kleine marge
+toelaten. Omzettingsverlies/slijtage worden nog niet apart gemodelleerd.
+
+## Aanvullend rangschikkings- en cyclusbeleid
+
+Voor huishoudelijk gebruik wordt bestaande energie op de duurste resterende
+bekende uren ingezet, ongeacht historische laadkosten of negatief margesaldo.
+Export houdt de bovenstaande acquisitiewinstbescherming. Zonder nieuw rendabel
+laadblok ontlaadt de planner tot de
 configureerbare hogere reserve (momenteel 60%), niet onmiddellijk op goedkope uren.
 Vergelijk vermeden netinkoop en toegestane teruglevering binnen één energiebudget;
 onbekende terugleverprijzen zijn geen toestemming voor export.
 
-Alleen nieuwe laadblokken moeten de ingestelde minimumwinst aantoonbaar halen.
+Nieuwe laadblokken en export boven reserve moeten de minimumwinst aantoonbaar halen.
 Bereiken van de reserve maakt een nieuwe laadfase mogelijk, maar bewijst niet dat
 laden al is begonnen of eerder financieel is toegelaten. Een daadwerkelijk begonnen
 laadfase behoudt haar veilige richting tot vol; een toekomstige opdracht alleen is
@@ -67,7 +119,8 @@ De opgeslagen hogere reserve is een terugvalgrens, geen onveranderlijke keuze.
 Bij een aantoonbaar haalbaar en rendabel **volledig nieuw laadblok** later in de
 horizon (ook morgen) mag een lopende gedeeltelijke ontlading alsnog tot de normale
 minimum-SOC gaan, vóór dat laadblok. De resterende voorraad gaat naar de duurste
-bekende uitvoerbare uren, onafhankelijk van historische kosten of margeschuld.
+bekende uitvoerbare uren; voor huishoudelijk gebruik onafhankelijk van historische
+kosten of margeschuld, voor export met bovenstaande reserve-/winstgrens.
 Zonder zo'n laadblok blijft de ingestelde reserve gelden; een gedeeltelijke,
 onrendabele of fysiek te kleine laadkans is onvoldoende. Een begonnen laadfase
 blijft beschermd tot vol. De minimumwinst op nieuw laden, fysieke grenzen,
@@ -88,9 +141,9 @@ Een laadvoorstel dat door de onafgemaakte ontlaadcyclus niet kan starten, mag de
 prijsvergelijking niet afkappen: duurdere uitvoerbare uren na dat afgewezen
 laadvoorstel blijven meedingen naar dezelfde resterende voorraad.
 
-De keuze tussen een rendabele volledige cyclus en de hogere reserve blijft bestaan;
-onderstaande historische winstbescherming voor bestaande energie boven reserve is
-met dit besluit vervangen. De fysieke grenzen en nieuwe-laadtoets blijven gelden.
+De keuze tussen een rendabele volledige cyclus en de hogere reserve blijft bestaan.
+Voor historische passages over exportwinst en bundelen geldt de actuele aanvulling
+bovenaan. De fysieke grenzen en nieuwe-laadtoets blijven gelden.
 
 Status: lokaal geïmplementeerd en getest met 473 geslaagde Python-tests en een
 frontendcontrole. Onafhankelijke review vond een nieuwe-laadbypass na reserve-

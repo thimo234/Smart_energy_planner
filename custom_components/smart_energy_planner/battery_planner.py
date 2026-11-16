@@ -503,6 +503,90 @@ def build_battery_mode_schedule(
 PRICE_CONTINUITY_BAND = 0.01  # EUR/kWh; never relax eligibility/profit checks.
 
 
+def bundle_slot_allocations(
+    candidates: list[dict[str, Any]], allocations: dict[datetime, float],
+) -> dict[datetime, float]:
+    """Redistribute an unchanged energy budget over eligible same-direction slots.
+
+    Callers supply only executable, economically eligible candidates, with
+    ``price`` and ``capacity_kwh`` at the command's actual power. Missing or
+    zero-capacity slots are hard boundaries, never invented availability.
+    First compact chronological runs with a TOTAL one-cent spread; then move
+    later energy into strictly sub-15-minute internal idle gaps. A gap is only
+    closed when the following block funds all of it. No leading/trailing idle
+    time is activated and no energy is added. Callers must recheck cycle-level
+    economics after charging changes (per-slot eligibility is not sufficient).
+    """
+    result = dict(allocations)
+    runs: list[list[dict[str, Any]]] = []
+    for candidate in sorted(candidates, key=lambda item: item['start']):
+        if (float(candidate['capacity_kwh']) <= 1e-9
+                or not candidate.get('price_known', True)):
+            continue
+        if not runs or runs[-1][-1]['end'] != candidate['start']:
+            runs.append([])
+        runs[-1].append(candidate)
+
+    for run in runs:
+        bands: list[list[dict[str, Any]]] = []
+        for candidate in run:
+            price = float(candidate['price'])
+            if (not bands or max(price, *(float(s['price']) for s in bands[-1]))
+                    - min(price, *(float(s['price']) for s in bands[-1]))
+                    > PRICE_CONTINUITY_BAND + 1e-9):
+                bands.append([])
+            bands[-1].append(candidate)
+        for band in bands:
+            remaining = sum(result.get(s['start'], 0.) for s in band)
+            for s in band:
+                take = min(float(s['capacity_kwh']), remaining)
+                result[s['start']] = take
+                remaining -= take
+
+        for i, left in enumerate(run[:-1]):
+            amount = result.get(left['start'], 0.)
+            capacity = float(left['capacity_kwh'])
+            if amount <= 1e-9:
+                continue
+            # Find the next active slot after this block's idle tail.
+            j = i + 1
+            while j < len(run) and result.get(run[j]['start'], 0.) <= 1e-9:
+                j += 1
+            if j == len(run):
+                continue
+            active_end = left['start'] + (left['end'] - left['start']) * min(1., amount / capacity)
+            gap = run[j]['start'] - active_end
+            if not timedelta(0) < gap < timedelta(minutes=15):
+                continue
+            needed = capacity - amount + sum(float(s['capacity_kwh']) for s in run[i+1:j])
+            # Only borrow from the adjoining right block, never across another
+            # idle interval or opposite/ineligible direction.
+            donors = []
+            for s in run[j:]:
+                available = result.get(s['start'], 0.)
+                if available <= 1e-9:
+                    break
+                donors.append(s)
+                if available < float(s['capacity_kwh']) - 1e-9:
+                    break
+            available = sum(result.get(s['start'], 0.) for s in donors)
+            # Planner budgets are rounded to six decimal places. A one-micro-
+            # kWh remainder belongs at the block's end, never as added energy.
+            if available + 1e-6 < needed:
+                continue
+            transfer = min(needed, available)
+            remaining = transfer
+            for s in run[i:j]:
+                take = min(float(s['capacity_kwh']) - result.get(s['start'], 0.), remaining)
+                result[s['start']] = result.get(s['start'], 0.) + take
+                remaining -= take
+            for s in reversed(donors):
+                take = min(transfer, result.get(s['start'], 0.))
+                result[s['start']] -= take
+                transfer -= take
+    return {start: amount for start, amount in result.items() if amount > 1e-9}
+
+
 def order_discharge_price_bands(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Prefer earlier consumption within one cent of each remaining peak.
 
