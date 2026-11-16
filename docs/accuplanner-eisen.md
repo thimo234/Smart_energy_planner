@@ -99,6 +99,34 @@ binnen de goedgekeurde scope; installatie en live venstercontrole zijn niet verr
 De huidige planner modelleert tariefmarges; omzettingsverlies en slijtage worden
 nog niet afzonderlijk gemodelleerd, dus dit is geen bewezen nettowinst na die kosten.
 
+## Bijna volle zonnecyclus na verlopen laadvenster
+
+Een werkelijk begonnen zonne-laadfase die door minder zon bijvoorbeeld op 97%
+blijft steken, mag ook na het verlopen van haar oude laadvenster economisch
+worden afgemaakt met een kleine netaanvulling. De oude eindtijd en de normale
+95%-grens voor optioneel bijladen zijn geen bewijs van voltooiing. De aanvulling
+moet nog steeds fysiek tot vol kunnen leiden vóór uitvoerbare nuttige afname.
+Als de goedkoopste aanvulling ná de avondpiek valt, moet de planner ook een
+vroegere, iets duurdere maar rendabele volledige aanvulling onderzoeken.
+Zolang het oorspronkelijke zonne-laadvenster nog werkelijk actief is, blijft
+zijn bestaande selectie van resterende zonnelading behouden; deze reparatie
+verruimt de retry alleen voor verlopen of na herstart ontbrekende fasevensters.
+
+Nieuw ingekochte energie moet zelfstandig de ingestelde gewogen tariefmarge
+halen met voldoende uitvoerbare afname; goedkope zonnelading, bestaande voorraad
+en de laadstatus zijn geen fictieve winst of vrijstelling voor nieuwe netinkoop.
+Onbekende inkooptarieven geven geen uitvoerbare kooptoestemming. De reserve en
+fysieke grenzen blijven gelden. Een ongewijzigde gemeten SOC, een verstreken
+venster of een gesimuleerde 100% wist de echte laadstatus niet, ook niet na
+herplanning of JSON-herstart. Pas waargenomen voltooien geeft de volgende
+ontlaadfase vrij. Zonder rendabele volledige aanvulling blijft de laadfase
+wachten op een latere uitvoerbare laadkans; er is geen nieuwe uitzondering
+geïmplementeerd die bij onrendabel bijladen gedeeltelijke ontlading vrijgeeft.
+
+Offline regressies combineren een bestaande verminderde-zon-capture met
+expliciet synthetische 97%-plateau-/tariefscenario's. Zij zijn geen bewijs van
+de actuele live-installatie. Geen installatie of Home Assistant-herstart.
+
 ## Historisch beleid: vaste cyclusgrens vóór de cyclus kiezen
 
 Deze eerdere afspraak verving het hieronder bewaarde gedeeltelijke-cyclusbeleid;

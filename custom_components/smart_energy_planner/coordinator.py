@@ -2918,10 +2918,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                             float(slot["export_price"]) if self._cycle_export_enabled else float("-inf"))
                         + 1e-9 >= cheapest_import + battery_min_profit
                     for slot in future_slots)
+                # An expired solar phase (or restored latch without a live
+                # phase) must not veto an earlier economic completion when the
+                # cheapest import falls after useful demand. Keep the running
+                # solar phase's existing selection while its window is live;
+                # retries there can truncate its remaining committed PV fill.
                 if (not profit["profitable"] and retry_has_margin and not continuing_grid_cycle
                         and not (cursor <= now and getattr(self, "_charge_session_started", False)
                                  and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
-                                 and self._active_charge_phase_mode != "laden_van_net")
+                                 and self._active_charge_phase_mode != "laden_van_net"
+                                 and self._active_charge_phase_end is not None
+                                 and self._active_charge_phase_end > now)
                         and not all(float(item["profit_cost"]) < 0 for item in grid_selected)
                         and bridge is None):
                     earlier_end = max(item["start"] for item in selected_for_cycle)
