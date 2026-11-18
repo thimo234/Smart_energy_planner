@@ -67,12 +67,18 @@ class November14LiveReplayTest(unittest.TestCase):
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in
             self.a['planned_battery_mode_windows'] + self.a['estimated_battery_mode_windows']))
 
-    def test_fresh_cost_state_upgrades_reserve_for_profitable_refill(self):
+    def test_fresh_cost_state_keeps_reserve_for_strictly_profitable_refill(self):
         result = self.replay()
-        self.assertEqual(result.battery_strategy, 'ontladen_naar_net')
+        self.assertEqual(result.battery_strategy, 'ontladen')
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         trace = energy_trace(self.now, self.slots, windows, initial=8.8, max_charge=2.5)
-        self.assertAlmostEqual(min(e for _, e, _ in trace), 2., delta=.005)
+        # Strict outlets fund a reserve-to-full refill, not eight kWh of
+        # turnover: the previous weighted-only upgrade is no longer admitted.
+        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertAlmostEqual(sum(w['charge_kwh'] for w in result.planned_grid_charge_windows), 4.)
+        self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
+        self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
         peak = datetime.fromisoformat('2026-11-14T18:00:00+01:00')
         self.assertTrue(any(w['mode'].startswith('ontladen') and datetime.fromisoformat(w['start']) <= peak
@@ -94,7 +100,7 @@ class November14LiveReplayTest(unittest.TestCase):
             restarted._restore_recent_battery_cycle_state()
         self.c = restarted
         restored = self.replay()
-        self.assertEqual(self.c._battery_cycle_discharge_floor_kwh, 0.)
+        self.assertEqual(self.c._battery_cycle_discharge_floor_kwh, 4.)
         self.assertTrue(self.c._discharge_session_started)
         self.assertFalse(self.c._charge_session_started)
         self.assertEqual(first.planned_battery_mode_windows, restored.planned_battery_mode_windows)

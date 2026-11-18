@@ -1,4 +1,4 @@
-"""Tomorrow's solar must not substitute an unfinished daytime recharge."""
+"""Unfinished fills need executable outlets before grid imports may continue."""
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,36 +15,49 @@ class DaytimeCompletionTest(unittest.TestCase):
         c._active_charge_phase_end = datetime.fromisoformat('2026-10-06T01:45:00+02:00')
         return c
 
-    def test_running_fill_does_not_authorize_partial_future_night_cycles(self):
+    def assert_wait_for_solar_completion(self, now, slots, result, initial):
+        """No executable grid outlet: hold the fill until real PV can finish it."""
+        commands = result.planned_battery_mode_windows
+        preview = result.estimated_battery_mode_windows
+        windows = commands + preview
+        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertEqual(result.battery_strategy, 'accu_uit')
+        for before, after in zip(windows, windows[1:]):
+            self.assertLessEqual(datetime.fromisoformat(before['end']),
+                                 datetime.fromisoformat(after['start']))
+        solar = [w for w in windows if w['mode'] == 'laden_met_zonne_energie']
+        self.assertTrue(solar, 'rejecting grid must preserve the usable solar completion')
+        self.assertTrue(all(w['start'].startswith('2026-10-06') for w in solar))
+        self.assertTrue(all(w['mode'] == 'accu_uit' for w in windows
+                            if w['start'] < solar[0]['start']))
+        first_discharge = next(w for w in windows if w['mode'].startswith('ontladen'))
+        self.assertLessEqual(solar[-1]['end'], first_discharge['start'])
+        fill_trace = energy_trace(now, slots,
+            [w for w in windows if w['end'] <= solar[-1]['end']],
+            initial=initial, max_charge=2.5)
+        self.assertAlmostEqual(fill_trace[-1][1], 10., delta=.005)
+        trace = energy_trace(now, slots, windows, initial=initial, max_charge=2.5)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
+        self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
+        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
+        self.assertTrue(preview)
+        self.assertTrue(all(w['mode'] == 'accu_uit' for w in preview))
+
+    def test_running_fill_rejects_unsafe_grid_and_waits_for_solar(self):
         c = self.evening_coordinator()
         now, slots, result = self.replay('2026-10-05T16:02:41.391142+02:00', 93, c,
                                        snapshot='2026_10_05_evening_discharge')
-        commands = result.planned_battery_mode_windows
-        self.assertEqual(commands[0]['mode'], 'laden_van_net')
-        self.assertEqual(c._active_charge_phase_end.isoformat(), commands[0]['end'])
-        self.assertEqual(commands[-1]['mode'], 'ontladen')
-        first_discharge = next(w for w in commands if w['mode'] == 'ontladen')
-        self.assertLessEqual(first_discharge['start'], '2026-10-05T18:00:00+02:00')
-        self.assertTrue(all(w['end'] <= commands[0]['end'] for w in commands
-                            if w['mode'].startswith('laden_')))
-        trace = energy_trace(now, slots, commands, initial=9.3, max_charge=2.5)
-        # Unprofitable night slots preserve 60%; profitable morning demand
-        # may use stored energy below that reserve before the solar refill.
-        self.assertGreaterEqual(trace[-1][1], 6.-.005)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 6-.005)
-        self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
-        preview = result.estimated_battery_mode_windows
-        self.assertGreaterEqual(preview[0]['start'], commands[-1]['end'])
-        self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in preview))
-        from test_battery_partial_cycle_economics import imported_margin
-        ledger = imported_margin(slots, commands+preview, initial_usable=7.3, reserve_usable=4.)
-        self.assertGreaterEqual(ledger['margin']+.001, .08, ledger)
+        # An observed running grid fill is not permission to buy imports whose
+        # outlets the acquisition-plus-minimum execution guard would refuse.
+        self.assert_wait_for_solar_completion(now, slots, result, initial=9.3)
+        self.assertTrue(c._charge_session_started)
 
-    def test_evening_discharge_survives_updates_and_restart_without_night_topup(self):
+    def test_rejected_evening_fill_waits_through_updates_and_restart(self):
         c = self.evening_coordinator()
         now = datetime.fromisoformat('2026-10-05T16:02:41.391142+02:00')
         end = datetime.fromisoformat('2026-10-06T09:00:00+02:00')
-        energy = 9.3
+        energy = peak = 9.3
         discharged = False
         for index in range(44):
             _, slots, result = self.replay(now.isoformat(), energy*10, c,
@@ -62,8 +75,11 @@ class DaytimeCompletionTest(unittest.TestCase):
                 del c.hass
                 _, _, result = self.replay(now.isoformat(), energy*10, c,
                                            snapshot='2026_10_05_evening_discharge')
-            if discharged:
-                self.assertFalse(result.battery_strategy.startswith('laden_'))
+            self.assertFalse(result.planned_grid_charge_windows)
+            self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+                result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
+            self.assertEqual(result.battery_strategy, 'accu_uit')
+            self.assertTrue(c._charge_session_started)
             discharged |= result.battery_strategy.startswith('ontladen')
             until = min(end, now + timedelta(minutes=5 if index < 8 else 30))
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
@@ -79,14 +95,17 @@ class DaytimeCompletionTest(unittest.TestCase):
                 # 8 October: if the next refill becomes physically unavailable
                 # on an update, stop at the reserve (or hold an existing lower SOC).
                 self.assertGreaterEqual(min(e for _, e, _ in trace), min(energy, 6)-.005)
+            peak = max(peak, max(e for _, e, _ in trace))
             energy = trace[-1][1]
             now = until
             if now == end:
                 break
-        self.assertFalse(discharged, 'observed 83% solar fill never reached maximum')
+        # The unfinished fill cannot discharge before an admissible completion,
+        # even after the old grid window expires and runtime state is restored.
+        self.assertFalse(discharged)
+        self.assertAlmostEqual(peak, 9.3, delta=.005)
         self.assertEqual(now, end)
-        self.assertGreaterEqual(energy, 8.3)
-        self.assertLess(energy, 10.)
+        self.assertAlmostEqual(energy, 9.3, delta=.005)
 
     def test_grid_led_cycle_can_cross_midnight(self):
         now = datetime.fromisoformat('2026-10-05T22:00:00+02:00')
@@ -103,6 +122,34 @@ class DaytimeCompletionTest(unittest.TestCase):
         self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), 3.)
         self.assertEqual(grid[0]['start'], now.isoformat())
         self.assertEqual(grid[-1]['end'], (now+timedelta(hours=3)).isoformat())
+
+    def test_continuing_grid_fill_requires_demand_for_existing_and_new_stock(self):
+        now = datetime.fromisoformat('2026-10-05T16:00:00+02:00')
+        for demand, expected_import in ((.5, 0.), (1., 1.)):
+            with self.subTest(hourly_household_demand=demand):
+                slots = [dict(start=now+timedelta(hours=i),
+                    end=now+timedelta(hours=i+1), hours=1., price_known=True,
+                    import_price=price, export_price=-.02, solar_kwh=0.,
+                    demand_kwh=demand, net_solar_kwh=-demand)
+                    for i, price in enumerate((.15, .30, .30))]
+                c = coordinator()
+                c._battery_cycle_state_initialized = True
+                c._battery_grid_charge_price = .15
+                c._active_charge_phase_mode = 'laden_van_net'
+                c._active_charge_phase_end = now+timedelta(hours=1)
+                self.assertTrue(c._charge_session_started)
+                solar, grid = c._plan_charge_windows_for_horizon(
+                    slots=slots, now=now, usable_capacity_kwh=2.,
+                    current_remaining_capacity_kwh=1., max_charge_kw=1.,
+                    max_discharge_kw=1., battery_min_profit=.08)
+                self.assertFalse(solar)
+                # Both demand tariffs clear .15 + .08. Only the larger real
+                # demand can consume the existing 1 kWh AND the new 1 kWh;
+                # neither a profitable export nor a weighted peak is needed.
+                self.assertAlmostEqual(sum(w['charge_kwh'] for w in grid), expected_import)
+                if expected_import:
+                    self.assertEqual(grid[0]['start'], now.isoformat())
+                    self.assertEqual(grid[-1]['end'], (now+timedelta(hours=1)).isoformat())
 
     def test_overnight_grid_fill_precedes_cheaper_next_solar_day(self):
         now = datetime.fromisoformat('2026-10-05T22:00:00+02:00')
@@ -128,54 +175,27 @@ class DaytimeCompletionTest(unittest.TestCase):
             reserve=60, max_charge=2.5, isolated_cycles=True, snapshot_exports=True,
         )
 
-    def test_reduced_solar_finishes_grid_cycle_before_evening(self):
+    def test_reduced_solar_rejects_grid_completion_for_all_historical_costs(self):
         for cost in (None, .19, .211):
             with self.subTest(historical_cost=cost):
                 c = coordinator()
                 c._battery_grid_charge_price = cost
                 now, slots, result = self.replay('2026-10-05T15:39:59.411439+02:00', 92, c,
                                                snapshot='2026_10_05_reduced_solar')
-                charge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('laden_')]
-                self.assertTrue(charge)
-                self.assertTrue(all(w['start'].startswith('2026-10-05') for w in charge))
-                self.assertTrue(all(w['mode'] == 'laden_van_net' for w in charge))
-                trace = energy_trace(now, slots, charge, initial=9.2, max_charge=2.5)
-                self.assertGreater(trace[-1][1], 9.2)
-                self.assertLessEqual(trace[-1][1], 10.005)
-                first_discharge = next(w for w in result.planned_battery_mode_windows
-                                       if w['mode'].startswith('ontladen'))
-                self.assertLessEqual(charge[-1]['end'], first_discharge['start'])
+                self.assert_wait_for_solar_completion(now, slots, result, initial=9.2)
+                self.assertTrue(c._charge_session_started)
 
     def test_reduced_solar_still_respects_minimum_profit(self):
         _, _, result = self.replay('2026-10-05T15:39:59.411439+02:00', 92,
                                   snapshot='2026_10_05_reduced_solar', profit=.50)
         self.assertFalse(result.planned_grid_charge_windows)
 
-    def test_latest_tomorrow_preview_uses_solar_instead_of_late_grid_fill(self):
+    def test_latest_tomorrow_solar_is_executable_not_an_unsafe_grid_preview(self):
         now, slots, result = self.replay('2026-10-05T15:52:01.632559+02:00', 92,
                                        snapshot='2026_10_05_tomorrow_preview')
-        preview = result.estimated_battery_mode_windows
-        solar = [w for w in preview if w['mode'] == 'laden_met_zonne_energie']
-        grid = [w for w in preview if w['mode'] == 'laden_van_net']
-        self.assertTrue(solar, 'new-cycle reserve can complete before solar refill')
-        self.assertFalse(grid)
-        # Partial opportunities do not require a completion at an exact tariff boundary.
-        self.assertTrue(all(w['start'] >= solar[0]['start'] for w in grid))
-        windows = result.planned_battery_mode_windows + preview
-        for before, after in zip(windows, windows[1:]):
-            self.assertLessEqual(datetime.fromisoformat(before['end']), datetime.fromisoformat(after['start']))
-        trace = energy_trace(now, slots, windows, initial=9.2, max_charge=2.5)
-        self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
-        self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
-        tomorrow = [(t, e) for t, e, _ in trace if t.startswith('2026-10-06')]
-        # Full-cycle loss completion may cross reserve before midnight; it
-        # need not begin tomorrow at exactly the historical reserve floor.
-        from bound_cycle_assertions import assert_bound_plan
-        assert_bound_plan(self, now, slots, windows, initial=9.2, floor=6., charging=True)
-        self.assertLessEqual(max(e for _, e in tomorrow), 10.005)
-        self.assertGreaterEqual(min(e for _, e in tomorrow), 1.995)
+        self.assert_wait_for_solar_completion(now, slots, result, initial=9.2)
 
-    def test_forecast_drop_updates_and_restart_complete_real_commands(self):
+    def test_forecast_drop_updates_and_restart_do_not_force_grid_completion(self):
         c = coordinator()
         self.replay(instance=c)  # Start from the earlier, sunnier plan.
         now = datetime.fromisoformat('2026-10-05T15:39:59.411439+02:00')
@@ -204,6 +224,11 @@ class DaytimeCompletionTest(unittest.TestCase):
                 result = restored
             self.assertTrue(result.battery_no_charge_reserve_active)
             windows = result.planned_battery_mode_windows
+            self.assertFalse(result.planned_grid_charge_windows)
+            self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+                windows + result.estimated_battery_mode_windows))
+            self.assertEqual(result.battery_strategy, 'accu_uit')
+            self.assertTrue(c._charge_session_started)
             for before, after in zip(windows, windows[1:]):
                 self.assertLessEqual(datetime.fromisoformat(before['end']), datetime.fromisoformat(after['start']))
             until = now + timedelta(minutes=5)
@@ -218,8 +243,8 @@ class DaytimeCompletionTest(unittest.TestCase):
             now = until
             if energy >= 9.95:
                 break
-        self.assertGreater(peak, 9.2)
-        self.assertGreaterEqual(energy, 5.995)
+        self.assertAlmostEqual(peak, 9.2, delta=.005)
+        self.assertAlmostEqual(energy, 9.2, delta=.005)
         self.assertLess(now, now.replace(hour=17, minute=0, second=0, microsecond=0))
 
     def test_supplied_forecast_fills_today_before_evening_discharge(self):

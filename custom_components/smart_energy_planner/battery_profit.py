@@ -1,4 +1,4 @@
-"""Weighted margin on discharged imports, with reserve stock held at cost."""
+"""Import margin using only executable per-slot outlets; reserve held at cost."""
 from datetime import timedelta
 
 
@@ -19,7 +19,9 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
     cost = sum(kwh * price for kwh, price in imports)
     # Export keeps its existing per-kWh margin protection. Cheap PV does not
     # subsidize imports, and house/export share the same discharge power.
-    export_cost = max((price for _, price in imports), default=0.)
+    export_cost = max((price for quantity, price in imports if quantity > 1e-9), default=0.)
+    export_cost = max(export_cost, max((float(item['cost']) for item in selected
+        if item['kind'] == 'solar' and float(item['charge_kwh']) > 1e-9), default=export_cost))
     if historical_cost is not None and existing_energy > .01:
         export_cost = max(export_cost, historical_cost)
     demand = []
@@ -27,8 +29,15 @@ def grid_supplement_profit(*, selected, slots, after, before, max_charge_kw,
         hours = max(0., (min(before, slot['end']) - max(after, slot['start'])).total_seconds()/3600)
         power = max_discharge_kw * hours
         home = min(power, max(0., -float(slot['net_solar_kwh'])) * hours / max(float(slot['hours']), 1e-9))
-        demand.append((float(slot['import_price']), home))
-        if (allow_export and slot['start'] >= before - timedelta(hours=8)
+        # Admission must use the same per-slot acquisition floor as execution.
+        # A high peak cannot subsidize household outlets which execution will
+        # refuse, leaving part of the newly purchased fill stranded.
+        home_profitable = float(slot['import_price']) + 1e-9 >= export_cost + minimum_profit
+        if home_profitable:
+            demand.append((float(slot['import_price']), home))
+        if (allow_export and slot.get('price_known', True)
+                and (home <= 1e-9 or home_profitable)
+                and slot['start'] >= before - timedelta(hours=8)
                 and float(slot['export_price']) > 0
                 and float(slot['export_price']) + 1e-9 >= export_cost + minimum_profit):
             demand.append((float(slot['export_price']), max(0., power-home)))

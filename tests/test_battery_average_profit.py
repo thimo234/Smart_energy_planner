@@ -1,4 +1,4 @@
-"""Weighted import margin, independent of PV and shared discharge power."""
+"""Per-outlet acquisition floors precede weighted import accounting."""
 from datetime import datetime, timedelta
 import unittest
 
@@ -19,11 +19,20 @@ class AverageProfitTest(unittest.TestCase):
             max_charge_kw=2., max_discharge_kw=1., minimum_profit=.10,
             existing_energy=existing, allow_export=True)
 
-    def test_weighted_margin_passes_even_when_one_sale_is_below_ten_cents(self):
+    def test_weighted_margin_cannot_subsidize_a_below_floor_outlet(self):
         result = self.evaluate()
-        self.assertTrue(result['profitable'])
-        self.assertAlmostEqual(result['average_profit'], .10)
+        self.assertFalse(result['profitable'])
+        self.assertEqual(result['covered_kwh'], 1.)
+        self.assertEqual(result['retained_kwh'], 1.)
+        self.assertAlmostEqual(result['average_profit'], .15)
         self.assertFalse(self.evaluate(prices=(.30, .199))['profitable'])
+
+    def test_every_outlet_at_or_above_floor_funds_the_full_purchase(self):
+        result = self.evaluate(prices=(.30, .25))
+        self.assertTrue(result['profitable'])
+        self.assertEqual(result['covered_kwh'], 2.)
+        self.assertEqual(result['retained_kwh'], 0.)
+        self.assertAlmostEqual(result['average_profit'], .125)
 
     def test_pv_share_has_no_import_cost_and_cannot_subsidize_grid(self):
         result = self.evaluate(prices=(.25, .25), solar=1.)
@@ -38,39 +47,26 @@ class AverageProfitTest(unittest.TestCase):
         self.assertFalse(self.evaluate(prices=(.40,), demand=(1.,), export=.40)['profitable'])
         self.assertFalse(self.evaluate(prices=(.40,), demand=(0.,), export=.24)['profitable'])
 
-    def test_supplied_snapshot_reaches_full_and_releases_reserve_for_refill(self):
+    def test_supplied_snapshot_rejects_grid_refill_without_eligible_outlets(self):
         now, slots, result = replay_full_plan('2026_10_10_short_cycles',
             '2026-10-10T09:15:10.729241+02:00', soc=20, reserve=60,
             profit=.10, max_charge=2.5, snapshot_exports=True, isolated_cycles=True)
-        self.assertTrue(result.planned_grid_charge_windows)
-        self.assertTrue(any('T12:' in w['start'] for w in result.planned_grid_charge_windows))
+        # A weighted surplus cannot make below-floor household slots executable.
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        self.assertTrue(result.planned_solar_charge_windows)
+        self.assertTrue(result.battery_no_charge_reserve_active)
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
         trace = energy_trace(now, slots, windows, initial=2., max_charge=2.5)
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.01)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
-        self.assertGreaterEqual(trace[-1][1], 2.-.01)
-        imported = cost = avoided = 0.
-        for window in windows:
-            for slot in slots:
-                hours = max(0., (min(datetime.fromisoformat(window['end']), slot['end'])
-                    - max(datetime.fromisoformat(window['start']), slot['start'])).total_seconds()/3600)
-                net_kw = slot['net_solar_kwh']/slot['hours']
-                if window['mode'] == 'laden_van_net':
-                    amount = max(0., 2.5-max(0., net_kw))*hours
-                    imported += amount
-                    cost += amount*slot['import_price']
-                elif window['mode'] == 'ontladen':
-                    avoided += min(3., max(0., -net_kw))*hours*slot['import_price']
-        # After the profitable refill releases reserve, this emitted plan
-        # earns the configured mean margin over the complete grid purchase.
-        self.assertGreater(imported, 4.)
-        self.assertGreaterEqual(avoided-cost, imported*.10)
+        self.assertAlmostEqual(trace[-1][1], 6., delta=.01)
 
-    def test_average_profitable_fill_survives_soc_feedback(self):
+    def test_rejected_imports_stay_rejected_during_solar_fill_soc_feedback(self):
         now = datetime.fromisoformat('2026-10-10T09:15:10.729241+02:00')
         c = coordinator()
         energy = peak = 2.
-        saw_grid = False
+        saw_grid = saw_solar = False
         for _ in range(34):
             _, slots, result = replay_full_plan('2026_10_10_short_cycles', now.isoformat(),
                 soc=energy*10, instance=c, reserve=60, profit=.10, max_charge=2.5,
@@ -80,6 +76,7 @@ class AverageProfitTest(unittest.TestCase):
                         for w in result.planned_battery_mode_windows
                         if datetime.fromisoformat(w['start']) < until]
             saw_grid |= any(w['mode'] == 'laden_van_net' for w in commands)
+            saw_solar |= any(w['mode'] == 'laden_met_zonne_energie' for w in commands)
             trace = energy_trace(now, slots, commands, initial=energy, max_charge=2.5)
             self.assertTrue(trace)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
@@ -87,9 +84,12 @@ class AverageProfitTest(unittest.TestCase):
             energy = trace[-1][1]
             peak = max(peak, *(e for _, e, _ in trace))
             now = until
-        self.assertTrue(saw_grid)
-        # A profitable partial fill need not reach the former full-cycle target.
-        self.assertGreater(peak, 7.4)
+        self.assertFalse(saw_grid)
+        # Advancing measured SOC creates an observed fill, not permission to
+        # buy imports that the unchanged physical outlets cannot discharge.
+        # Solar-only charging remains useful throughout those replans.
+        self.assertTrue(saw_solar)
+        self.assertGreater(peak, 2.)
 
 
 if __name__ == '__main__':

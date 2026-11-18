@@ -328,18 +328,20 @@ class EnergyAccountingTest(unittest.TestCase):
         self.assertEqual(result.planned_grid_charge_windows, [])
         self.assertNotEqual(result.battery_strategy, "laden_van_net")
 
-    def test_full_refill_can_carry_reserved_imports_at_cost(self):
-        # October 25: retained imports no longer count as an immediate loss.
+    def test_full_refill_rejected_when_strict_outlets_cannot_cover_imports(self):
+        # Retained stock at cost does not make below-floor home outlets eligible.
         now, slots, result = replay_full_plan(
             "2026_09_18_full_cycle", "2026-09-18T21:58:35+02:00",
             soc=78, discharging=True, reserve=60, max_charge=2.5,
         )
-        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+            result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
         self.assertTrue(result.battery_no_charge_reserve_active)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=7.8, max_charge=2.5)
         self.assertGreaterEqual(trace[-1][1], 6-.005)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)
-        self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
+        self.assertLessEqual(max(e for _, e, _ in trace), 7.8+.005)
 
     def test_small_solar_window_gets_grid_topup_and_later_solar_respects_capacity(self):
         now, slots, result = replay_full_plan(
@@ -382,12 +384,14 @@ class EnergyAccountingTest(unittest.TestCase):
         )
         self.assertEqual(result.planned_grid_charge_windows, [])
 
-    def test_profitable_partial_refill_never_releases_configured_reserve(self):
+    def test_weighted_only_partial_refill_is_rejected_and_keeps_reserve(self):
         now, slots, result = replay_full_plan(
             "2026_09_18_reserve", "2026-09-18T21:24:16.994088+02:00",
             soc=81, discharging=True, reserve=60, max_charge=2.5,
         )
-        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+            result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
         self.assertTrue(result.battery_no_charge_reserve_active)
         self.assertEqual(result.battery_reserved_energy_kwh, 4)
         self.assertAlmostEqual(result.battery_energy_available_for_discharge_kwh, 2.1)
@@ -503,12 +507,14 @@ class EnergyAccountingTest(unittest.TestCase):
         runtime_key = c._store_battery_cycle_state_snapshot.__globals__["RUNTIME_STATE"]
         self.assertEqual(c.hass.data[runtime_key]["battery"]["battery_grid_charge_price"], .131)
 
-    def test_september_18_refill_can_retain_stock_at_cost(self):
+    def test_september_18_refill_rejects_insufficient_strict_profit_coverage(self):
         now, slots, result = replay_full_plan(
             "2026_09_18", "2026-09-18T19:15:10.454352+02:00", soc=96, discharging=True, reserve=60,
         )
         self.assertEqual(result.battery_strategy, "ontladen")
-        self.assertTrue(result.planned_grid_charge_windows)
+        self.assertEqual(result.planned_grid_charge_windows, [])
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+            result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
         self.assertTrue(result.battery_no_charge_reserve_active)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=9.6)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 6., delta=.005)

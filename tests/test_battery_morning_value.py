@@ -9,7 +9,8 @@ from test_battery_energy_accounting import replay_full_plan, energy_trace, coord
 
 
 class MorningValueTest(unittest.TestCase):
-    def replay(self, at='2026-11-02T04:00:00+01:00', energy=3.6, solar='actual', instance=None, profit=.1):
+    def replay(self, at='2026-11-02T04:00:00+01:00', energy=3.6, solar='actual', instance=None, profit=.1,
+               strict_profitable=False):
         original = Path.read_text
         data = json.loads(original(Path(__file__).parent/'fixtures/battery_2026_11_02.json'))
         if solar != 'actual':
@@ -22,6 +23,14 @@ class MorningValueTest(unittest.TestCase):
                         hours = max(0.,(min(b,e)-max(a,c)).total_seconds()/3600)
                         w['estimated_kwh'] += d['estimated_kwh']*hours/((e-c).total_seconds()/3600)
                     w['estimated_kwh'] += .001
+        if strict_profitable:
+            # Explicit synthetic positive control: every later household outlet
+            # covers the dearest new lot plus EUR .10, not just its average.
+            for w in data['upcoming_energy_price_windows']:
+                if 10 <= datetime.fromisoformat(w['start']).hour < 14:
+                    w['price'] = .10
+            for w in data['upcoming_export_price_windows']:
+                w['price'] = -.02  # This control tests household value only.
         with patch.object(Path,'read_text',lambda p,*a,**k:json.dumps(data)
                 if p.name=='battery_2026_11_02.json' else original(p,*a,**k)):
             return replay_full_plan('2026_11_02',at,soc=energy*10,discharging=True,
@@ -31,7 +40,7 @@ class MorningValueTest(unittest.TestCase):
     def test_morning_value_survives_with_sun_without_sun_and_tiny_surplus(self):
         for solar in ('actual','zero','tiny'):
             with self.subTest(solar=solar):
-                now, slots, result = self.replay(solar=solar)
+                now, slots, result = self.replay(solar=solar, strict_profitable=True)
                 windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
                 self.assertTrue(result.planned_grid_charge_windows)
                 charges = [w for w in windows if w['mode'].startswith('laden_')]
@@ -40,12 +49,10 @@ class MorningValueTest(unittest.TestCase):
                 self.assertGreaterEqual(start, now)
                 self.assertLess(end, now+timedelta(days=2))
                 self.assertFalse(any(w['mode']=='ontladen_naar_net' for w in windows))
-                # Measured 36% is below the configured 60% reserve: do not
-                # spend it in the morning in anticipation of a future fill.
-                self.assertFalse(any(w['mode'].startswith('ontladen') and
-                    datetime.fromisoformat(w['start']) < start for w in windows))
+                # This deliberately profitable full NEW refill upgrades the
+                # cycle to its normal 20% bound before charging begins.
                 trace=energy_trace(now,slots,windows,initial=3.6,max_charge=2.5)
-                self.assertAlmostEqual(min(e for _,e,_ in trace),3.6,delta=.005)
+                self.assertAlmostEqual(min(e for _,e,_ in trace),2.,delta=.005)
                 self.assertLessEqual(max(e for _,e,_ in trace),10.005)
                 self.assertGreater(max(e for _,e,_ in trace),6.)
                 self.assertGreaterEqual(trace[-1][1],6.-.005)  # Unfinished refill retains energy.
@@ -54,9 +61,22 @@ class MorningValueTest(unittest.TestCase):
                 # average silently drops those real profitable sales. Track lots
                 # chronologically, including retained reserve at acquisition cost.
                 from test_battery_partial_cycle_economics import imported_margin
-                ledger = imported_margin(slots, windows, initial_usable=1.6, reserve_usable=4.)
+                ledger = imported_margin(slots, windows, initial_usable=1.6, reserve_usable=0.)
                 self.assertGreater(ledger['sold'], 0.)
                 self.assertGreaterEqual(ledger['margin'], .1, ledger)
+
+    def test_captured_weighted_only_refill_is_rejected_without_spending_morning_stock(self):
+        for solar, final in (('actual', 7.156), ('zero', 3.6), ('tiny', 3.664)):
+            with self.subTest(solar=solar):
+                now, slots, result = self.replay(solar=solar)
+                windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
+                self.assertFalse(result.planned_grid_charge_windows)
+                self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+                self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
+                trace = energy_trace(now, slots, windows, initial=3.6, max_charge=2.5)
+                self.assertAlmostEqual(min(e for _, e, _ in trace), 3.6, delta=.005)
+                self.assertAlmostEqual(trace[-1][1], final, delta=.005)
+                self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_no_sun_does_not_bypass_profit(self):
         _,_,r=self.replay(solar='zero',profit=.5)
@@ -67,7 +87,7 @@ class MorningValueTest(unittest.TestCase):
         c=coordinator();c._charge_session_started=False;c._discharge_session_started=True
         now=datetime.fromisoformat('2026-11-02T04:00:00+01:00');energy=3.6
         for index in range(44):
-            _,slots,r=self.replay(now.isoformat(),energy,solar='zero',instance=c)
+            _,slots,r=self.replay(now.isoformat(),energy,solar='zero',instance=c,strict_profitable=True)
             if index==12:
                 c.hass=SimpleNamespace(data={});c.config_entry.entry_id='morning-value'
                 c._store_battery_cycle_state_snapshot(now)
@@ -75,7 +95,7 @@ class MorningValueTest(unittest.TestCase):
                 with patch.object(c._restore_recent_battery_cycle_state.__globals__['dt_util'],'now',return_value=now):
                     restored._restore_recent_battery_cycle_state()
                 c=restored;del c.hass
-                _,slots,again=self.replay(now.isoformat(),energy,solar='zero',instance=c)
+                _,slots,again=self.replay(now.isoformat(),energy,solar='zero',instance=c,strict_profitable=True)
                 self.assertEqual(r.planned_battery_mode_windows,again.planned_battery_mode_windows)
             until=now+timedelta(minutes=15)
             commands=[{**w,'end':min(datetime.fromisoformat(w['end']),until).isoformat()}

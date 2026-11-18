@@ -201,6 +201,9 @@ class ApprovedAllocationBundlingTest(unittest.TestCase):
 
     def test_below_reserve_loss_export_respects_home_and_physical_power(self):
         h, slots = self.loss_export_fixture(home=.1)
+        # Mixed lossful export still requires profitable household discharge.
+        for slot in slots:
+            slot['import_price'] = 1.10
         windows = h.build(slots, 1.1)
         # Household needs .3 kWh; exports may use only .8 kWh and .4 per slot.
         # A bridge needing two full .4 kWh export slots remains executable.

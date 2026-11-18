@@ -40,11 +40,13 @@ class RestartTest(unittest.IsolatedAsyncioTestCase):
         # A cold start below reserve must preserve measured energy rather than
         # projecting an earlier discharge down to the physical minimum.
         self.assertEqual(result.battery_strategy, "accu_uit")
-        self.assertTrue(result.planned_grid_charge_windows)
+        # The captured fill had only weighted-average margin; strict per-slot
+        # admission rejects it, so startup must retain exactly the measured SOC.
+        self.assertFalse(result.planned_grid_charge_windows)
         self.assertTrue(result.battery_no_charge_reserve_active)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=3.9, max_charge=2.5)
         self.assertAlmostEqual(min(e for _, e, _ in trace), 3.9, delta=.005)
-        self.assertGreater(trace[-1][1], 3.9)
+        self.assertAlmostEqual(trace[-1][1], 3.9, delta=.005)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
     def test_unknown_soc_preserves_both_existing_directions(self):

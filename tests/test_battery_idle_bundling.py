@@ -48,7 +48,7 @@ class IdleBundlingTest(unittest.TestCase):
                                           max_discharge_kw=1)
         self.assertEqual(list(plan), [slots[2]['start']])
 
-    def test_real_snapshot_below_reserve_can_refill_with_stock_held_at_cost(self):
+    def test_real_snapshot_below_reserve_rejects_unfunded_refill(self):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = True
@@ -59,6 +59,7 @@ class IdleBundlingTest(unittest.TestCase):
             _, slots, result = replay_full_plan('2026_10_01_restart', now.isoformat(),
                 soc=energy*10, instance=c, reserve=60, max_charge=2.5,
                 tax_deduction=.11, isolated_cycles=True)
+            self.assertEqual(result.planned_grid_charge_windows, [])
             until = now + timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                         for w in result.planned_battery_mode_windows
@@ -71,7 +72,8 @@ class IdleBundlingTest(unittest.TestCase):
             peak = max(peak, *(e for _, e, _ in trace))
             energy = trace[-1][1]
             now = until
-        # October 25: reserve stays at cost; the discharged part earns its margin.
-        self.assertTrue(saw_grid)
-        self.assertGreater(peak, 6.)
-        self.assertLessEqual(peak, 10.005)
+        # With the observed discharge phase, no strict-profit full refill is
+        # executable. Retaining stock at cost cannot authorize a new purchase.
+        self.assertFalse(saw_grid)
+        self.assertAlmostEqual(peak, 3.9, delta=.005)
+        self.assertAlmostEqual(energy, 3.9, delta=.005)

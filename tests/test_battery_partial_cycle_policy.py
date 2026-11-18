@@ -12,6 +12,10 @@ class PartialCyclePolicyTest(unittest.TestCase):
     def plan(self, slots, initial=4.5, reserve=4., charging=False, restored=False):
         c = coordinator()
         c._charge_session_started = charging
+        # This fixture represents an unfinished solar fill, not an observed
+        # grid fill whose original import admission must survive replanning.
+        if charging:
+            c._active_charge_phase_mode = 'laden_met_zonne_energie'
         c._discharge_session_started = not charging
         c._battery_cycle_state_restored_recent = restored
         solar, grid = c._plan_charge_windows_for_horizon(

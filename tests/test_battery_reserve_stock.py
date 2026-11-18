@@ -27,15 +27,20 @@ class ReserveStockTest(unittest.TestCase):
             discharge_budget_kwh=budget, allow_export=True)
 
     def test_retained_imports_stay_at_weighted_cost_without_fictitious_profit(self):
-        result = self.evaluate(price=.35, purchase_prices=(.20, .30))
+        rejected = self.evaluate(price=.35, purchase_prices=(.20, .30))
+        self.assertFalse(rejected['profitable'])  # .35-.30 < .10 despite .10 average.
+        self.assertEqual(rejected['covered_kwh'], 0.)
+        self.assertEqual(rejected['retained_kwh'], 8.)
+        self.assertEqual(rejected['retained_import_cost'], 2.)
+        result = self.evaluate(price=.40, purchase_prices=(.20, .30))
         self.assertTrue(result['profitable'])
-        self.assertAlmostEqual(result['average_profit'], .10)
+        self.assertAlmostEqual(result['average_profit'], .15)
         self.assertAlmostEqual(result['covered_kwh'], 4.)
         self.assertAlmostEqual(result['retained_kwh'], 4.)
         self.assertAlmostEqual(result['discharged_import_cost'], 1.)
         self.assertAlmostEqual(result['retained_import_cost'], 1.)
         self.assertAlmostEqual(result['import_cost'], 2.)
-        self.assertFalse(self.evaluate(price=.349, purchase_prices=(.20, .30))['profitable'])
+        self.assertFalse(self.evaluate(price=.399, purchase_prices=(.20, .30))['profitable'])
 
     def test_existing_reserve_does_not_take_the_new_imports_profitable_demand(self):
         result = self.evaluate(imported=4., existing=4.)
@@ -141,7 +146,9 @@ class ReserveStockTest(unittest.TestCase):
         c._charge_session_started, c._discharge_session_started = False, True
         now = datetime.fromisoformat('2026-10-25T17:49:43.736008+01:00')
         energy, peak = 6., 6.
-        for index in range(52):
+        # Strict cost floors make 06:34 idle: run through the actual profitable
+        # morning outlet rather than mistaking a tariff pause for a stuck latch.
+        for index in range(60):
             _, slots, result = self.replay(now, energy, c)
             if index == 41:
                 self.assertFalse(c._charge_session_started)

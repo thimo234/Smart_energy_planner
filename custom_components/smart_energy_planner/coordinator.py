@@ -2239,7 +2239,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                            current_remaining_capacity_kwh=current_remaining_capacity_kwh,
                            max_charge_kw=max_charge_kw, max_discharge_kw=max_discharge_kw,
                            battery_min_profit=battery_min_profit,
-                           charge_safety_margin=charge_safety_margin)
+                           charge_safety_margin=charge_safety_margin,
+                           loss_completion_reserve_kwh=no_charge_reserve_kwh)
         if boundary is None or boundary > 0.005:
             trial = copy(self)
             trial._store_battery_cycle_state_snapshot = lambda timestamp: None
@@ -2276,6 +2277,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         battery_min_profit: float,
         charge_safety_margin: float = 0.0,
         no_charge_reserve_kwh: float = 0.0,
+        loss_completion_reserve_kwh: float = 0.0,
     ) -> tuple[list[dict[str, str | float]], list[dict[str, str | float]]]:
         planned_solar_charge_windows: list[dict[str, str | float]] = []
         planned_grid_charge_windows: list[dict[str, str | float]] = []
@@ -2285,6 +2287,16 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             return planned_solar_charge_windows, planned_grid_charge_windows
 
         current_usable_kwh = max(0.0, usable_capacity_kwh - current_remaining_capacity_kwh)
+        # Reconcile elapsed execution and measured SOC just as mode construction
+        # does. Raw persisted lots can already have been consumed since storage.
+        admission_stock = observed_stock(getattr(self, "_battery_margin_state", None),
+            now, current_usable_kwh, 0.0, battery_min_profit)
+        admission_costs = [float(cost) for quantity, cost in admission_stock.lots
+                           if quantity > 1e-9 and cost is not None]
+        historical_price = getattr(self, "_battery_grid_charge_price", None)
+        if current_usable_kwh > .01 and historical_price is not None:
+            admission_costs.append(float(historical_price))
+        admission_acquisition_cost = max(admission_costs, default=None)
         # The live discharge latch protects the current cycle, not the entire
         # forecast horizon. A later grid cycle can start after its depletion.
         first_grid_charge_start = now
@@ -2415,9 +2427,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 power_energy = max_discharge_kw * hours
                 home = min(power_energy, max(0.0, -float(slot["net_solar_kwh"]))
                            * hours / max(float(slot["hours"]), 1e-9))
-                if float(slot["import_price"]) + 1e-9 >= cost + battery_min_profit:
+                home_profitable = float(slot["import_price"]) + 1e-9 >= cost + battery_min_profit
+                if home_profitable:
                     capacity += home
                 if (self._cycle_export_enabled and slot["start"] >= before - timedelta(hours=8)
+                        and slot.get("price_known", True) and (home <= 1e-9 or home_profitable)
                         and float(slot["export_price"]) > 0
                         and float(slot["export_price"]) + 1e-9 >= cost + battery_min_profit):
                     capacity += max(0.0, power_energy - home)
@@ -2433,7 +2447,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         def _project_usable_energy_until(until: datetime, *, include_export: bool = False) -> float:
             projected_usable_kwh = current_usable_kwh
-            selected_acquisition_cost = None
+            selected_acquisition_cost = admission_acquisition_cost
+            has_selected_charge = False
             projected_charging = bool(getattr(self, "_charge_session_started", False))
             projected_discharging = bool(getattr(self, "_discharge_session_started", False))
             for slot in future_slots:
@@ -2452,14 +2467,25 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 active_fraction = min(1.0, active_hours / slot_hours)
                 net_battery_demand_kwh = max(0.0, -float(slot.get("net_solar_kwh", 0.0))) * active_fraction
                 discharge_kwh = min(max_discharge_kw * active_hours, net_battery_demand_kwh)
-                historical = getattr(self, "_battery_grid_charge_price", None)
-                if ((include_export or (selected_acquisition_cost is None
+
+                # Admission uses the selected execution floor, but committed
+                # loss completion is limited by the original higher reserve.
+                # Retaining stock that execution will export undersizes the
+                # refill. The household acquisition-price guard below remains
+                # strict even for this explicitly committed completion.
+                committed_loss_export = (
+                    not has_selected_charge and not projected_charging
+                    and getattr(self, "_battery_cycle_discharge_floor_kwh", None) == 0.0
+                    and not getattr(self, "_battery_require_profitable_cycle", False)
+                    and 0.0 < projected_usable_kwh <= loss_completion_reserve_kwh
+                )
+                if ((include_export or committed_loss_export or (not has_selected_charge
                         and not getattr(self, "_charge_session_started", False)
                         and getattr(self, "_battery_cycle_discharge_floor_kwh", None) == 0.0))
                         and self._cycle_export_enabled and slot.get("price_known", True)
                         and float(slot["export_price"]) > 0
-                        and (selected_acquisition_cost is None or historical is None
-                             or float(slot["export_price"]) + 1e-9 >= historical + battery_min_profit)):
+                        and (committed_loss_export or selected_acquisition_cost is None
+                             or float(slot["export_price"]) + 1e-9 >= selected_acquisition_cost + battery_min_profit)):
                     discharge_kwh = max_discharge_kw * active_hours
                 grid_charge = selected_grid_charge_by_start.get(slot_start, 0.0)
                 solar_charge = selected_solar_charge_by_start.get(slot_start, 0.0)
@@ -2468,6 +2494,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and projected_usable_kwh > no_charge_reserve_kwh + 0.005):
                     selected_charge = 0.0
                 if selected_charge > 0:
+                    has_selected_charge = True
                     # Selected commands occupy their actual powered duration;
                     # never subtract household discharge during that command.
                     rate = max_charge_kw if grid_charge > 0 else min(
@@ -2476,13 +2503,15 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     projected_usable_kwh = min(usable_capacity_kwh, projected_usable_kwh + charged)
                     projected_charging = projected_usable_kwh < usable_capacity_kwh - 0.005
                     projected_discharging = not projected_charging
-                    selected_acquisition_cost = float(slot['import_price'] if grid_charge > 0
-                                                       else slot['export_price'])
+                    acquisition_cost = float(slot['import_price'] if grid_charge > 0
+                                             else slot['export_price'])
+                    selected_acquisition_cost = max(acquisition_cost,
+                        selected_acquisition_cost if selected_acquisition_cost is not None else acquisition_cost)
                 else:
                     # Do not consume a just-selected cheap fill at its purchase
                     # price in this projection, then buy dearer solar to replace
                     # it. Execution allocates stock to the higher-value demand.
-                    if (selected_acquisition_cost is not None
+                    if (net_battery_demand_kwh > 1e-9 and selected_acquisition_cost is not None
                             and float(slot['import_price']) + 1e-9
                             < selected_acquisition_cost + battery_min_profit):
                         discharge_kwh = 0.0
@@ -2538,6 +2567,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if used_starts is not None:
                     used_starts.add(candidate["start"])
             return charged_kwh
+
+        def _selected_solar_energy(selected):
+            by_start = {slot["start"]: slot for slot in future_slots}
+            return sum(float(item["charge_kwh"]) * (
+                1.0 if item["kind"] == "solar" else min(1.0,
+                    max(0.0, float(by_start[item["start"]]["net_solar_kwh"])) / max(
+                        max_charge_kw * float(by_start[item["start"]]["hours"]), 1e-9)))
+                for item in selected)
 
         retry_charge_deadlines: dict[datetime, datetime] = {}
         cursor = first_charge_not_before
@@ -2842,7 +2879,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # refill, after the intervening household consumption.
                 selected_charge_start = min(cast(datetime, item["start"]) for item in selected_for_cycle)
                 existing_energy = _project_usable_energy_until(selected_charge_start, include_export=True)
-                historical_cost = getattr(self, "_battery_grid_charge_price", None)
+                historical_cost = admission_acquisition_cost
                 if existing_energy > 0.01 and historical_cost is not None:
                     minimum_sale_price = max(minimum_sale_price, historical_cost + battery_min_profit)
                 cheaper_refill = min((cast(datetime, item["start"])
@@ -2864,23 +2901,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     self._full_arbitrage_intervals.append((charge_end, cheaper_refill,
                                                            minimum_sale_price - battery_min_profit))
                 solar_selected = [item for item in selected_for_cycle if item["kind"] == "solar"]
-                profitable_demand = _profitable_discharge_capacity(
-                    charge_end, cheaper_refill or horizon_end, minimum_sale_price - battery_min_profit,
-                    include_estimated=True)
-                continuing_grid_cycle = (
-                    ((active_grid_cycle and cursor <= now) or (
-                        getattr(self, "_charge_session_started", False)
-                        and cursor <= now
-                        and (historical_cost is not None or (
-                            getattr(self, "_battery_cycle_state_initialized", False)
-                            and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
-                            and self._active_charge_phase_mode != "laden_met_zonne_energie"
-                        ))
-                    ))
-                    and profitable_demand > 1e-9
-                )
-                # Energy bought by this running cycle is not pre-existing
-                # supply that cancels its own full-recharge decision midway.
+                # A running charge latch is not economic admission. Already
+                # stored energy still consumes the same future outlets as new
+                # imports; only an executable remaining supplement may continue.
                 required_grid_kwh = max(0.0, target_kwh - sum(
                     float(item["charge_kwh"]) for item in solar_selected
                 ))
@@ -2888,14 +2911,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # supplement has to earn the import-price margin.
                 # Reserve stock and selected PV are not profit on new imports.
                 # They compete for the same physical future demand.
-                selected_solar_kwh = sum(
-                    float(item["charge_kwh"]) if item["kind"] == "solar" else
-                    float(item["charge_kwh"]) * min(1.0, max(0.0, float(next(
-                        slot["net_solar_kwh"] for slot in future_slots
-                        if slot["start"] == item["start"]))) / max(
-                            max_charge_kw * float(next(slot["hours"] for slot in future_slots
-                                if slot["start"] == item["start"])), 1e-9))
-                    for item in selected_for_cycle)
+                selected_solar_kwh = _selected_solar_energy(selected_for_cycle)
                 profit = grid_supplement_profit(
                     selected=selected_for_cycle, slots=future_slots, after=charge_end,
                     before=cheaper_refill or horizon_end, max_charge_kw=max_charge_kw,
@@ -2923,7 +2939,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # cheapest import falls after useful demand. Keep the running
                 # solar phase's existing selection while its window is live;
                 # retries there can truncate its remaining committed PV fill.
-                if (not profit["profitable"] and retry_has_margin and not continuing_grid_cycle
+                if (not profit["profitable"] and retry_has_margin
                         and not (cursor <= now and getattr(self, "_charge_session_started", False)
                                  and current_usable_kwh > _BATTERY_DEPLETION_EPSILON_KWH
                                  and self._active_charge_phase_mode != "laden_van_net"
@@ -2959,7 +2975,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     grid_budget = 0.0
                 # No discharge is executable until full charge. Reject new
                 # partial grid fills, preserving any usable solar alternative.
-                if (not continuing_grid_cycle and sum(float(item["charge_kwh"])
+                if (sum(float(item["charge_kwh"])
                         for item in solar_selected) + min(grid_budget, sum(
                             float(item["charge_kwh"]) for item in grid_selected))
                         + 0.005 < target_kwh):
@@ -3030,22 +3046,46 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # an individually profitable slot: all usable energy must still be
             # sellable at its new maximum import cost before the next refill.
             bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
-            # A running charge latch protects the eligible original continuation,
-            # not newly redistributed imports with a worse executable margin.
             if bundled_grid:
-                bundled_end = max(item["end"] for item in selected_for_cycle)
-                bundled_profit = grid_supplement_profit(
-                    selected=selected_for_cycle, slots=future_slots, after=bundled_end,
-                    before=cheaper_refill or horizon_end, max_charge_kw=max_charge_kw,
-                    max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
-                    existing_energy=existing_energy, allow_export=self._cycle_export_enabled,
-                    historical_cost=historical_cost,
-                    discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
-                        no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
-                    retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
-                )
-                if not bundled_profit["profitable"]:
-                    selected_for_cycle = selection_before_bundling
+                def _grid_selection_is_admissible(selection):
+                    """Validate the complete candidate, including any fallback."""
+                    candidate_profit = grid_supplement_profit(
+                        selected=selection, slots=future_slots,
+                        after=max(item["end"] for item in selection),
+                        before=cheaper_refill or horizon_end, max_charge_kw=max_charge_kw,
+                        max_discharge_kw=max_discharge_kw, minimum_profit=battery_min_profit,
+                        existing_energy=_project_usable_energy_until(
+                            min(item["start"] for item in selection), include_export=True
+                        ) + _selected_solar_energy(selection),
+                        allow_export=self._cycle_export_enabled,
+                        historical_cost=historical_cost,
+                        discharge_budget_kwh=max(0.0, usable_capacity_kwh - (
+                            no_charge_reserve_kwh if cheaper_refill is None else 0.0)),
+                        retained_reserve_kwh=no_charge_reserve_kwh if cheaper_refill is None else 0.0,
+                    )
+                    # A PV-only grid command makes no purchase. Real imports
+                    # require both a complete fill and executable outlets,
+                    # regardless of a persisted/observed running-charge latch.
+                    return candidate_profit["net_kwh"] <= 1e-9 or (
+                        candidate_profit["profitable"]
+                        and sum(float(item["charge_kwh"]) for item in selection) + .005 >= target_kwh
+                    )
+
+                if not _grid_selection_is_admissible(selected_for_cycle):
+                    if _grid_selection_is_admissible(selection_before_bundling):
+                        selected_for_cycle = selection_before_bundling
+                    else:
+                        selected_for_cycle = [item for item in selection_before_bundling
+                                              if item["kind"] == "solar"]
+                        for item in selection_before_bundling:
+                            if item["kind"] != "grid":
+                                continue
+                            alternative = next((candidate for candidate in primary_candidates
+                                if candidate["kind"] == "solar"
+                                and candidate["start"] == item["start"]), None)
+                            if alternative is not None:
+                                selected_for_cycle.append({**alternative, "charge_kwh": min(
+                                    float(alternative["charge_kwh"]), float(item["charge_kwh"]))})
                     bundled_grid = [item for item in selected_for_cycle if item["kind"] == "grid"]
             if grid_selected and bundled_grid and cheaper_refill is not None and not mixed_fill:
                 bundled_cost = max(float(item["profit_cost"]) for item in selected_for_cycle
@@ -3053,7 +3093,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 bundled_end = max(item["end"] for item in selected_for_cycle)
                 if _profitable_discharge_capacity(bundled_end, cheaper_refill,
                                                   bundled_cost) + 1e-6 < usable_capacity_kwh:
-                    selected_for_cycle = selection_before_bundling
+                    selected_for_cycle = (selection_before_bundling
+                        if _grid_selection_is_admissible(selection_before_bundling)
+                        else [item for item in selection_before_bundling if item["kind"] == "solar"])
                 else:
                     self._full_arbitrage_intervals = [
                         (period[0], period[1], max(period[2], bundled_cost))
@@ -3598,17 +3640,26 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # upgrading from a version without persisted margin lots.
             margin_stock.lots = [[quantity, grid_cost_floor if cost is None else cost]
                                  for quantity, cost in margin_stock.lots]
-        def export_profitable(slot):
-            # Tariffs are already net. Protect every remaining purchased lot
-            # conservatively; household avoidance has a different policy.
+        def discharge_profitable(slot, price_key):
+            # Protect every remaining acquisition lot, also for avoided imports.
+            # Future revenue cannot waive this per-slot floor; tariffs are net.
             costs = [float(cost) for quantity, cost in margin_stock.lots
                      if quantity > 1e-9 and cost is not None]
             if grid_cost_floor is not None:
                 costs.append(grid_cost_floor)
-            return (slot.get("price_known", True)
-                    and float(slot["export_price"]) > 0
-                    and (not costs or float(slot["export_price"]) + 1e-9
+            return ((price_key == "import_price" or slot.get("price_known", True))
+                    and (price_key != "export_price" or float(slot[price_key]) > 0)
+                    and (not costs or float(slot[price_key]) + 1e-9
                          >= max(costs) + battery_min_profit))
+
+        def export_profitable(slot):
+            # Export necessarily supplies any simultaneous household deficit.
+            return (discharge_profitable(slot, "export_price")
+                    and (float(slot["net_solar_kwh"]) >= -1e-9
+                         or home_profitable(slot)))
+
+        def home_profitable(slot):
+            return discharge_profitable(slot, "import_price")
 
         observed_margin_state = dict(at=now.isoformat(), energy=initial_usable_energy_kwh,
             reserve=0.0, lots=[lot[:] for lot in margin_stock.lots],
@@ -3849,7 +3900,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and (export_profitable(candidate_slot) or loss_export)
                     and (not imminent_fill or loss_export))
                 if not simulated_charge_incomplete:
-                    reachable_discharge_kwh += power_kwh if export_reachable else home_kwh
+                    reachable_discharge_kwh += (power_kwh if export_reachable else
+                        home_kwh if home_profitable(candidate_slot) else 0.0)
                 segment_end_index += 1
 
             segment_slots = slots[slot_index:segment_end_index]
@@ -3883,7 +3935,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             discharge_slots = planning_slots if arbitrage is None or loss_completion_enabled else [slot for slot in planning_slots
                 if slot.get("price_known", True) and float(slot["import_price"]) + 1e-9 >= arbitrage[2] + battery_min_profit]
             planned_discharge_kwh = plan_segment_discharge_kwh(
-                slots=discharge_slots,
+                slots=[s for s in discharge_slots if home_profitable(s)],
                 available_energy_kwh=discharge_budget_kwh,
                 max_discharge_kw=max_discharge_kw,
             )
@@ -3949,7 +4001,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         continue
                     power_kwh = max_discharge_kw * float(s["hours"])
                     home_kwh = min(power_kwh, max(0.0, -float(s["net_solar_kwh"])))
-                    offers.append((float(s["import_price"]), s["start"], "home", home_kwh))
+                    if home_profitable(s):
+                        offers.append((float(s["import_price"]), s["start"], "home", home_kwh))
                     if self._cycle_export_enabled and export_profitable(s):
                         offers.append((float(s["export_price"]), s["start"], "export",
                                        max(0.0, power_kwh - home_kwh)))
@@ -3968,7 +4021,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 {**s, "price": s["import_price"], "capacity_kwh": min(
                     max_discharge_kw * float(s["hours"]),
                     max(0., -float(s["net_solar_kwh"])))}
-                for s in segment_slots if s.get("price_known", True)
+                for s in segment_slots if home_profitable(s)
                 and not any(s['end'] > w['start'] and s['start'] < w['end']
                             for w in charge_windows)]
             planned_discharge_kwh = bundle_slot_allocations(
@@ -4025,7 +4078,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if reserve_loss_allowed:
                     remaining_slots = [s for s in segment_slots if s['start'] >= segment_slot_start]
                     remaining_home = plan_segment_discharge_kwh(
-                        slots=remaining_slots,
+                        slots=[s for s in remaining_slots if home_profitable(s)],
                         available_energy_kwh=max(0.0, energy_before_slot - cycle_floor),
                         max_discharge_kw=max_discharge_kw,
                     )
@@ -4143,6 +4196,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 suppress_discharge = (simulated_charge_incomplete
                     and sim_usable_energy_kwh < usable_capacity_kwh - 0.005)
                 within_charge_phase = suppress_discharge
+                # Authorize against fresh lots, independently of reserve fallback,
+                # bundling and credit from future sales. Export also feeds home.
+                if not home_profitable(segment_slot):
+                    segment_discharge_kwh = 0.0
+                    if float(segment_slot["net_solar_kwh"]) < -1e-9:
+                        segment_export_kwh = 0.0
+                        within_export_window = False
                 discharge_allowed_by_soc = True
 
                 # Discharge takes priority over charging, except between charge

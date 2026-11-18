@@ -1,4 +1,4 @@
-"""Approved sunk-stock policy through the real coordinator entry point."""
+"""Strict known-cost household policy through the coordinator entry point."""
 import json
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -14,14 +14,14 @@ from custom_components.smart_energy_planner.battery_models import SolarWindow
 class DischargePolicyTest(unittest.TestCase):
     now = datetime(2026, 11, 14, 12)
 
-    def instance(self):
+    def instance(self, cost=.90):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = True
         c._battery_cycle_discharge_floor_kwh = 4.
-        c._battery_grid_charge_price = .90
+        c._battery_grid_charge_price = cost
         c._battery_margin_state = dict(at=self.now.isoformat(), energy=8., reserve=0.,
-                                      lots=[[8., .90]], credit=-3., actions=[])
+                                      lots=[[8., cost]], credit=-3., actions=[])
         return c
 
     def build(self, c=None, reserve=60, soc=100, prices=None, solar=False, now=None, demand_kwh=1.):
@@ -56,27 +56,27 @@ class DischargePolicyTest(unittest.TestCase):
             solar_windows=sun, hourly_demand=demand, horizon_start=now, demand_safety_margin=0)
         return c, result, slots
 
-    def test_high_cost_debt_waits_for_expensive_hours_without_profitable_refill(self):
+    def test_high_cost_stock_rejects_all_unprofitable_household_hours(self):
         c, result, slots = self.build()
         self.assertFalse(result.planned_grid_charge_windows)
         self.assertFalse(result.planned_solar_charge_windows)
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=10, max_charge=2.5)
-        self.assertAlmostEqual(trace[-1][1], 6., delta=.005)
-        self.assertTrue(all(e >= 5.995 for _, e, _ in trace))
+        self.assertTrue(all(abs(e-10.) <= .005 for _, e, _ in trace))
         discharge = [w for w in result.planned_battery_mode_windows if w['mode'].startswith('ontladen')]
-        self.assertTrue(discharge)
-        self.assertGreaterEqual(datetime.fromisoformat(discharge[0]['start']), self.now+timedelta(hours=4))
+        self.assertFalse(discharge)
         self.assertEqual(c._battery_margin_state['lots'], [[8., .90]])
         self.assertEqual(c._battery_margin_state['credit'], -3.)
 
-    def test_partial_reserve_upgrades_before_profitable_tomorrow_refill(self):
+    def test_high_cost_partial_reserve_rejects_discharge_despite_profitable_refill(self):
         prices = [.20]*4 + [.60]*8 + [.05]*4 + [.60]*8
         c, result, slots = self.build(soc=80, prices=prices)
-        refill = min(datetime.fromisoformat(w['start']) for w in result.planned_grid_charge_windows)
+        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertFalse(result.planned_solar_charge_windows)
+        self.assertFalse(any(w['mode'].startswith('ontladen')
+                             for w in result.planned_battery_mode_windows))
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=8, max_charge=2.5)
-        before = [e for at, e, _ in trace if datetime.fromisoformat(at) <= refill]
-        self.assertAlmostEqual(min(before), 2., delta=.005)
-        self.assertEqual(c._battery_cycle_discharge_floor_kwh, 0.)
+        self.assertTrue(all(abs(e-8.) <= .005 for _, e, _ in trace))
+        self.assertEqual(c._battery_cycle_discharge_floor_kwh, 4.)
         self.assertEqual(c._battery_margin_state['credit'], -3.)
         self.assertEqual(c._battery_margin_state['lots'], [[6., .90]])
 
@@ -93,7 +93,7 @@ class DischargePolicyTest(unittest.TestCase):
     def test_profitable_tomorrow_solar_refill_releases_saved_reserve(self):
         prices = [.60]*12+[.20]*4+[.60]*8
         solar = [0.]*12+[3.5]*4+[0.]*8
-        c, result, slots = self.build(soc=80, prices=prices, solar=solar)
+        c, result, slots = self.build(c=self.instance(cost=.10), soc=80, prices=prices, solar=solar)
         self.assertTrue(result.planned_solar_charge_windows)
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows,
                              initial=8, max_charge=2.5)
@@ -102,7 +102,7 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertGreaterEqual(max(e for _, e, _ in trace), 9.995)
 
     def test_upgrade_preserves_unfinished_fill_protection(self):
-        c = self.instance()
+        c = self.instance(cost=.10)
         c._charge_session_started = True
         c._discharge_session_started = False
         c, result, slots = self.build(c=c, soc=80,
@@ -115,7 +115,7 @@ class DischargePolicyTest(unittest.TestCase):
 
     def test_upgrade_replans_and_json_restart_preserve_accounting(self):
         prices = [.60]*12+[.05]*4+[.60]*8
-        c, result, _ = self.build(soc=80, prices=prices)
+        c, result, _ = self.build(c=self.instance(cost=.10), soc=80, prices=prices)
         state = json.loads(json.dumps(c._battery_margin_state))
         expected = result.planned_battery_mode_windows
         for _ in range(2):
@@ -136,7 +136,7 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertEqual(result.planned_battery_mode_windows, expected)
 
     def test_configured_non60_reserve(self):
-        _, result, slots = self.build(reserve=70)
+        _, result, slots = self.build(c=self.instance(cost=.10), reserve=70)
         trace = energy_trace(self.now, slots, result.planned_battery_mode_windows, initial=10, max_charge=2.5)
         self.assertAlmostEqual(trace[-1][1], 7., delta=.005)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6.995)
@@ -145,12 +145,14 @@ class DischargePolicyTest(unittest.TestCase):
         c = self.instance()
         for index in range(8):
             now = self.now+timedelta(hours=index)
-            energy = 10. if index <= 4 else 14.-index
-            c, result, slots = self.build(c=c, now=now, soc=energy*10)
+            c, result, slots = self.build(c=c, now=now, soc=100)
             command = next(w for w in result.planned_battery_mode_windows
                            if datetime.fromisoformat(w['start']) <= now < datetime.fromisoformat(w['end']))
-            self.assertEqual(command['mode'], 'accu_uit' if index < 4 else 'ontladen')
-            self.assertLessEqual(c._battery_margin_state['credit'], -3.)
+            self.assertEqual(command['mode'], 'accu_uit')
+            self.assertFalse(any(w['mode'].startswith('ontladen')
+                                 for w in result.planned_battery_mode_windows))
+            self.assertEqual(c._battery_margin_state['credit'], -3.)
+            self.assertEqual(c._battery_margin_state['lots'], [[8., .90]])
             if index == 5:
                 ns = c._restore_recent_battery_cycle_state.__globals__
                 c.hass = SimpleNamespace(data={})
@@ -161,7 +163,7 @@ class DischargePolicyTest(unittest.TestCase):
                 with patch.object(ns['dt_util'], 'now', return_value=now+timedelta(days=3)):
                     restored._restore_recent_battery_cycle_state()
                 c = restored
-        self.assertLess(c._battery_margin_state['credit'], -3.)
+        self.assertEqual(c._battery_margin_state['credit'], -3.)
         self.assertTrue(all(cost == .90 for _, cost in c._battery_margin_state['lots']))
 
     def test_unprofitable_new_grid_and_solar_charge_rejected(self):

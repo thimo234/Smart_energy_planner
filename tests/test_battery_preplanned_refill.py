@@ -74,16 +74,22 @@ class PreplannedRefillTest(unittest.TestCase):
         # Do not include morning exports or put a value on retained stock.
         self.assertGreaterEqual(saved-cost, imported*.10)
 
-    def test_older_refills_can_keep_the_sixty_percent_reserve_at_cost(self):
-        for snapshot, timestamp, soc in (
-            ('2026_09_19_morning', '2026-09-19T08:00:10.907547+02:00', 44),
-            ('2026_09_27_late_refill', '2026-09-27T16:54:07.006343+02:00', 100),
+    def test_older_refills_require_strictly_eligible_outlets(self):
+        for snapshot, timestamp, soc, eligible in (
+            ('2026_09_19_morning', '2026-09-19T08:00:10.907547+02:00', 44, True),
+            ('2026_09_27_late_refill', '2026-09-27T16:54:07.006343+02:00', 100, False),
         ):
             with self.subTest(snapshot=snapshot):
                 now, slots, result = replay_full_plan(snapshot, timestamp, soc=soc,
                     discharging=True, reserve=60, max_charge=2.5, tax_deduction=.11,
                     isolated_cycles=True)
-                self.assertTrue(result.planned_grid_charge_windows)
+                if eligible:
+                    self.assertTrue(result.planned_grid_charge_windows)
+                else:
+                    # The late weighted fill lacks enough executable outlets.
+                    self.assertEqual(result.planned_grid_charge_windows, [])
+                    self.assertFalse(any(w['mode'] == 'laden_van_net' for w in
+                        result.planned_battery_mode_windows + result.estimated_battery_mode_windows))
                 self.assertTrue(result.battery_no_charge_reserve_active)
                 trace = energy_trace(now, slots, result.planned_battery_mode_windows,
                                      initial=soc/10, max_charge=2.5)

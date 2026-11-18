@@ -75,6 +75,9 @@ class BoundCyclePolicyTest(unittest.TestCase):
         self.c._discharge_session_started = False
         self.c._battery_cycle_discharge_floor_kwh = 4.
         slots = self.slots(home=1.)
+        # Actual slot acquisition prices must match the proposed charge price.
+        for i in (0, 4, 5):
+            slots[i]['import_price'] = .10
         windows = self.build(slots, 4.5, [self.charge(0, .25, .625), self.charge(4, 1.15, 2.875)])
         before_full = [w for w in windows if datetime.fromisoformat(w['start']) < self.now+timedelta(hours=5.15)]
         self.assertFalse(any(w['mode'].startswith('ontladen') for w in before_full), windows)

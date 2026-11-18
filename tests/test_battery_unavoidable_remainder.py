@@ -23,6 +23,42 @@ def replay(now=NOW, soc=26, instance=None):
 
 
 class UnavoidableRemainderTest(unittest.TestCase):
+    def test_refill_projection_only_counts_committed_below_reserve_loss_export(self):
+        from test_battery_solar_topup_regression import slot
+
+        cases = [
+            # A committed loss export empties 0.6 kWh before the solar fill.
+            (4., 0., True, 0., False, 8.),
+            # No higher reserve, or stock above it: normal profit protection.
+            (0., 0., True, 0., False, 7.4),
+            (.5, 0., True, 0., False, 7.4),
+            # Loss completion cannot bypass household minimum profit.
+            (4., .1, True, 0., False, 7.4),
+            # Unknown export prices, uncommitted cycles and strict cycles
+            # cannot be assumed to dispose of the carried stock either.
+            (4., 0., False, 0., False, 7.4),
+            (4., 0., True, None, False, 7.4),
+            (4., 0., True, 0., True, 7.4),
+        ]
+        for reserve, home, known, floor, strict, expected in cases:
+            with self.subTest(reserve=reserve, home=home, known=known,
+                              floor=floor, strict=strict):
+                c = instance_with_cost()
+                c._cycle_export_planning = True
+                c._battery_cycle_discharge_floor_kwh = floor
+                c._battery_require_profitable_cycle = strict
+                slots = [slot(NOW, 0, .35, .20, demand=home)]
+                slots[0]['price_known'] = known
+                slots += [slot(NOW, i, .5, .02, solar=2.5) for i in range(1, 5)]
+                slots += [slot(NOW, i, .8, .05, demand=2.) for i in range(5, 9)]
+                solar, grid = c._plan_charge_windows_for_horizon(
+                    slots=slots, now=NOW, usable_capacity_kwh=8.,
+                    current_remaining_capacity_kwh=7.4, max_charge_kw=2.5,
+                    max_discharge_kw=3., battery_min_profit=.1,
+                    no_charge_reserve_kwh=0., loss_completion_reserve_kwh=reserve)
+                self.assertEqual(grid, [])
+                self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar), expected)
+
     def test_solar_refill_survives_stranded_remainder(self):
         c = instance_with_cost()
         # Loss export below reserve requires an explicitly committed full

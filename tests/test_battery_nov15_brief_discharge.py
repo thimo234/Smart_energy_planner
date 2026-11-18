@@ -209,7 +209,7 @@ class November15LocalCaptureReplayTest(unittest.TestCase):
         self.assertGreaterEqual(first['start'], '2026-11-15T14:00:00+01:00')
 
 
-    def test_captured_outlook_new_cycle_without_next_refill_keeps_sixty_percent(self):
+    def test_captured_outlook_rejects_refill_and_completes_existing_full_cycle(self):
         from test_battery_energy_accounting import energy_trace
         result = self.replay()
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
@@ -217,10 +217,24 @@ class November15LocalCaptureReplayTest(unittest.TestCase):
                              initial=9.7, max_charge=2.5)
         tomorrow = [(t, e, mode) for t, e, mode in trace if t.startswith('2026-11-16')]
         self.assertTrue(tomorrow)
-        self.assertTrue(any(mode.startswith('laden') for _, _, mode in tomorrow))
-        peak_index = max(range(len(tomorrow)), key=lambda i: tomorrow[i][1])
-        self.assertAlmostEqual(tomorrow[peak_index][1], 10., delta=.005)
-        self.assertAlmostEqual(min(e for _, e, _ in tomorrow[peak_index:]), 6., delta=.005)
+        # Strict acquisition economics reject the former cheap-hour refill.
+        # Existing stock can still finish its committed full cycle, but each
+        # selected household slot must cover the captured acquisition + margin.
+        minimum_price = (self.capture['coordinator_state']['battery_grid_charge_price']
+                         + self.capture['effective_config']['battery_min_profit_per_kwh'])
+        discharge = [w for w in windows if w['mode'].startswith('ontladen')]
+        for slot in self.replay_slots:
+            if any(datetime.fromisoformat(w['start']) < slot['end']
+                   and datetime.fromisoformat(w['end']) > slot['start']
+                   for w in discharge):
+                self.assertGreaterEqual(slot['import_price'] + 1e-9, minimum_price)
+        self.assertFalse(result.planned_grid_charge_windows)
+        self.assertFalse(result.planned_solar_charge_windows)
+        self.assertFalse(any(mode.startswith('laden') for _, _, mode in trace))
+        self.assertTrue(any(mode.startswith('ontladen') for _, _, mode in tomorrow))
+        self.assertAlmostEqual(max(e for _, e, _ in trace), 9.7, delta=.005)
+        self.assertAlmostEqual(tomorrow[-1][1], 2., delta=.005)
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 2.-.005)
 
 
 if __name__ == '__main__':
