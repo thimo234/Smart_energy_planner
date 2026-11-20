@@ -213,7 +213,7 @@ class DischargePolicyTest(unittest.TestCase):
         self.assertFalse(result.planned_solar_charge_windows)
         self.assertFalse(restored._charge_session_started)
 
-    def test_admitted_partial_solar_fill_continues_after_price_refresh_and_restart(self):
+    def test_partial_solar_refresh_restart_rejects_new_unprofitable_pv(self):
         c = coordinator()
         c._charge_session_started = False
         c._discharge_session_started = False
@@ -230,8 +230,11 @@ class DischargePolicyTest(unittest.TestCase):
             restored._restore_recent_battery_cycle_state()
         _, result, _ = self.build(c=restored, soc=70,
             now=self.now+timedelta(minutes=30), prices=[.30]*4+[.20]*4, solar=True)
-        self.assertTrue(result.planned_solar_charge_windows)
-        self.assertTrue(restored._charge_session_started)
+        self.assertFalse(result.planned_solar_charge_windows)
+        self.assertFalse(any(w['mode'] == 'laden_met_zonne_energie'
+                             for w in result.planned_battery_mode_windows))
+        self.assertFalse(restored._charge_session_started)
+        self.assertEqual(restored._battery_cycle_discharge_floor_kwh, 4.)
 
     def test_mode_boundary_release_is_not_a_started_fill(self):
         from test_battery_cycle_safety import modes, slots_at

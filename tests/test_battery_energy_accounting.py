@@ -163,7 +163,9 @@ class EnergyAccountingTest(unittest.TestCase):
                         later = [s['import_price'] for s in slots if s['start'] >= slot['end']]
                         self.assertGreaterEqual(max(later)-slot['export_price'], .1)
         trace = energy_trace(now, slots, result.planned_battery_mode_windows, initial=2.8, max_charge=2.5)
-        self.assertAlmostEqual(max(row[1] for row in trace), 10, delta=.005)
+        # Profitable PV no longer has to reach full before supplying the home.
+        self.assertGreater(max(row[1] for row in trace), 9.)
+        self.assertLessEqual(max(row[1] for row in trace), 10.005)
 
     def test_cheap_solar_waits_in_morning_then_completes_across_updates(self):
         _, _, result = replay_full_plan(
@@ -175,7 +177,13 @@ class EnergyAccountingTest(unittest.TestCase):
             "2026_09_24_cheap_solar", "2026-09-25T11:45:00+02:00", 20, 48,
         )
         self.assertEqual(history[0][1].battery_strategy, "laden_met_zonne_energie")
-        self.assertGreaterEqual(max(energy for _, _, energy in history), 9.95)
+        # Partial-PV discharge no longer has to wait for full; the sequential
+        # oracle retains physical and strict grid completion checks.
+        self.assertGreaterEqual(max(energy for _, _, energy in history), 6.)
+        self.assertTrue(any(result.battery_strategy == 'laden_met_zonne_energie'
+                            for _, result, _ in history))
+        self.assertTrue(any(result.battery_strategy.startswith('ontladen') and energy < 9.95
+                            for _, result, energy in history))
 
     def run_feedback_updates(self, snapshot, timestamp, soc, count, minutes=5, reserve=60):
         """Execute successive commands, update SOC, and reuse persisted state."""
@@ -184,6 +192,7 @@ class EnergyAccountingTest(unittest.TestCase):
         energy = soc / 10
         history = []
         direction = 'charge'
+        charge_source = None
         for _ in range(count):
             _, slots, result = replay_full_plan(
                 snapshot, now.isoformat(), soc=energy * 10, reserve=reserve,
@@ -196,12 +205,16 @@ class EnergyAccountingTest(unittest.TestCase):
             from bound_cycle_assertions import assert_bound_plan
             assert_bound_plan(self, now, slots, executed, initial=energy,
                               floor=2 + (getattr(c, '_battery_cycle_discharge_floor_kwh', None) or 0),
-                              charging=direction == 'charge')
+                              charging=direction == 'charge', solar_partial=True,
+                              charge_source=charge_source)
             for w in executed:
                 if w['mode'].startswith('laden_'):
+                    if direction != 'charge' or charge_source != 'laden_van_net':
+                        charge_source = w['mode']
                     direction = 'charge'
                 elif w['mode'].startswith('ontladen'):
                     direction = 'discharge'
+                    charge_source = None
             trace = energy_trace(now, slots, executed, initial=energy, max_charge=2.5)
             self.assertTrue(trace)
             self.assertGreaterEqual(min(row[1] for row in trace), 2 - .005)
@@ -283,7 +296,11 @@ class EnergyAccountingTest(unittest.TestCase):
             "2026_09_23", "2026-09-24T16:40:04.999681+02:00",
             soc=62.5, reserve=60, max_charge=2.5, instance=c, isolated_cycles=True,
         )
-        self.assertFalse(c._charge_session_started)  # Future commands alone do not advance it.
+        # The partial-PV policy now admits a current solar command here rather
+        # than deferring it until after the update. No forecast-only latch.
+        self.assertEqual(first.battery_strategy, 'laden_met_zonne_energie')
+        self.assertTrue(c._charge_session_started)
+        self.assertEqual(c._battery_charge_source, 'laden_met_zonne_energie')
         self.assertTrue(any(w['mode'].startswith('laden_')
                             and w['start'] < '2026-09-24T16:55:04.999681+02:00'
                             for w in first.planned_battery_mode_windows))

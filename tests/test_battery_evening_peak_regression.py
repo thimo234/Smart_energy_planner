@@ -9,6 +9,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from test_battery_energy_accounting import coordinator, energy_trace
+from partial_solar_assertions import assert_executable_plan
 from custom_components.smart_energy_planner.price_models import PlannerWindow
 from custom_components.smart_energy_planner.battery_models import SolarWindow
 from custom_components.smart_energy_planner.battery_forecast import build_energy_balance_slots
@@ -64,7 +65,7 @@ def replay_evening_gap(*, soc=None, instance=None, charge_started=False, dischar
 
 
 class EveningPeakRegressionTest(unittest.TestCase):
-    def test_preview_retains_incomplete_solar_charge_through_evening_peak(self):
+    def test_preview_partial_solar_serves_peak_without_releasing_reserve(self):
         now, slots, _ = replay_evening_gap()
         data = json.loads((Path(__file__).parent / "fixtures" /
                            "battery_2026_11_11_evening_gap.json").read_text())
@@ -77,17 +78,21 @@ class EveningPeakRegressionTest(unittest.TestCase):
         peak = datetime.fromisoformat("2026-11-11T17:45:00+01:00")
         mode = next(w["mode"] for w in preview
                     if datetime.fromisoformat(w["start"]) <= peak < datetime.fromisoformat(w["end"]))
-        self.assertEqual(mode, "accu_uit", 'partial solar refill cannot authorize discharge')
+        self.assertEqual(mode, "ontladen")
+        checked = assert_executable_plan(self, slots, data['actual_windows'] + preview,
+            initial=9.6, reserve=6., minimum=2.4, max_charge=2.5, margin=.1,
+            allow_estimated=True)
+        self.assertGreater(checked['sold'], 0.)
         trace = energy_trace(now, slots, data["actual_windows"] + preview,
                              initial=9.6, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2.4 - 1e-6)
         self.assertLessEqual(max(e for _, e, _ in trace), 10. + 1e-6)
 
-    def test_only_completed_charge_phase_releases_preview_latch(self):
+    def test_partial_pv_releases_only_isolated_preview_latch(self):
         now, slots, _ = replay_evening_gap()
         data = json.loads((Path(__file__).parent / "fixtures" /
                            "battery_2026_11_11_evening_gap.json").read_text())
-        for cutoff, expected_charging in [("15:30:00", True), ("16:00:00", True)]:
+        for cutoff, expected_charging in [("15:30:00", False), ("16:00:00", False)]:
             with self.subTest(cutoff=cutoff):
                 c = coordinator()
                 c._charge_session_started = True
@@ -113,13 +118,16 @@ class EveningPeakRegressionTest(unittest.TestCase):
                 self.assertEqual(vars(c), original_state,
                                  "preview must not mutate live coordinator state")
 
-    def test_observed_incomplete_solar_topup_waits_at_evening_peak(self):
+    def test_observed_partial_solar_topup_serves_profitable_evening_peak(self):
         now, slots, result = replay_evening_gap()
         windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
         peak = datetime.fromisoformat("2026-11-11T17:45:00+01:00")
         mode = next(w["mode"] for w in windows
                     if datetime.fromisoformat(w["start"]) <= peak < datetime.fromisoformat(w["end"]))
-        self.assertEqual(mode, "accu_uit", 'high prices do not complete an unfinished refill')
+        self.assertEqual(mode, "ontladen")
+        checked = assert_executable_plan(self, slots, windows, initial=9.6,
+            reserve=6., minimum=2.4, max_charge=2.5, margin=.1, allow_estimated=True)
+        self.assertGreater(checked['sold'], 0.)
         trace = energy_trace(now, slots, windows, initial=9.6, max_charge=2.5)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 2. - 1e-6)
         self.assertLessEqual(max(e for _, e, _ in trace), 10. + 1e-6)

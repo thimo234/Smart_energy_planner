@@ -83,7 +83,7 @@ class CycleSafetyTest(unittest.TestCase):
         self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
 
-    def test_discharge_latch_rejects_solar_and_grid_before_boundary(self):
+    def test_discharge_latch_keeps_grid_strict_but_admits_profitable_partial_pv(self):
         now = datetime(2026, 9, 25, 12)
         for source in ('solar', 'grid'):
             for energy in (7.5, 4, .10):
@@ -97,7 +97,13 @@ class CycleSafetyTest(unittest.TestCase):
                     windows, mode = modes(c, now, slots, energy,
                                     [window] if source == 'solar' else [],
                                     [window] if source == 'grid' else [])
-                    self.assertFalse(mode.startswith('laden'))
+                    if source == 'solar' and energy <= 4.:
+                        self.assertEqual(mode, 'laden_met_zonne_energie')
+                    else:
+                        self.assertFalse(mode.startswith('laden'))
+                    from partial_solar_assertions import assert_executable_plan
+                    assert_executable_plan(self, slots, windows, initial=energy+2.,
+                        reserve=2., max_charge=2., max_discharge=2.)
                     trace = energy_trace(now, slots, windows, initial=energy+2., max_charge=2.)
                     self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
                     self.assertLessEqual(max(e for _, e, _ in trace), 10.005)

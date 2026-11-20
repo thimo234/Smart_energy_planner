@@ -613,12 +613,18 @@ class BatteryPlannerTest(unittest.TestCase):
         # an earlier solar window is cheaper.
         from test_battery_energy_accounting import energy_trace
         charge_start = cycle_summary["next_charge_window_start"]
-        # 8 October: insufficient profitable demand rejects the next full
-        # grid cycle. With no extra reserve in this unit scenario, discharge
-        # can still use all existing energy down to the absolute floor.
-        self.assertIsNone(charge_start, 'unfinished discharge cannot start tomorrow refill')
+        # Partial profitable NEW PV is now allowed; it is not a grid refill
+        # and does not require the previous stock to reach its lower boundary.
+        self.assertIsNotNone(charge_start)
+        next_charge = next(w for w in mode_windows if w['mode'].startswith('laden'))
+        self.assertEqual(next_charge['mode'], BATTERY_MODE_SOLAR_CHARGE)
+        from partial_solar_assertions import assert_executable_plan
+        checked = assert_executable_plan(self, slots, mode_windows,
+            initial=9.8, reserve=2.)
+        self.assertGreater(checked['bought'], 0.)
+        self.assertGreater(checked['sold'], 0.)
         trace = energy_trace(now, slots, mode_windows, initial=9.8, max_charge=3)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)  # Feasible full cycle reaches normal minimum.
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
 
     def test_feedback_state_96_percent_battery_does_not_grid_charge_before_peak(self):
         now = datetime(2026, 6, 25, 18, 30)
@@ -675,12 +681,18 @@ class BatteryPlannerTest(unittest.TestCase):
         # an earlier solar window is cheaper.
         from test_battery_energy_accounting import energy_trace
         charge_start = cycle_summary["next_charge_window_start"]
-        # 8 October: insufficient profitable demand rejects the next full
-        # grid cycle. With no extra reserve in this unit scenario, discharge
-        # can still use all existing energy down to the absolute floor.
-        self.assertIsNone(charge_start, 'unfinished discharge cannot start tomorrow refill')
+        # No grid exception: only independently profitable PV may refill
+        # while existing stock still remains above the selected boundary.
+        self.assertIsNotNone(charge_start)
+        next_charge = next(w for w in mode_windows if w['mode'].startswith('laden'))
+        self.assertEqual(next_charge['mode'], BATTERY_MODE_SOLAR_CHARGE)
+        from partial_solar_assertions import assert_executable_plan
+        checked = assert_executable_plan(self, slots, mode_windows,
+            initial=9.6, reserve=2.)
+        self.assertGreater(checked['bought'], 0.)
+        self.assertGreater(checked['sold'], 0.)
         trace = energy_trace(now, slots, mode_windows, initial=9.6, max_charge=3)
-        self.assertAlmostEqual(trace[-1][1], 2., delta=.005)  # Feasible full cycle reaches normal minimum.
+        self.assertGreaterEqual(min(e for _, e, _ in trace), 1.995)
 
     def test_full_battery_grid_charge_becomes_solar_hold(self):
         mode = normalize_full_battery_charge_mode(
@@ -2038,7 +2050,9 @@ class BatteryPlannerTest(unittest.TestCase):
                 16: 1.3,
                 17: 0.3,
             }.get(hour, 0.0)
-            demand_kwh = 1.7 if hour < 18 else 0.8
+            # Full-solar continuation control: enough executable demand for
+            # both the 1.5 existing and the 6.5 independently bought PV kWh.
+            demand_kwh = 1.7 if hour < 18 else 1.4
             price = 0.17 if hour < 16 else (0.56 if 20 <= hour < 22 else 0.32)
             slots.append(
                 {
@@ -2085,6 +2099,10 @@ class BatteryPlannerTest(unittest.TestCase):
 
         self.assertEqual(current_mode, BATTERY_MODE_SOLAR_CHARGE)
         self.assertIn("ontladen", {window["mode"] for window in mode_windows})
+        from partial_solar_assertions import assert_executable_plan
+        checked = assert_executable_plan(self, slots, mode_windows,
+            initial=3.5, reserve=2., max_charge=2.)
+        self.assertTrue(checked['saw_full'])
         self.assertTrue(
             any(
                 window["mode"] == "ontladen"

@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from test_battery_energy_accounting import coordinator, energy_trace, replay_full_plan
+from partial_solar_assertions import assert_executable_plan
 from test_battery_solar_topup_regression import slot
 from custom_components.smart_energy_planner.price_models import PlannerWindow
 from custom_components.smart_energy_planner.battery_models import SolarWindow
@@ -54,20 +55,26 @@ class StrandedSolarTest(unittest.TestCase):
         c._active_charge_phase_end = now - timedelta(minutes=5)
         return c
 
-    def test_full_coordinator_plateau_refresh_json_restart_and_measured_completion(self):
+    def test_partial_solar_plateau_discharge_refresh_json_restart_and_actual_full(self):
         now = datetime.fromisoformat('2026-11-16T16:00:00+01:00')
         c = self.solar_cycle(now)
         for minute in (0, 1, 2):
             current = now + timedelta(minutes=minute)
             slots, result = completion_plan(c, current)
-            self.assertEqual(result.battery_strategy, 'laden_van_net')
+            self.assertEqual(result.battery_strategy, 'accu_uit')
+            self.assertFalse(result.planned_grid_charge_windows)
+            checked = assert_executable_plan(self, slots, result.planned_battery_mode_windows,
+                initial=9.7, reserve=6., max_charge=2.5)
+            self.assertAlmostEqual(checked['sold'], 3.7, delta=.005)
+            self.assertFalse(checked['saw_full'])
             trace = energy_trace(current, slots, result.planned_battery_mode_windows,
                                  initial=9.7, max_charge=2.5)
-            self.assertAlmostEqual(max(e for _, e, _ in trace), 10., places=5)
+            self.assertAlmostEqual(max(e for _, e, _ in trace), 9.7, places=5)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)
             self.assertTrue(any(w['mode'].startswith('ontladen')
                                 for w in result.planned_battery_mode_windows))
-            self.assertTrue(c._charge_session_started, 'unchanged measured SOC is not completion')
+            self.assertFalse(c._charge_session_started)
+            self.assertEqual(c._battery_cycle_discharge_floor_kwh, 4.)
             if minute == 1:
                 c.hass = SimpleNamespace(data={})
                 c._store_battery_cycle_state_snapshot(current)
@@ -81,26 +88,29 @@ class StrandedSolarTest(unittest.TestCase):
                                   'now', return_value=current):
                     restarted._restore_recent_battery_cycle_state()
                 c = restarted
-                self.assertTrue(c._charge_session_started)
+                self.assertFalse(c._charge_session_started)
                 self.assertTrue(c._battery_cycle_state_restored_recent)
         slots, result = completion_plan(c, now + timedelta(minutes=10), soc=100.)
         self.assertFalse(c._charge_session_started)
         self.assertTrue(any(w['mode'].startswith('ontladen') for w in result.planned_battery_mode_windows))
         self.assertFalse(result.planned_grid_charge_windows)
 
-    def test_new_imports_still_need_margin_demand_and_known_purchase_price(self):
+    def test_rejected_new_imports_do_not_block_profitable_existing_solar_stock(self):
         now = datetime.fromisoformat('2026-11-16T16:00:00+01:00')
         for kwargs in ({'price': .49}, {'demand': .1}, {'known': False}):
             with self.subTest(**kwargs):
                 c = self.solar_cycle(now)
                 c._battery_grid_charge_price = .15
-                _, result = completion_plan(c, now, **kwargs)
+                slots, result = completion_plan(c, now, **kwargs)
                 self.assertFalse(result.planned_grid_charge_windows)
-                self.assertFalse(any(w['mode'].startswith('ontladen')
-                                     for w in result.planned_battery_mode_windows))
-                self.assertTrue(c._charge_session_started)
+                checked = assert_executable_plan(self, slots,
+                    result.planned_battery_mode_windows, initial=9.7, reserve=6.,
+                    max_charge=2.5, initial_cost=.15)
+                self.assertGreater(checked['sold'], 0.)
+                self.assertFalse(checked['saw_full'])
+                self.assertEqual(c._battery_cycle_discharge_floor_kwh, 4.)
 
-    def test_completion_must_precede_peak_not_cheapest_late_import(self):
+    def test_partial_solar_needs_no_unnecessary_grid_completion_before_peak(self):
         now = datetime.fromisoformat('2026-11-16T16:00:00+01:00')
         slots = [slot(now, 0, .20, .01, solar=.05),
                  slot(now, 1, .50, .01, demand=2.),
@@ -114,12 +124,21 @@ class StrandedSolarTest(unittest.TestCase):
             current_remaining_capacity_kwh=.3, max_charge_kw=2.5,
             max_discharge_kw=3., battery_min_profit=.08,
             no_charge_reserve_kwh=4.)
-        self.assertTrue(grid)
-        self.assertTrue(all(datetime.fromisoformat(w['end']) <= now + timedelta(hours=1)
-                            for w in grid), grid)
-        self.assertAlmostEqual(sum(w['charge_kwh'] for w in solar + grid), .3, places=5)
+        # Source proposals are not commands: execution must reject any early
+        # grid completion while preserving the profitable existing PV stock.
+        windows, _ = c._build_mode_windows_from_hourly_plan(
+            slots=slots, now=now, planned_solar_charge_windows=solar,
+            planned_grid_charge_windows=grid, initial_usable_energy_kwh=7.7,
+            usable_capacity_kwh=8., battery_soc_percent=97., average_price=.3,
+            average_export_price=.01, max_charge_kw=2.5, max_discharge_kw=3.,
+            no_charge_reserve_kwh=4., battery_min_profit=.08)
+        checked = assert_executable_plan(self, slots, windows, initial=9.7,
+            reserve=6., max_charge=2.5)
+        self.assertGreater(checked['sold'], 0.)
+        self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertFalse(checked['saw_full'])
 
-    def test_expired_solar_fill_gets_economic_completion_above_95_percent(self):
+    def test_expired_partial_solar_above_95_percent_can_discharge_without_grid(self):
         c = coordinator()
         c._active_charge_phase_mode = 'laden_met_zonne_energie'
         c._active_charge_phase_end = datetime.fromisoformat('2026-10-05T15:30:00+02:00')
@@ -128,9 +147,14 @@ class StrandedSolarTest(unittest.TestCase):
             soc=97, reserve=60, max_charge=2.5, instance=c,
             isolated_cycles=True, snapshot_exports=True)
         windows = result.planned_battery_mode_windows
-        self.assertTrue(result.planned_grid_charge_windows)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.assertFalse(any(datetime.fromisoformat(w['start']) < tomorrow
+                             for w in result.planned_grid_charge_windows))
+        checked = assert_executable_plan(self, slots, windows, initial=9.7,
+            reserve=6., max_charge=2.5)
+        self.assertGreater(checked['sold'], 0.)
         trace = energy_trace(now, slots, windows, initial=9.7, max_charge=2.5)
-        self.assertGreaterEqual(max(e for _, e, _ in trace), 9.995)
+        self.assertGreaterEqual(max(e for _, e, _ in trace), 9.7)
         self.assertLessEqual(max(e for _, e, _ in trace), 10.005)
         self.assertTrue(any(w['mode'].startswith('ontladen') for w in windows))
         self.assertGreaterEqual(min(e for _, e, _ in trace), 5.995)

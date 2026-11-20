@@ -66,13 +66,20 @@ class MorningValueTest(unittest.TestCase):
                 self.assertGreaterEqual(ledger['margin'], .1, ledger)
 
     def test_captured_weighted_only_refill_is_rejected_without_spending_morning_stock(self):
-        for solar, final in (('actual', 7.156), ('zero', 3.6), ('tiny', 3.664)):
+        for solar, final in (('actual', 6.), ('zero', 3.6), ('tiny', 3.664)):
             with self.subTest(solar=solar):
                 now, slots, result = self.replay(solar=solar)
                 windows = result.planned_battery_mode_windows + result.estimated_battery_mode_windows
                 self.assertFalse(result.planned_grid_charge_windows)
                 self.assertFalse(any(w['mode'] == 'laden_van_net' for w in windows))
-                self.assertFalse(any(w['mode'].startswith('ontladen') for w in windows))
+                from partial_solar_assertions import assert_executable_plan
+                checked = assert_executable_plan(self, slots, windows, initial=3.6,
+                    reserve=6., max_charge=2.5, margin=.1, allow_estimated=True)
+                if solar == 'actual':
+                    self.assertGreater(checked['sold'], 0.)
+                    self.assertFalse(checked['saw_full'])
+                else:
+                    self.assertEqual(checked['sold'], 0.)
                 trace = energy_trace(now, slots, windows, initial=3.6, max_charge=2.5)
                 self.assertAlmostEqual(min(e for _, e, _ in trace), 3.6, delta=.005)
                 self.assertAlmostEqual(trace[-1][1], final, delta=.005)

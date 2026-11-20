@@ -5,32 +5,48 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
-## Actuele uitzondering: rendabel volledig zonneladen boven reserve
+## Actuele uitzondering: rendabel gedeeltelijk of volledig zonneladen boven reserve
 
 De gebruiker staat een nieuwe **uitsluitend zonne-laadfase** toe terwijl de
 ontlaadfase nog niet klaar is en de gemeten bruikbare energie boven de bestaande
 vastgelegde reserve ligt. Dit vervangt alleen het eerdere absolute verbod op
 zonneherladen in deze situatie; netladen krijgt geen uitzondering.
 
-- De gekozen zonnevensters moeten de werkelijk resterende ruimte volledig kunnen
-  vullen, begrensd door voorspeld overschot, vensterduur en laadvermogen. Een
-  gedeeltelijke of onvoldoende aanvulling keert de cyclusrichting niet om.
+- De gekozen zonnevensters mogen de resterende ruimte gedeeltelijk vullen,
+  begrensd door voorspeld overschot, vensterduur en laadvermogen. Vol worden is
+  geen voorwaarde voor zelfstandig rendabele NIEUWE zonne-energie. Deze actuele
+  afspraak vervangt oudere eisen en regressies die volledig zonneladen eisten;
+  vroeg of gedeeltelijk netladen krijgt nadrukkelijk geen uitzondering.
 - Nieuwe zonne-energie moet zelfstandig de minimumwinst boven de gemiste
-  terugleveropbrengst halen. Latere rendabele huisvraag wordt eerst aan bestaande
-  vrij inzetbare voorraad toegerekend: dezelfde vraag mag niet beide financieren.
-  De toets gebruikt bekende tarieven, gedeeld ontlaadvermogen en de vastgelegde
-  reserve; een geïsoleerde dure piek is onvoldoende. Een later fragment van
+  terugleveropbrengst halen. Latere rendabele huisvraag en toegestane export
+  worden eerst aan bestaande vrij inzetbare voorraad toegerekend: dezelfde
+  afzet of hetzelfde ontlaadvermogen mag niet beide financieren. De toets gebruikt
+  bekende tarieven, uitvoerbare afzet, gedeeld ontlaadvermogen en de vastgelegde
+  reserve; een geïsoleerde dure piek is onvoldoende. Export telt alleen mee waar
+  uitvoering die toestaat, niet vlak vóór een andere laadfase. Een later fragment van
   dezelfde zonneperiode sluit de avondvraag niet voortijdig uit.
 - Historische inkooplots, broninformatie en gerealiseerde margeschuld blijven
   ongewijzigd. De bestaande aanschafprijs-plus-minimumwinsttoets voor huisvraag
   en alle export-/reservebeperkingen blijven gelden. De uitzondering geeft geen
   toestemming om goedkope vroege huisvraag voor dure avondvraag te laten gaan
   wanneer de aangeboden zonneaanvulling niet uitvoerbaar is.
-- Een nu toegelaten zonne-laadfase wordt vastgelegd. Herhaalde updates en herstel
-  uit JSON mogen die fase niet ontgrendelen op grond van voorspeld volladen:
-  alleen werkelijk waargenomen vol geeft de ontlaadrichting weer vrij.
+- Na gedeeltelijk zonneladen mag rendabel ontladen doorgaan zonder eerst 100%
+  te bereiken, ook bij wegvallende prognose, gemeten gedeeltelijke lading, een
+  rustperiode, herberekening en herstel uit werkelijke JSON. Leg de laadbron vast
+  zodat dit geen strikte netlaadfase vrijgeeft. Een ontbrekende bron is geen
+  bewijs van uitsluitend zonneladen.
+- Vrijgeven van de zonnerichting is geen bewijs van een volle cyclusgrens:
+  behoud de oorspronkelijke vastgelegde reserve en gemeten boekhouding. Geen
+  fictieve volle grens, reservevrijgave, wissen van lots of kwijtschelden van
+  margeschuld. Minimumwinst voor huisvraag geldt bij iedere SOC. Ook als de accu
+  aanvankelijk onder de hogere reserve staat, mag gedeeltelijk zonneladen geen
+  ontlaadruimte onder die reserve creëren. Een volledige laadfase van morgen
+  mag de reserve vandaag niet verlagen: alleen werkelijk vol in gemeten SOC,
+  of fysiek geïntegreerde volledige lading binnen de voorspelde uitvoering,
+  kan de bijbehorende lagere volle-cyclusgrens toestaan.
 
-Offline regressies: `tests/test_battery_full_solar_refill.py`. De vastgelegde
+Offline regressies: `tests/test_battery_full_solar_refill.py` en
+`tests/test_battery_partial_solar_refill.py`. De vastgelegde
 forecastreproductie in `analysis/check_solar_admission.py` gebruikt een verkorte
 historische ledger en is dus geen exacte live replay. Geen deployment of herstart.
 
@@ -416,10 +432,12 @@ gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
   en mag de netwinst niet subsidiëren. Geschatte latere tarieven mogen de
   prognose ondersteunen. De extra arbitragecyclus houdt de bestaande strengere
   toets op volledige afname binnen het volgende venster met bekende prijzen.
-- Gewijzigd op 10 oktober: als een nieuwe cyclus niet volledig kan laden met
-  de rendabele geselecteerde zon- en netenergie, sla dan de hele cyclus over,
-  inclusief gedeeltelijke zonnelading. Dit geldt ook in de vooruitblik.
-  Zoek daarna wel verder naar een volgende volledige geschikte cyclus.
+- De eerdere volledige-cycluseis van 10 oktober blijft voor nieuwe netinkoop
+  gelden: als de rendabele geselecteerde zon- en netenergie niet volledig kan
+  laden, sla de nieuwe netcyclus over. Voor uitsluitend zon geldt de actuele
+  uitzondering bovenaan: zelfstandig rendabele gedeeltelijke zonneaanvulling
+  is toegestaan, ook in de vooruitblik. Zoek bij afwijzing verder naar een
+  volgende geschikte cyclus.
   De reserve blijft gelden zolang geen uitvoerbare aanvulling beschikbaar is.
   Bestaande afspraken voor werkelijk lopende lading, tegenvallende zon en
   negatieve netprijzen blijven gelden. Ontlading rekent met werkelijk gemeten
@@ -479,11 +497,13 @@ gedeeltelijke laadfase of een herlading boven de geldende ondergrens toestonden.
 - Zodra ontladen is gestart, mag een kleine SOC-daling gevolgd door een gunstige
   laadprijs niet meteen tot opnieuw laden leiden. Blijf in de ontlaadcyclus
   richting de veilige ondergrens.
-- Omgekeerd mag een begonnen laadcyclus niet na een kleine SOC-stijging meteen
+- Omgekeerd mag een begonnen netlaadcyclus niet na een kleine SOC-stijging meteen
   worden afgebroken voor ontladen omdat prijzen of prognoses iets veranderen.
-- De nieuwste wens geldt voor beide laadrichtingen en bronnen. De eerdere
-  uitzondering waarmee zon tijdens ontladen mocht bijladen is niet meer een
-  vanzelfsprekend toegestaan uitgangspunt.
+- Voor netladen blijven deze richtings- en volledige-laadeisen strikt gelden.
+  Voor uitsluitend zon geldt de actuele uitzondering bovenaan dit document:
+  zelfstandig rendabele NIEUWE PV mag boven de vastgelegde reserve gedeeltelijk
+  bijladen, en daarna mag rendabel ontladen zonder op 100% te wachten. Dit
+  vervangt de eerdere volledige-zon-eis, niet de minimumwinst of reserve.
 - `accu_uit` tijdens een noodzakelijke pauze is niet hetzelfde als de cyclus
   omkeren. Houd de cyclusstatus vast over herberekeningen en herstarts.
 - Uitzondering, expliciet akkoord 2 oktober: een onvermijdelijk restant mag

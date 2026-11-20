@@ -120,14 +120,16 @@ class UnavoidableRemainderTest(unittest.TestCase):
         self.assertEqual(result.battery_strategy, 'laden_met_zonne_energie')
         self.assertEqual(result.next_charge_window_start, now.isoformat())
 
-    def test_sequential_updates_keep_daytime_refill(self):
+    def test_sequential_updates_keep_profitable_daytime_pv_and_original_reserve(self):
         c = instance_with_cost()
         now, energy = NOW, 2.6
+        from partial_solar_assertions import assert_executable_plan
+        ledger = None
+        bought = 0.
         charged = False
         for _ in range(100):
             _, slots, result = replay(now, energy*10, c)
-            if energy < 9.95:
-                self.assertIsNotNone(result.next_charge_window_start)
+
             until = now+timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                 for w in result.planned_battery_mode_windows if datetime.fromisoformat(w['start']) < until]
@@ -135,10 +137,14 @@ class UnavoidableRemainderTest(unittest.TestCase):
             self.assertTrue(trace)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
+            ledger = assert_executable_plan(self, slots, commands, initial=energy,
+                reserve=6., max_charge=2.5, state=ledger)
+            bought += ledger['bought']
             energy = trace[-1][1]
             charged |= result.battery_strategy.startswith('laden_')
             now = until
             if energy >= 9.95:
                 break
         self.assertTrue(charged)
-        self.assertGreaterEqual(energy, 9.95)
+        self.assertGreater(bought, 4.)
+        self.assertGreaterEqual(energy, 5.995)

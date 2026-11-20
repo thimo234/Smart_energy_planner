@@ -45,12 +45,13 @@ class FullSolarRefillTest(unittest.TestCase):
         self.assertTrue(solar)
         self.assertEqual(mode, 'laden_met_zonne_energie')
 
-    def test_partial_solar_never_reverses(self):
+    def test_profitable_partial_solar_reverses_under_superseding_policy(self):
+        # Approved partial PV replaces the historical full-solar-only condition.
         _, _, windows, mode = self.plan(self.slots(solar=1.))
-        self.assertNotEqual(mode, 'laden_met_zonne_energie')
-        self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
-        self.assertFalse(self.c._charge_session_started)
-        self.assertTrue(self.c._discharge_session_started)
+        self.assertEqual(mode, 'laden_met_zonne_energie')
+        self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in windows))
+        self.assertTrue(self.c._charge_session_started)
+        self.assertFalse(self.c._discharge_session_started)
 
     def test_new_solar_minimum_margin_is_not_funded_by_old_stock(self):
         _, _, windows, _ = self.plan(self.slots(price=.35))
@@ -58,7 +59,9 @@ class FullSolarRefillTest(unittest.TestCase):
         self.assertFalse(self.c._charge_session_started)
 
     def test_existing_inventory_competes_for_scarce_later_demand(self):
-        _, _, windows, _ = self.plan(self.slots(demand=3.3))
+        # 3.3 kWh can now finance the selected partial PV plus existing stock;
+        # use genuinely insufficient demand under the approved partial policy.
+        _, _, windows, _ = self.plan(self.slots(demand=1.))
         self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
         self.assertFalse(self.c._charge_session_started)
 

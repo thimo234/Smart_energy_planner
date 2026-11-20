@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import unittest
 
 from test_battery_energy_accounting import coordinator, energy_trace, replay_full_plan
+from partial_solar_assertions import assert_executable_plan
 
 
 class ChargeWindowStabilityTest(unittest.TestCase):
@@ -27,7 +28,7 @@ class ChargeWindowStabilityTest(unittest.TestCase):
                 self.assertTrue(instance._charge_session_started)
                 self.assertFalse(instance._discharge_session_started)
 
-    def test_repeated_non_quarter_updates_finish_selected_solar_cycle(self):
+    def test_repeated_non_quarter_updates_execute_profitable_energy_not_future_starts(self):
         instance = coordinator()
         instance._charge_session_started = False
         instance._discharge_session_started = True
@@ -35,10 +36,10 @@ class ChargeWindowStabilityTest(unittest.TestCase):
         now = datetime.fromisoformat("2026-09-26T12:04:06.122+02:00")
         energy = 2.0
         # Execute real emitted commands, feeding their resulting SOC back into
+        ledger = None
         # the next refresh. Keeping SOC fixed would invent missing energy.
-        for _ in range(52):
+        for _ in range(54):
             _, slots, result = self.plan(instance, now, energy * 10)
-            self.assertEqual(result.battery_strategy, "laden_met_zonne_energie")
             until = now + timedelta(minutes=5)
             windows = [{**w, "end": min(datetime.fromisoformat(w["end"]), until).isoformat()}
                        for w in result.planned_battery_mode_windows
@@ -47,6 +48,8 @@ class ChargeWindowStabilityTest(unittest.TestCase):
             self.assertTrue(trace)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 2 - 1e-6)
             self.assertLessEqual(max(e for _, e, _ in trace), 10 + 1e-6)
+            ledger = assert_executable_plan(self, slots, windows, initial=energy,
+                reserve=6., state=ledger)
             energy = trace[-1][1]
             now = until
             if energy >= 9.95:
@@ -54,7 +57,7 @@ class ChargeWindowStabilityTest(unittest.TestCase):
         self.assertGreaterEqual(energy, 9.95, "the cheap cycle must actually fill the battery")
         self.assertLess(now.hour, 17, "do not postpone into the expensive evening")
 
-    def test_partial_discharge_still_blocks_recharging(self):
+    def test_partial_discharge_allows_only_independently_profitable_pv_above_reserve(self):
         for restored in (False, True):
             instance = coordinator()
             instance._charge_session_started = False
@@ -64,9 +67,13 @@ class ChargeWindowStabilityTest(unittest.TestCase):
                 now = datetime.fromisoformat(f"2026-09-26T12:{minute:02d}:06+02:00")
                 # Above the configured 60% boundary: exactly 60% has completed
                 # the reserve cycle and legitimately permits a new charge.
-                _, _, result = self.plan(instance, now, soc=65)
-                self.assertFalse(result.battery_strategy.startswith("laden_"))
-                self.assertTrue(instance._discharge_session_started)
+                _, slots, result = self.plan(instance, now, soc=65)
+                self.assertNotEqual(result.battery_strategy, 'laden_van_net')
+                # Price-ranked exports may run first after a refresh. What
+                # matters is executable profitable PV, not a fixed first mode.
+                checked = assert_executable_plan(self, slots,
+                    result.planned_battery_mode_windows, initial=6.5, reserve=6.)
+                self.assertGreater(checked['bought'], 0.)
 
     def test_grid_charge_executes_between_quarter_boundaries(self):
         instance = coordinator()

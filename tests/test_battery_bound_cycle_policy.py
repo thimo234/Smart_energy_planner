@@ -62,13 +62,18 @@ class BoundCyclePolicyTest(unittest.TestCase):
         self.assertAlmostEqual(max(e for _, e, _ in trace), 10., delta=.005)
         self.assertGreaterEqual(min(e for _, e, _ in trace), 6.-.005)
 
-    def test_opportunistic_solar_after_reserve_cannot_discharge_an_incomplete_refill(self):
+    def test_profitable_partial_solar_after_reserve_may_discharge_without_full(self):
         self.c._battery_cycle_discharge_floor_kwh = 4.
         slots = self.slots(count=6, home=2.)
         slots[2].update(solar_kwh=1., demand_kwh=0., net_solar_kwh=1.)
         windows = self.build(slots, 8.)
         from bound_cycle_assertions import assert_bound_plan
-        assert_bound_plan(self, self.now, slots, windows, initial=10., floor=6., charging=False)
+        assert_bound_plan(self, self.now, slots, windows, initial=10., floor=6.,
+                          charging=False, solar_partial=True)
+        self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in windows))
+        self.assertTrue(any(w['mode'] == 'ontladen' and
+                            datetime.fromisoformat(w['start']) >= slots[3]['start']
+                            for w in windows))
 
     def test_partial_charge_waits_until_full_before_discharging(self):
         self.c._charge_session_started = True

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import unittest
 
 from test_battery_energy_accounting import coordinator, energy_trace, replay_full_plan
+from partial_solar_assertions import assert_executable_plan
 
 
 class ChargeContinuityTest(unittest.TestCase):
@@ -21,16 +22,18 @@ class ChargeContinuityTest(unittest.TestCase):
         self.assertAlmostEqual(trace[-1][1], 10, delta=.005)
         self.assertEqual(result.next_discharge_window_start, '2026-09-27T18:00:00+02:00')
 
-    def test_sequential_updates_continue_until_full(self):
+    def test_sequential_updates_keep_partial_pv_physical_profitable_and_reserved(self):
         instance = coordinator()
         now = datetime.fromisoformat('2026-09-27T12:38:26.339665+02:00')
         energy = 5.3
-        for _ in range(42):
+        ledger = None
+        bought = 0.
+        for _ in range(54):
             _, slots, result = replay_full_plan(
                 '2026_09_27_pauses', now.isoformat(), soc=energy*10,
                 reserve=60, tax_deduction=.11, isolated_cycles=True, instance=instance,
             )
-            self.assertEqual(result.battery_strategy, 'laden_met_zonne_energie')
+
             until = now + timedelta(minutes=5)
             commands = [{**w, 'end': min(datetime.fromisoformat(w['end']), until).isoformat()}
                         for w in result.planned_battery_mode_windows
@@ -39,11 +42,15 @@ class ChargeContinuityTest(unittest.TestCase):
             self.assertTrue(trace)
             self.assertLessEqual(max(e for _, e, _ in trace), 10+.005)
             self.assertGreaterEqual(min(e for _, e, _ in trace), 2-.005)
+            ledger = assert_executable_plan(self, slots, commands, initial=energy,
+                reserve=6., state=ledger)
+            bought += ledger['bought']
             energy = trace[-1][1]
             now = until
             if energy >= 9.95:
                 break
         self.assertGreaterEqual(energy, 9.95)
+        self.assertGreater(bought, 4.)
 
     def test_price_band_respects_large_differences_and_profit(self):
         now = datetime(2026, 9, 27, 12)
