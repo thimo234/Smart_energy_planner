@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
-_MAX_ROWS = 512
 _REDACTED = '**REDACTED**'
 # Defaults mirror the coordinator; options and household source inheritance are
 # resolved by the same bindings as setup. No coordinator calculation is invoked.
@@ -115,8 +114,10 @@ def _project(value: Any, keys: tuple[str, ...]) -> dict[str, Any]:
 def _rows(value: Any, project: Any) -> dict[str, Any] | None:
     if not isinstance(value, (list, tuple)):
         return None
-    return {'items': [project(row) for row in value[:_MAX_ROWS]],
-            'total': len(value), 'truncated': len(value) > _MAX_ROWS}
+    # FIFO tails, action chronology and forecast horizons affect replay results.
+    # Filter fields, not rows; keep the existing wrapper for diagnostic consumers.
+    return {'items': [project(row) for row in value],
+            'total': len(value), 'truncated': False}
 
 
 def _margin(value: Any) -> dict[str, Any] | None:
@@ -127,7 +128,9 @@ def _margin(value: Any) -> dict[str, Any] | None:
         [_scalar(row[0]), _scalar(row[1])]
         if isinstance(row, (list, tuple)) and len(row) == 2 else None
     ))
-    result['actions'] = _rows(value.get('actions'), lambda row: _project(row, _ACTION_KEYS))
+    for key in ('actions', 'pending_actions'):
+        # Older snapshots have no pending evidence; preserve that absence.
+        result[key] = _rows(value.get(key), lambda row: _project(row, _ACTION_KEYS))
     return result
 
 

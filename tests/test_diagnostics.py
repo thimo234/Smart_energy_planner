@@ -192,18 +192,114 @@ class DiagnosticsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hass.data, {})
         json.dumps(report, allow_nan=False)
 
-    async def test_bounded_projection_and_non_json_values_never_stringified(self):
+    async def test_pending_evidence_survives_export_and_observed_stock_replay(self):
+        from custom_components.smart_energy_planner.battery_margin import observed_stock
+
+        hass, home, coord, runtime = self.fixture()
+        original = margin()
+        original['lots'] = [[.01, .20 + i / 10000] for i in range(565)]
+        original['credit'] = -.96
+        original['pending_actions'] = [{
+            **original['actions'][0],
+            'start': '2026-11-14T09:59:00+01:00',
+            'end': '2026-11-14T10:00:00+01:00',
+            'sale_price': .41,
+        }]
+        coord._battery_margin_state = deepcopy(original)
+        runtime['battery_margin_state'] = deepcopy(original)
+        result = json.loads(json.dumps(
+            await async_get_config_entry_diagnostics(hass, home), allow_nan=False))
+        report = result['planners'][0]
+        now = datetime.fromisoformat('2026-11-14T10:01:00+01:00')
+        expected = observed_stock(original, now, 7.48, 2., .10)
+        for state_key in ('coordinator_state', 'runtime_state'):
+            exported = report[state_key]['battery_margin_state']
+            self.assertIn('pending_actions', exported)
+            pending = exported['pending_actions']
+            self.assertFalse(pending['truncated'])
+            self.assertEqual(pending['total'], 1)
+            self.assertEqual(pending['items'][0]['sale_price'], .41)
+            self.assertEqual(pending['items'][0]['start'], original['pending_actions'][0]['start'])
+            replay = dict(exported)
+            for key in ('lots', 'actions', 'pending_actions'):
+                replay[key] = exported[key]['items']
+            actual = observed_stock(replay, now, 7.48, 2., .10)
+            self.assertEqual(actual.lots, expected.lots)
+            self.assertEqual(actual.credit, expected.credit)
+            self.assertEqual(actual.energy, expected.energy)
+            self.assertEqual(actual.pending_actions, expected.pending_actions)
+            pending['items'][0]['sale_price'] = 999
+        self.assertEqual(coord._battery_margin_state, original)
+        self.assertEqual(runtime['battery_margin_state'], original)
+        self.assertNotIn('SECRET', json.dumps(result))
+        coord.async_refresh.assert_not_awaited()
+
+    async def test_pending_evidence_absent_empty_and_long_series(self):
+        for count in (None, 0, 600):
+            with self.subTest(count=count):
+                hass, home, coord, runtime = self.fixture()
+                if count is not None:
+                    coord._battery_margin_state['pending_actions'] = [
+                        {**margin()['actions'][0], 'sale_price': i / 10000}
+                        for i in range(count)]
+                runtime['battery_margin_state'] = deepcopy(coord._battery_margin_state)
+                before = deepcopy(coord._battery_margin_state)
+                report = (await async_get_config_entry_diagnostics(hass, home))['planners'][0]
+                for state_key in ('coordinator_state', 'runtime_state'):
+                    pending = report[state_key]['battery_margin_state']['pending_actions']
+                    if count is None:
+                        self.assertIsNone(pending)
+                    else:
+                        self.assertEqual(pending['total'], count)
+                        self.assertEqual(len(pending['items']), count)
+                        self.assertFalse(pending['truncated'])
+                        self.assertEqual([row['sale_price'] for row in pending['items']],
+                                         [row['sale_price'] for row in before['pending_actions']])
+                        if count:
+                            pending['items'][-1]['sale_price'] = 999
+                self.assertEqual(coord._battery_margin_state, before)
+                self.assertEqual(runtime['battery_margin_state'], before)
+                self.assertNotIn('SECRET', json.dumps(report, allow_nan=False))
+                coord.async_refresh.assert_not_awaited()
+
+    async def test_lossless_projection_and_non_json_values_never_stringified(self):
         hass, home, coord, runtime = self.fixture()
         coord._battery_margin_state['actions'] *= 600
+        coord._battery_margin_state['lots'] = [[.01, .20 + i / 10000] for i in range(565)]
+        runtime['battery_margin_state'] = deepcopy(coord._battery_margin_state)
+        coord.data.upcoming_energy_price_windows = [
+            {'start': str(i), 'price': i / 10000, 'token': 'SECRET'}
+            for i in range(700)]
+        before_margin = deepcopy(coord._battery_margin_state)
+        before_runtime = deepcopy(runtime)
         coord.data.current_price = float('nan')
         coord.data.battery_soc_percent = object()
         home.subentries['child'].data['battery_capacity_kwh'] = {'token': 'SECRET'}
         result = await async_get_config_entry_diagnostics(hass, home)
         report = result['planners'][0]
         actions = report['coordinator_state']['battery_margin_state']['actions']
-        self.assertTrue(actions['truncated'])
+        self.assertFalse(actions['truncated'])
         self.assertEqual(actions['total'], 600)
-        self.assertLess(len(actions['items']), 600)
+        self.assertEqual(len(actions['items']), 600)
+        restored = json.loads(json.dumps(result, allow_nan=False))['planners'][0]
+        for state_key in ('coordinator_state', 'runtime_state'):
+            state = restored[state_key]['battery_margin_state']
+            self.assertEqual(state['lots']['total'], 565)
+            self.assertFalse(state['lots']['truncated'])
+            self.assertEqual(state['lots']['items'], before_margin['lots'])
+            self.assertEqual(state['credit'], before_margin['credit'])
+            self.assertEqual(state['actions']['total'], len(state['actions']['items']))
+            self.assertEqual(state['actions']['items'][-1]['import_price'], .29)
+        prices = restored['plan']['upcoming_energy_price_windows']
+        self.assertEqual(prices['total'], 700)
+        self.assertEqual(len(prices['items']), 700)
+        self.assertFalse(prices['truncated'])
+        self.assertEqual(prices['items'][-1]['price'], 699 / 10000)
+        self.assertEqual(coord._battery_margin_state, before_margin)
+        self.assertEqual(runtime, before_runtime)
+        restored['coordinator_state']['battery_margin_state']['lots']['items'][-1][1] = 999
+        self.assertEqual(coord._battery_margin_state, before_margin)
+        coord.async_refresh.assert_not_awaited()
         self.assertIsNone(report['plan']['current_price'])
         self.assertIsNone(report['plan']['battery_soc_percent'])
         self.assertIsNone(report['effective_config']['battery_capacity_kwh'])
