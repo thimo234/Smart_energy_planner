@@ -3693,6 +3693,72 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if amount > 1e-6:
                     solar_topups[forecast["start"]] = (amount, useful_demand)
 
+        def profitable_full_solar_refill(start, energy):
+            """Early reversal needs NEW PV, a physical full and unshared outlets.
+
+            Reuse the execution integrator: displayed window kWh alone do not
+            prove a full fill. Existing stock competes for later household
+            demand; neither that stock nor historical credit funds new PV.
+            This grants no grid permission and changes no committed floor.
+            """
+            if energy >= usable_capacity_kwh - 0.005:
+                return False
+            first = next((w for w in charge_windows
+                if w["start"] <= start < w["end"]), None)
+            if first is None or first["mode"] != "laden_met_zonne_energie":
+                return False
+            projected = energy
+            costs = []
+            full_at = None
+            for window in sorted(charge_windows, key=lambda w: w["start"]):
+                if window["end"] <= start:
+                    continue
+                if window["mode"] != "laden_met_zonne_energie":
+                    break
+                begin = max(start, window["start"])
+                forecast = next((s for s in slots if s["start"] <= begin < s["end"]), None)
+                if forecast is None:
+                    return False
+                _, projected, end = self._append_charge_window_mode(
+                    hourly_modes=[], slot=forecast, charge_window=window,
+                    mode="laden_met_zonne_energie", price_key="export_price",
+                    now=now, current_mode="accu_uit", mode_start=begin,
+                    sim_usable_energy_kwh=projected,
+                    usable_capacity_kwh=usable_capacity_kwh,
+                    max_charge_kw=max_charge_kw, slots=slots)
+                for source in slots:
+                    if source["end"] > begin and source["start"] < end and source["net_solar_kwh"] > 0:
+                        if not source.get("price_known", True):
+                            return False
+                        costs.append(float(source["export_price"]))
+                if projected >= usable_capacity_kwh - 0.005:
+                    full_at = end
+                    break
+            if full_at is None or not costs:
+                return False
+            known_costs = [float(cost) for quantity, cost in margin_stock.lots
+                           if quantity > 1e-9 and cost is not None]
+            if grid_cost_floor is not None:
+                known_costs.append(grid_cost_floor)
+            floor = max(costs + known_costs) + battery_min_profit
+            next_fill = min((w["start"] for w in charge_windows
+                if w["start"] >= full_at and any(
+                    s["net_solar_kwh"] < 0 and s["end"] > full_at
+                    and s["start"] < w["start"] for s in slots)),
+                default=slots[-1]["end"])
+            outlets = 0.0
+            for outlet in slots:
+                if not outlet.get("price_known", True):
+                    continue
+                hours = max(0., (min(next_fill, outlet["end"])
+                                - max(full_at, outlet["start"])).total_seconds() / 3600)
+                if float(outlet["import_price"]) + 1e-9 >= floor:
+                    outlets += min(max_discharge_kw * hours,
+                        max(0., -float(outlet["net_solar_kwh"]))
+                        * hours / max(float(outlet["hours"]), 1e-9))
+            return outlets + 1e-6 >= (usable_capacity_kwh - energy
+                + max(0., energy - cycle_floor))
+
         slot_index = 0
         while slot_index < len(slots):
             slot = slots[slot_index]
@@ -3731,14 +3797,19 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 ),
                 None,
             )
+            early_solar_refill = (simulated_discharge_session_started
+                and not simulated_charge_incomplete
+                and sim_usable_energy_kwh > cycle_floor + 0.005
+                and profitable_full_solar_refill(slot_start, sim_usable_energy_kwh))
             charge_blocked = (simulated_discharge_session_started
-                              and sim_usable_energy_kwh > cycle_floor + 0.005)
+                              and sim_usable_energy_kwh > cycle_floor + 0.005
+                              and not early_solar_refill)
             if charge_blocked:
                 overlapping_charge_window = None
             # A proposed active phase is not evidence of an accepted fill.
             # Change the live latch only after the discharge/refill guard above.
             if (overlapping_charge_window is not None and not battery_is_full
-                    and (not discharge_session_started
+                    and (not discharge_session_started or early_solar_refill
                          or initial_usable_energy_kwh <= no_charge_reserve_kwh + 0.005)
                     and cast(datetime, overlapping_charge_window["start"]) <= now
                     < cast(datetime, overlapping_charge_window["end"])):

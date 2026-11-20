@@ -5,6 +5,35 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Actuele uitzondering: rendabel volledig zonneladen boven reserve
+
+De gebruiker staat een nieuwe **uitsluitend zonne-laadfase** toe terwijl de
+ontlaadfase nog niet klaar is en de gemeten bruikbare energie boven de bestaande
+vastgelegde reserve ligt. Dit vervangt alleen het eerdere absolute verbod op
+zonneherladen in deze situatie; netladen krijgt geen uitzondering.
+
+- De gekozen zonnevensters moeten de werkelijk resterende ruimte volledig kunnen
+  vullen, begrensd door voorspeld overschot, vensterduur en laadvermogen. Een
+  gedeeltelijke of onvoldoende aanvulling keert de cyclusrichting niet om.
+- Nieuwe zonne-energie moet zelfstandig de minimumwinst boven de gemiste
+  terugleveropbrengst halen. Latere rendabele huisvraag wordt eerst aan bestaande
+  vrij inzetbare voorraad toegerekend: dezelfde vraag mag niet beide financieren.
+  De toets gebruikt bekende tarieven, gedeeld ontlaadvermogen en de vastgelegde
+  reserve; een geïsoleerde dure piek is onvoldoende. Een later fragment van
+  dezelfde zonneperiode sluit de avondvraag niet voortijdig uit.
+- Historische inkooplots, broninformatie en gerealiseerde margeschuld blijven
+  ongewijzigd. De bestaande aanschafprijs-plus-minimumwinsttoets voor huisvraag
+  en alle export-/reservebeperkingen blijven gelden. De uitzondering geeft geen
+  toestemming om goedkope vroege huisvraag voor dure avondvraag te laten gaan
+  wanneer de aangeboden zonneaanvulling niet uitvoerbaar is.
+- Een nu toegelaten zonne-laadfase wordt vastgelegd. Herhaalde updates en herstel
+  uit JSON mogen die fase niet ontgrendelen op grond van voorspeld volladen:
+  alleen werkelijk waargenomen vol geeft de ontlaadrichting weer vrij.
+
+Offline regressies: `tests/test_battery_full_solar_refill.py`. De vastgelegde
+forecastreproductie in `analysis/check_solar_admission.py` gebruikt een verkorte
+historische ledger en is dus geen exacte live replay. Geen deployment of herstart.
+
 ## Laadbron en bescherming tegen foutieve kostenadministratie
 
 De gebruiker bevestigt dat de betrokken lading uit zon kwam en dat het verschil
