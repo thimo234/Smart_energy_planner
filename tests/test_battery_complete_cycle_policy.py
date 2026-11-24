@@ -1,6 +1,9 @@
 """Complete cycles, with home-only fallback down to the configured reserve."""
 from datetime import datetime, timedelta
+import json
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from test_battery_energy_accounting import coordinator, energy_trace
 
@@ -199,6 +202,102 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         self.assertAlmostEqual(trace[-1][1], 10., delta=.005)
         self.assertFalse(any(w['mode'] == 'ontladen' for w in windows))
         self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+
+    def solar_reserve_cycle(self, *, start_energy=4., cheap_home=.34, solar_kwh=2.25,
+                            first_price=.60, fresh=True, buffered=False):
+        if fresh:
+            self.c._discharge_session_started = True
+            self.c._battery_cycle_discharge_floor_kwh = 4.
+        slots = self.slots(count=18, price=.60, home=2.)
+        for s in slots[:6]:
+            s.update(import_price=cheap_home, export_price=.01, demand_kwh=1., net_solar_kwh=-1.)
+        slots[0].update(import_price=first_price)
+        for i, s in enumerate(slots[6:10]):
+            s.update(import_price=.60, export_price=.15 if i else .17,
+                     demand_kwh=0., solar_kwh=solar_kwh, net_solar_kwh=solar_kwh)
+        if buffered:
+            slots[6]['solar_transition'] = 'lead'
+            slots[9]['solar_transition'] = 'tail'
+        for s in slots[10:]:
+            s.update(export_price=.01, import_price=.85)
+        return self.run_solar_reserve_cycle(slots, start_energy)
+
+    def run_solar_reserve_cycle(self, slots, start_energy):
+        solar, grid = self.c._plan_bound_charge_windows(
+            slots=slots, now=self.now, usable_capacity_kwh=8.,
+            current_remaining_capacity_kwh=8.-start_energy, max_charge_kw=2.5,
+            max_discharge_kw=3., battery_min_profit=.10, no_charge_reserve_kwh=4.)
+        windows, _ = self.c._build_mode_windows_from_hourly_plan(
+            slots=slots, now=self.now, planned_solar_charge_windows=solar,
+            planned_grid_charge_windows=grid, initial_usable_energy_kwh=start_energy,
+            usable_capacity_kwh=8., average_price=.60, average_export_price=.01,
+            max_charge_kw=2.5, max_discharge_kw=3., no_charge_reserve_kwh=4., battery_min_profit=.10)
+        return windows, energy_trace(self.now, slots, windows, initial=2.+start_energy, max_charge=2.5)
+
+    def test_at_cost_reserve_discharge_enables_full_solar_refill(self):
+        windows, trace = self.solar_reserve_cycle(start_energy=4.5, cheap_home=.30)
+        first_fill = next(i for i, (_, _, mode) in enumerate(trace) if mode.startswith('laden_'))
+        self.assertAlmostEqual(trace[first_fill-1][1], 2., delta=.005)
+        self.assertAlmostEqual(max(e for _, e, mode in trace if mode == 'laden_met_zonne_energie'), 10., delta=.005)
+        self.assertTrue(all(w['mode'] != 'ontladen_naar_net' for w in windows))
+        self.assertTrue(self.c._battery_solar_reserve_relaxation)
+
+    def test_solar_relaxation_cannot_lose_money_or_release_stock_above_reserve(self):
+        for price, initial in ((.29, 4.), (.34, 4.5)):
+            with self.subTest(price=price, initial=initial):
+                self.setUp()
+                _, trace = self.solar_reserve_cycle(start_energy=initial, cheap_home=price,
+                                                    first_price=price)
+                before_sun = self.now + timedelta(hours=6)
+                self.assertTrue(all(e >= initial + 2. - .005 for end, e, _ in trace
+                                    if datetime.fromisoformat(end) <= before_sun))
+                self.assertFalse(self.c._battery_solar_reserve_relaxation)
+
+    def test_insufficient_solar_revokes_relaxation_on_replan(self):
+        for changes in (dict(solar_kwh=1.5), dict(buffered=True)):
+            with self.subTest(**changes):
+                self.setUp()
+                self.solar_reserve_cycle()
+                self.assertTrue(self.c._battery_solar_reserve_relaxation)
+                self.assert_solar_relaxation_revoked(**changes)
+
+    def test_lower_forecast_revokes_relaxation_after_json_restore(self):
+        self.c.hass = SimpleNamespace(data={})
+        self.c.config_entry = SimpleNamespace(entry_id='solar-reserve')
+        self.solar_reserve_cycle()
+        self.assertTrue(self.c._battery_solar_reserve_relaxation)
+        self.c._store_battery_cycle_state_snapshot(self.now)
+        saved = json.loads(json.dumps(self.c.hass.data))
+        self.setUp()
+        self.c.hass = SimpleNamespace(data=saved)
+        self.c.config_entry = SimpleNamespace(entry_id='solar-reserve')
+        clock = self.c._restore_recent_battery_cycle_state.__globals__['dt_util']
+        with patch.object(clock, 'now', return_value=self.now):
+            self.c._restore_recent_battery_cycle_state()
+        self.assertTrue(self.c._battery_solar_reserve_relaxation)
+        self.assert_solar_relaxation_revoked(solar_kwh=1.5)
+
+    def assert_solar_relaxation_revoked(self, **changes):
+        _, trace = self.solar_reserve_cycle(start_energy=3., fresh=False, **changes)
+        self.assertFalse(self.c._battery_solar_reserve_relaxation)
+        before_sun = self.now + timedelta(hours=6)
+        self.assertTrue(all(e >= 4.995 for end, e, _ in trace
+                            if datetime.fromisoformat(end) <= before_sun))
+
+    def test_interrupted_solar_refill_cannot_unlock_at_cost_discharge(self):
+        self.c._discharge_session_started = True
+        self.c._battery_cycle_discharge_floor_kwh = 4.
+        rows = ((.34, .01, -1), (.34, .15, -2), (.60, .30, 3),
+                (.34, .15, 1), (.85, .01, 1), (.34, .15, 1),
+                (.60, .30, 3), (.34, .20, 2.5), (.85, .15, -.5))
+        slots = self.slots(count=len(rows))
+        for slot, (price, export, surplus) in zip(slots, rows):
+            slot.update(import_price=price, export_price=export, net_solar_kwh=surplus,
+                        solar_kwh=max(0, surplus), demand_kwh=max(0, -surplus))
+        _, trace = self.run_solar_reserve_cycle(slots, 3.)
+        self.assertFalse(self.c._battery_solar_reserve_relaxation)
+        self.assertTrue(all(e >= 4.995 for end, e, _ in trace
+                            if datetime.fromisoformat(end) <= self.now + timedelta(hours=2)))
 
     def test_preview_preserves_incomplete_charge_direction(self):
         slots = self.slots(price=.60)

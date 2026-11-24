@@ -5,6 +5,24 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Huisontlading tussen reserve en minimum vóór een volledige zonnelaadfase
+
+- Tussen de ingestelde hogere reserve (nu 60%) en het fysieke planningsminimum
+  (nu 20%) mag ontlading voor het huis zonder de extra minimumwinst (nu €0,10/kWh).
+  Bij bekende inkoopkosten moet de vermeden netprijs minstens die kosten dekken.
+  Boven de hogere reserve, voor netexport en voor nieuwe netinkoop geldt deze
+  uitzondering niet.
+- Kies deze uitzondering alleen als de uitvoeringsprognose eerst het minimum
+  bereikt en de accu daarna uitsluitend op zon tot 100% kan laden. Herbereken
+  daarvoor de zonnevensters met de ingestelde tijdsmarge. Bewijs dit opnieuw bij
+  een nieuwe prognose of na herstel; gedeeltelijke zonlading op zichzelf is geen
+  toestemming om de hogere reserve los te laten.
+- Voer de vaste regressies zonder Home Assistant uit met
+  `PYTHONPATH=tests python -m unittest test_battery_complete_cycle_policy -q`.
+  Hergebruik de fixture `solar_reserve_cycle` voor wijzigingen aan tarieven,
+  voorspeld overschot, overgangsmarge en gemeten SOC. De gedeelde uitvoerder
+  toetst de energie uit de geplande opdrachten, niet alleen de gekozen modus.
+
 ## Instelbare tijdsmarge bij zonne-overschot
 
 - Kort elke aaneengesloten voorspelde periode met netto zonne-overschot aan
@@ -58,7 +76,8 @@ zonneherladen in deze situatie; netladen krijgt geen uitzondering.
 - Vrijgeven van de zonnerichting is geen bewijs van een volle cyclusgrens:
   behoud de oorspronkelijke vastgelegde reserve en gemeten boekhouding. Geen
   fictieve volle grens, reservevrijgave, wissen van lots of kwijtschelden van
-  margeschuld. Minimumwinst voor huisvraag geldt bij iedere SOC. Ook als de accu
+  margeschuld. Minimumwinst voor huisvraag blijft gelden voor gedeeltelijke
+  zonneaanvulling; zie de afzonderlijke uitzondering hierboven. Ook als de accu
   aanvankelijk onder de hogere reserve staat, mag gedeeltelijk zonneladen geen
   ontlaadruimte onder die reserve creëren. Een volledige laadfase van morgen
   mag de reserve vandaag niet verlagen: alleen werkelijk vol in gemeten SOC,
