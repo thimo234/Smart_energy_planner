@@ -281,7 +281,8 @@ def build_battery_cycle_windows(
         if start is None or end is None:
             continue
 
-        family = battery_mode_family(str(window.get("mode", BATTERY_MODE_OFF)))
+        family = (BATTERY_MODE_OFF if window.get("standby")
+                  else battery_mode_family(str(window.get("mode", BATTERY_MODE_OFF))))
         if cycles and cast(datetime, cycles[-1]["end"]) == start and str(cycles[-1]["family"]) == family:
             cycles[-1]["end"] = end
             cycles[-1]["usable_hours"] = round(
@@ -682,6 +683,7 @@ def merge_windows(
             and current_start is not None
             and previous_end == current_start
             and (not same_mode_only or previous.get("mode") == window.get("mode"))
+            and previous.get("standby") == window.get("standby")
         ):
             previous["end"] = window["end"]
             previous["usable_hours"] = round(

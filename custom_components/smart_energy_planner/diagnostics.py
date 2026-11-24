@@ -31,6 +31,7 @@ _CONFIG_DEFAULTS = {
     'battery_max_charge_kw': c.DEFAULT_BATTERY_MAX_CHARGE_KW,
     'battery_max_discharge_kw': c.DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     'battery_charge_safety_margin': c.DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
+    'battery_solar_transition_buffer_minutes': c.DEFAULT_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     'battery_demand_safety_margin': c.DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
     'export_price_tax_deduction': c.DEFAULT_EXPORT_PRICE_TAX_DEDUCTION,
 }

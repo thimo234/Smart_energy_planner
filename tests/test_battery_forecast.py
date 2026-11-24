@@ -21,6 +21,56 @@ from custom_components.smart_energy_planner.price_models import PlannerWindow
 
 
 class BatteryForecastTest(unittest.TestCase):
+    def test_solar_transition_buffer_keeps_forecast_and_stable_boundaries(self):
+        from types import SimpleNamespace
+        from custom_components.smart_energy_planner.battery_forecast import build_energy_balance_slots
+
+        start = datetime(2026, 11, 24, 10)
+        at = lambda minutes: start + timedelta(minutes=minutes)
+        price = SimpleNamespace(start=at(0), end=at(180), price=.5, price_known=True)
+        solar = [SolarWindow(at(0), at(120), 6., None, None)]
+        demand = [dict(start=at(0).isoformat(), end=at(180).isoformat(), estimated_kwh=3.)]
+        def build(now, margin):
+            return build_energy_balance_slots(
+                price_windows=[price], export_price_windows=[price], solar_windows=solar,
+                hourly_demand=demand, horizon_start=now, demand_safety_margin=0.,
+                solar_transition_buffer_minutes=margin,
+            )
+
+        slots = build(at(0), 20)
+        self.assertEqual([(s['start'], s['end'], s.get('solar_transition')) for s in slots], [
+            (at(0), at(20), 'lead'), (at(20), at(100), None),
+            (at(100), at(120), 'tail'), (at(120), at(180), None),
+        ])
+        self.assertAlmostEqual(sum(s['solar_kwh'] for s in slots), 6.)
+        self.assertEqual(build(at(40), 20), slots[1:])
+        self.assertEqual(build(at(110), 20), slots[2:])
+        self.assertTrue(all(s.get('solar_transition') for s in build(at(0), 60)[:2]))
+        self.assertEqual(len(build(at(0), 0)), 2)
+
+    def test_missing_elapsed_demand_does_not_backdate_solar_surplus(self):
+        from types import SimpleNamespace
+        from custom_components.smart_energy_planner.battery_forecast import build_energy_balance_slots
+
+        start = datetime(2026, 11, 24, 10)
+        at = lambda minutes: start + timedelta(minutes=minutes)
+        price = SimpleNamespace(start=at(0), end=at(120), price=.5, price_known=True)
+        solar = [SolarWindow(at(0), at(120), 4., None, None)]
+        demand = [dict(start=at(a).isoformat(), end=at(b).isoformat(), estimated_kwh=kwh)
+                  for a, b, kwh in [(0, 30, 1.5), (30, 120, 1.5)]]
+
+        def first_chargeable(now, rows):
+            slots = build_energy_balance_slots(
+                price_windows=[price], export_price_windows=[price], solar_windows=solar,
+                hourly_demand=rows, horizon_start=now, demand_safety_margin=0.,
+                solar_transition_buffer_minutes=15,
+            )
+            return next(s['start'] for s in slots if not s.get('solar_transition') and s['net_solar_kwh'] > 0)
+
+        self.assertEqual(first_chargeable(at(0), demand), at(45))
+        self.assertEqual(first_chargeable(at(30), demand), at(45))
+        self.assertEqual(first_chargeable(at(30), demand[1:]), at(45))
+
     def test_extract_solar_windows_uses_half_hourly_solcast_forecast(self):
         windows = extract_solar_windows(
             {

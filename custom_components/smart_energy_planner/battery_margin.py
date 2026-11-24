@@ -191,6 +191,10 @@ def charge_stock(stock, slots, start, end, mode, max_charge):
 def execution_actions(windows, slots, max_charge, max_discharge):
     actions = []
     for window in windows:
+        # Standby does not establish a sale or a completed discharge phase.
+        # Reconciliation still observes any corresponding drop in SOC.
+        if window.get('standby'):
+            continue
         for slot in slots:
             start = max(datetime.fromisoformat(window['start']), slot['start'])
             end = min(datetime.fromisoformat(window['end']), slot['end'])

@@ -1,6 +1,7 @@
 """Approved early SOLAR reversal: full, profitable, without inventory amnesty."""
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from test_battery_energy_accounting import coordinator, energy_trace
 
@@ -45,6 +46,39 @@ class FullSolarRefillTest(unittest.TestCase):
         self.assertTrue(solar)
         self.assertEqual(mode, 'laden_met_zonne_energie')
 
+    def test_transition_can_make_full_refill_unreachable(self):
+        self.assertTrue(self.plan(self.slots())[0])
+        slots = self.slots()
+        slots[0]['solar_transition'] = 'lead'
+        slots[1]['solar_transition'] = 'tail'
+        solar, _, windows, _ = self.plan(slots)
+        self.assertFalse(solar)
+        self.assertFalse(any(w['mode'].startswith('laden_') for w in windows))
+
+    def test_solar_tail_offers_home_discharge_only_above_reserve_and_margin(self):
+        for kind, price, energy, known, expected in [
+            ('lead', .5, 4.8, True, 'accu_uit'),
+            ('tail', .5, 4.8, True, 'ontladen'),
+            ('tail', .35, 4.8, True, 'accu_uit'),
+            ('tail', .5, 4., True, 'accu_uit'),
+            ('tail', .5, 4.8, False, 'accu_uit'),
+        ]:
+            with self.subTest(kind=kind, price=price, energy=energy, known=known):
+                self.setUp()
+                slot = dict(self.slots()[0], solar_transition=kind, import_price=price,
+                            price_known=known, export_price=.01)
+                windows, mode = self.c._build_mode_windows_from_hourly_plan(
+                    slots=[slot], now=self.now, planned_solar_charge_windows=[],
+                    planned_grid_charge_windows=[], initial_usable_energy_kwh=energy,
+                    usable_capacity_kwh=8., average_price=.4, average_export_price=.263,
+                    max_charge_kw=2.5, max_discharge_kw=3., battery_min_profit=.1,
+                    no_charge_reserve_kwh=4.)
+                self.assertEqual(mode, expected)
+                self.assertFalse(any(w['mode'] == 'ontladen_naar_net' for w in windows))
+                if expected == 'ontladen':
+                    self.assertEqual(datetime.fromisoformat(windows[0]['end']),
+                                     self.now + timedelta(minutes=16))
+
     def test_profitable_partial_solar_reverses_under_superseding_policy(self):
         # Approved partial PV replaces the historical full-solar-only condition.
         _, _, windows, mode = self.plan(self.slots(solar=1.))
@@ -52,6 +86,98 @@ class FullSolarRefillTest(unittest.TestCase):
         self.assertTrue(any(w['mode'] == 'laden_met_zonne_energie' for w in windows))
         self.assertTrue(self.c._charge_session_started)
         self.assertFalse(self.c._discharge_session_started)
+
+    def transition_modes(self, slots, *, now=None, energy=4.8):
+        return self.c._build_mode_windows_from_hourly_plan(
+            slots=slots, now=now or self.now, planned_solar_charge_windows=[],
+            planned_grid_charge_windows=[], initial_usable_energy_kwh=energy,
+            usable_capacity_kwh=8., average_price=.4, average_export_price=.01,
+            max_charge_kw=2.5, max_discharge_kw=3., battery_min_profit=.1,
+            no_charge_reserve_kwh=4.)[0]
+
+    def test_tail_standby_preserves_forecast_peak_and_does_not_count_as_cycle(self):
+        tail, peak = self.slots()[:2]
+        tail.update(import_price=.5, export_price=.01, net_solar_kwh=1.)
+        peak.update(import_price=.9, export_price=.01, net_solar_kwh=-1.)
+        baseline = self.transition_modes([tail, peak])
+        self.setUp()
+        tail['solar_transition'] = 'tail'
+        windows = self.transition_modes([tail, peak])
+        self.assertEqual(windows[0]['mode'], 'ontladen')
+        self.assertEqual([w for w in windows if w['start'] >= peak['start'].isoformat()],
+                         [w for w in baseline if w['start'] >= peak['start'].isoformat()])
+        self.assertIn((peak['start'] + timedelta(minutes=48)).isoformat(),
+                      [w['end'] for w in windows if w['mode'] == 'ontladen'])
+        self.assertIsNone(self.c._two_cycle_end(windows[:1]))
+        self.assertEqual(self.c._two_cycle_end(windows), self.c._two_cycle_end(baseline))
+        discharge_actions = [action for action in self.c._battery_margin_state['actions']
+                             if action['mode'].startswith('ontladen')]
+        self.assertTrue(discharge_actions)
+        self.assertTrue(all(action['start'] >= peak['start'].isoformat()
+                            for action in discharge_actions))
+
+    def test_tail_standby_deadline_survives_refresh_across_tariffs(self):
+        tail = dict(self.slots()[0], solar_transition='tail', solar_transition_start=self.now,
+                    import_price=.5, export_price=.01, hours=.125, net_solar_kwh=.125,
+                    end=self.now + timedelta(minutes=7.5))
+        later = dict(tail, start=tail['end'], end=self.now + timedelta(hours=1),
+                     import_price=.6, hours=.875, net_solar_kwh=.875)
+        other_tail = dict(later, start=later['end'], end=later['end'] + timedelta(hours=1),
+                          solar_transition_start=later['end'], hours=1., net_solar_kwh=1.)
+        deadline = self.now + timedelta(minutes=16)
+        for slots, now in [([tail, later, other_tail], self.now),
+                           ([later, other_tail], self.now + timedelta(minutes=10))]:
+            with self.subTest(now=now):
+                discharges = [w for w in self.transition_modes(slots, now=now)
+                              if w['mode'] == 'ontladen']
+                self.assertEqual(discharges[-1]['end'], deadline.isoformat())
+        self.assertFalse(any(w['mode'] == 'ontladen' for w in self.transition_modes(
+            [later], now=self.now + timedelta(minutes=10), energy=4.)))
+
+    def test_tail_standby_budget_starts_at_first_profitable_tariff(self):
+        from custom_components.smart_energy_planner.battery_forecast import build_energy_balance_slots
+
+        cheap, expensive, end = (self.now + timedelta(minutes=n) for n in (30, 45, 60))
+        prices = [SimpleNamespace(start=start, end=stop, price=price, price_known=True)
+                  for start, stop, price in [(self.now, cheap, .35), (cheap, expensive, .35),
+                                             (expensive, end, .50)]]
+        pv = [SimpleNamespace(start=self.now, end=end, forecast_kwh=2.)]
+        demand = [dict(start=self.now.isoformat(), end=end.isoformat(), estimated_kwh=1.)]
+        for now in (self.now, expensive + timedelta(minutes=3)):
+            with self.subTest(now=now):
+                self.setUp()
+                slots = build_energy_balance_slots(
+                    price_windows=prices, export_price_windows=[], solar_windows=pv,
+                    hourly_demand=demand, horizon_start=now, demand_safety_margin=0,
+                    solar_transition_buffer_minutes=30)
+                for slot in slots:
+                    slot['export_price'] = .01
+                readiness = [w for w in self.transition_modes(slots, now=now, energy=4.4)
+                             if w.get('standby')]
+                self.assertEqual(len(readiness), 1)
+                self.assertLessEqual(datetime.fromisoformat(readiness[0]['start']), max(now, expensive))
+                self.assertGreaterEqual(datetime.fromisoformat(readiness[0]['start']), expensive)
+                self.assertEqual(readiness[0]['end'], (expensive + timedelta(minutes=8)).isoformat())
+
+    def test_transition_permits_profitable_real_import_not_pv_only_grid_mode(self):
+        for pv, price, expected in [(2., .10, True), (2.5, -.10, False)]:
+            with self.subTest(pv=pv, price=price):
+                self.setUp()
+                self.c._discharge_session_started = False
+                self.c._cycle_export_planning = True
+                slots = self.slots()[:3]
+                slots[0].update(net_solar_kwh=pv, import_price=price, export_price=.01,
+                                solar_transition='lead')
+                for slot in slots[1:]:
+                    slot.update(net_solar_kwh=-2.5, import_price=.50, export_price=.01)
+                solar, grid = self.c._plan_charge_windows_for_horizon(
+                    slots=slots, now=self.now, usable_capacity_kwh=2.5,
+                    current_remaining_capacity_kwh=2.5, max_charge_kw=2.5,
+                    max_discharge_kw=3., battery_min_profit=.1, no_charge_reserve_kwh=0.)
+                self.assertFalse(solar)
+                self.assertEqual(bool(grid), expected, grid)
+                if expected:
+                    self.assertEqual(sum(w['charge_kwh'] for w in grid), 2.5)
 
     def test_new_solar_minimum_margin_is_not_funded_by_old_stock(self):
         _, _, windows, _ = self.plan(self.slots(price=.35))

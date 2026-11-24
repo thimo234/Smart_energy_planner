@@ -52,6 +52,7 @@ from .const import (
     CONF_BATTERY_CAPACITY_KWH,
     CONF_BATTERY_CHARGE_SAFETY_MARGIN,
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
+    CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
@@ -76,6 +77,8 @@ from .const import (
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
     DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
+    DEFAULT_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
+    MAX_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
@@ -315,6 +318,14 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=100, step=5, mode=selector.NumberSelectorMode.SLIDER)
             ),
+            vol.Required(
+                CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
+                default=user_input.get(CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
+                                       DEFAULT_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES),
+            ): selector.NumberSelector(selector.NumberSelectorConfig(
+                min=0, max=MAX_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES, step=1,
+                mode=selector.NumberSelectorMode.BOX,
+            )),
         }
     )
 

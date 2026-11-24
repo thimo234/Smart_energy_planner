@@ -22,6 +22,7 @@ from homeassistant.util import dt as dt_util
 from .battery_forecast import (
     align_price_responsive_demand_to_cheap_hours,
     build_energy_balance_slots,
+    chargeable_solar_kwh,
     build_expected_hourly_demand_table,
     build_fallback_solar_windows,
     build_fallback_solar_windows_for_day,
@@ -59,6 +60,7 @@ from .const import (
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_CHARGE_SAFETY_MARGIN,
+    CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
     CONF_BATTERY_MIN_SOC_PERCENT,
@@ -80,6 +82,8 @@ from .const import (
     DEFAULT_BATTERY_ENABLED,
     DEFAULT_BATTERY_CHARGE_SAFETY_MARGIN,
     DEFAULT_BATTERY_MAX_CHARGE_KW,
+    DEFAULT_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
+    MAX_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     DEFAULT_BATTERY_MAX_DISCHARGE_KW,
     DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DEFAULT_BATTERY_MIN_PROFIT_PER_KWH,
@@ -1148,7 +1152,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         end = None
         for window in windows:
             mode = window["mode"]
-            if mode == "accu_uit":
+            if mode == "accu_uit" or window.get("standby"):
                 continue
             next_family = "charge" if mode in ("laden_van_net", "laden_met_zonne_energie") else "discharge"
             if next_family != family:
@@ -1218,6 +1222,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             self._battery_charge_source = None
             self._charge_session_started = False
             self._discharge_session_started = True
+
+    def _solar_transition_buffer_minutes(self) -> float:
+        minutes = _coerce_float(self._config.get(CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES),
+                                default=DEFAULT_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES)
+        return max(0.0, min(minutes or 0.0, MAX_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES))
 
     def _build_plan(self, **inputs) -> PlannerResult:
         """Execute two cycles; calculate any later outlook on isolated state."""
@@ -1299,6 +1308,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         slots = build_energy_balance_slots(
             price_windows=prices, export_price_windows=exports, solar_windows=solar,
             hourly_demand=demand, horizon_start=now, demand_safety_margin=0.0,
+            solar_transition_buffer_minutes=self._solar_transition_buffer_minutes(),
         )
         margin_state = getattr(self, "_battery_margin_state", None)
         if margin_state is not None:
@@ -1659,6 +1669,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             hourly_demand=estimated_hourly_home_demand,
             horizon_start=now,
             demand_safety_margin=0.0,
+            solar_transition_buffer_minutes=(self._solar_transition_buffer_minutes()
+                                             if planner_kind == PLANNER_KIND_BATTERY else 0.0),
         )
         battery_planner = self
         if battery_soc_percent is None:
@@ -1799,7 +1811,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     for slot in energy_balance_slots:
                         hours = max(0.0, (min(end, slot["end"]) - max(start, slot["start"])).total_seconds() / 3600)
                         rate = max_charge if mode == "laden_van_net" else min(
-                            max_charge, max(0.0, float(slot["net_solar_kwh"])) / max(float(slot["hours"]), 1e-9),
+                            max_charge, chargeable_solar_kwh(slot) / max(float(slot["hours"]), 1e-9),
                         )
                         energy += hours * rate
                     actual.append({**window, "start": start.isoformat(), "end": end.isoformat(),
@@ -2155,7 +2167,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
 
         candidates = []
         for slot in slots:
-            charge_potential_kwh = min(max_charge_kw * float(slot["hours"]), max(0.0, float(slot["net_solar_kwh"])))
+            charge_potential_kwh = min(max_charge_kw * float(slot["hours"]), chargeable_solar_kwh(slot))
             if charge_potential_kwh <= 0:
                 continue
             candidates.append({**slot, "charge_potential_kwh": round(charge_potential_kwh, 3)})
@@ -2383,9 +2395,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 slot_hours = max(float(slot["hours"]), 1e-9)
                 active_fraction = min(1.0, active_hours / slot_hours)
                 slot_capacity_kwh = max_charge_kw * active_hours
+                transition = slot.get("solar_transition")
                 solar_kwh = min(slot_capacity_kwh, max(0.0, float(slot["net_solar_kwh"])) * active_fraction)
                 negative_grid_price = slot.get("price_known", True) and float(slot["import_price"]) < 0
-                if solar_kwh > 0 and not negative_grid_price:
+                if solar_kwh > 0 and not negative_grid_price and not transition:
                     candidates.append(
                         {
                             "kind": "solar",
@@ -2400,7 +2413,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # only the remaining capacity is bought from the grid.
                 grid_kwh = slot_capacity_kwh
                 import_price = float(slot["import_price"])
-                if grid_kwh > 0:
+                # Genuine imports remain subject to normal fill/margin checks;
+                # a PV-only grid command cannot sidestep a buffered solar slot.
+                if grid_kwh > 0 and (not transition or grid_kwh - solar_kwh > 1e-6):
                     mixed_cost = (
                         (solar_kwh * _solar_cost(slot) if solar_kwh > 0 else 0.0)
                         + max(0.0, grid_kwh - solar_kwh) * import_price
@@ -2534,7 +2549,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     # Selected commands occupy their actual powered duration;
                     # never subtract household discharge during that command.
                     rate = max_charge_kw if grid_charge > 0 else min(
-                        max_charge_kw, max(0.0, float(slot['net_solar_kwh'])) / slot_hours)
+                        max_charge_kw, chargeable_solar_kwh(slot) / slot_hours)
                     charged = min(selected_charge, rate * active_hours)
                     projected_usable_kwh = min(usable_capacity_kwh, projected_usable_kwh + charged)
                     projected_charging = projected_usable_kwh < usable_capacity_kwh - 0.005
@@ -3189,7 +3204,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 active_fraction = min(1.0, slot_hours / full_slot_hours)
                 slot_solar_charge_kwh = min(
                     max_charge_kw * slot_hours,
-                    max(0.0, float(slot["net_solar_kwh"])) * active_fraction,
+                    chargeable_solar_kwh(slot) * active_fraction,
                 )
                 usable_hours = slot_hours
                 charge_start = active_start
@@ -3338,7 +3353,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 if end <= start:
                     continue
                 rate = max_charge_kw if mode == "laden_van_net" else min(
-                    max_charge_kw, max(0.0, float(forecast["net_solar_kwh"])) / max(float(forecast["hours"]), 1e-9),
+                    max_charge_kw, chargeable_solar_kwh(forecast) / max(float(forecast["hours"]), 1e-9),
                 )
                 amount = rate * (end - start).total_seconds() / 3600
                 if rate > 0 and stored + amount >= charge_kwh - 1e-9:
@@ -3674,6 +3689,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         active_charge_phase_end = active_charge_phase["end"] if active_charge_phase is not None else None
         sim_usable_energy_kwh = max(0.0, initial_usable_energy_kwh)
+        standby_authorized_kwh = 0.0
+        accounted_standby_tails: set[datetime] = set()
         grid_cost_floor = getattr(self, "_battery_grid_charge_price", None)
         if initial_usable_energy_kwh <= 0.01:
             grid_cost_floor = None
@@ -3723,7 +3740,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if (discharge_session_started and not planned_solar_charge_windows
                 and not planned_grid_charge_windows):
             for forecast in slots:
-                if not forecast.get("price_known", True) or float(forecast["net_solar_kwh"]) <= 0:
+                if not forecast.get("price_known", True) or chargeable_solar_kwh(forecast) <= 0:
                     continue
                 useful_demand = sum(
                     min(max_discharge_kw * float(later["hours"]),
@@ -3733,7 +3750,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     and float(later["import_price"]) - float(forecast["export_price"])
                         >= battery_min_profit - 1e-9
                 )
-                amount = min(float(forecast["net_solar_kwh"]),
+                amount = min(chargeable_solar_kwh(forecast),
                              max_charge_kw * float(forecast["hours"]), useful_demand)
                 if amount > 1e-6:
                     solar_topups[forecast["start"]] = (amount, useful_demand)
@@ -3772,7 +3789,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     usable_capacity_kwh=usable_capacity_kwh,
                     max_charge_kw=max_charge_kw, slots=slots)
                 for source in slots:
-                    if source["end"] > begin and source["start"] < end and source["net_solar_kwh"] > 0:
+                    if source["end"] > begin and source["start"] < end and chargeable_solar_kwh(source) > 0:
                         if not source.get("price_known", True):
                             return False
                         costs.append(float(source["export_price"]))
@@ -4485,12 +4502,47 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         margin_stock.discharge(used_kwh, sale_price, battery_min_profit)
                         sim_usable_energy_kwh = max(reserve_kwh, energy_before_slot - used_kwh)
 
+                # Standby is a household-only command, not a forecast sale.
+                # Budget its worst-case use independently of the forecast and
+                # of any unmeasured refill. A refresh starts at measured SOC.
+                transition_discharge = False
+                if (mode == "accu_uit" and segment_slot.get("solar_transition") == "tail"
+                        and not suppress_discharge and segment_slot.get("price_known", True)
+                        and home_profitable(segment_slot)
+                        and max_discharge_kw > 0):
+                    active_start = max(now, segment_slot_start)
+                    headroom = max(0.0, min(initial_usable_energy_kwh, sim_usable_energy_kwh)
+                                   - max(reserve_kwh, no_charge_reserve_kwh) - standby_authorized_kwh)
+                    tail_start = segment_slot.get("solar_transition_start", segment_slot_start)
+                    if tail_start not in accounted_standby_tails:
+                        accounted_standby_tails.add(tail_start)
+                        # Count elapsed eligible intervals once. A cheap or
+                        # unknown tariff could not have spent standby budget.
+                        tail_tariffs = segment_slot.get("solar_tail_tariffs", (
+                            (tail_start, now, segment_slot["import_price"]),
+                        ))
+                        elapsed_hours = sum(
+                            (min(end, now) - start).total_seconds() / 3600
+                            for start, end, price in tail_tariffs
+                            if start < now and home_profitable({"import_price": price})
+                        )
+                        elapsed_budget = min(headroom, elapsed_hours * max_discharge_kw)
+                        standby_authorized_kwh += elapsed_budget
+                        headroom -= elapsed_budget
+                    hours = (segment_slot_end - active_start).total_seconds() / 3600
+                    budget = min(max(0.0, hours) * max_discharge_kw, headroom)
+                    if budget > 1e-6:
+                        mode = "ontladen"
+                        mode_end = active_start + timedelta(hours=budget / max_discharge_kw)
+                        transition_discharge = True
+                        standby_authorized_kwh += budget
+
                 if segment_slot["start"] <= now < segment_slot["end"]:
                     current_mode = mode
                     if not cycle_state_initialized and mode in ("laden_met_zonne_energie", "laden_van_net"):
                         charge_session_started = True
                         discharge_session_started = False
-                    if mode in ("ontladen", "ontladen_naar_net"):
+                    if mode in ("ontladen", "ontladen_naar_net") and not transition_discharge:
                         discharge_session_started = True
                         charge_session_started = False
 
@@ -4501,6 +4553,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         "price": round(float(segment_slot["import_price"]), 6),
                         "usable_hours": round((mode_end - segment_slot_start).total_seconds() / 3600, 3),
                         "mode": mode,
+                        **({"standby": True} if transition_discharge else {}),
                     }
                 )
                 if mode_end < segment_slot_end:
@@ -4592,6 +4645,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             begin, end = datetime.fromisoformat(window["start"]), datetime.fromisoformat(window["end"])
             if begin >= start:
                 break
+            if window.get("standby"):
+                continue
             mode = window["mode"]
             for slot in slots:
                 hours = max(0.0, (min(start, end, slot["end"]) - max(now, begin, slot["start"])).total_seconds()/3600)
@@ -4939,6 +4994,8 @@ def _serialize_mode_windows(windows: list[dict[str, str | datetime | float]]) ->
         price = _coerce_float(window.get("price"))
         if price is not None:
             serialized_window["price"] = round(price, 6)
+        if window.get("standby"):
+            serialized_window["standby"] = True
         serialized.append(serialized_window)
     return serialized
 

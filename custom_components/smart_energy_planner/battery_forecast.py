@@ -839,6 +839,7 @@ def build_energy_balance_slots(
     hourly_demand: list[dict[str, str | float]],
     horizon_start: datetime,
     demand_safety_margin: float = DEFAULT_BATTERY_DEMAND_SAFETY_MARGIN,
+    solar_transition_buffer_minutes: float = 0.0,
 ) -> list[dict[str, Any]]:
     """Build battery planning slots and apply a demand safety margin.
 
@@ -863,22 +864,28 @@ def build_energy_balance_slots(
                               for a, b in zip(edges, edges[1:]))
     demand_multiplier = 1.0 + max(0.0, min(1.0, float(demand_safety_margin)))
     slots: list[dict[str, Any]] = []
+    missing_elapsed_demand = set()
     for window in aligned_prices:
-        if window.end <= horizon_start:
+        if window.end <= horizon_start and not solar_transition_buffer_minutes:
             continue
         slot_hours = max((window.end - window.start).total_seconds() / 3600, 0.0001)
         demand_kwh = 0.0
+        demand_known = False
         for demand_slot in hourly_demand:
             demand_start = _parse_datetime(demand_slot.get("start"))
             demand_end = _parse_datetime(demand_slot.get("end"))
-            estimated_kwh = _coerce_float(demand_slot.get("estimated_kwh"), default=0.0) or 0.0
+            estimated_kwh = _coerce_float(demand_slot.get("estimated_kwh"), default=None)
             if demand_start is None or demand_end is None:
                 continue
             overlap_hours = _overlap_hours(window.start, window.end, demand_start, demand_end)
             if overlap_hours <= 0:
                 continue
             demand_slot_hours = max((demand_end - demand_start).total_seconds() / 3600, 0.0001)
-            demand_kwh += estimated_kwh * (overlap_hours / demand_slot_hours)
+            demand_known |= estimated_kwh is not None
+            demand_kwh += (estimated_kwh or 0.0) * (overlap_hours / demand_slot_hours)
+
+        if solar_transition_buffer_minutes and window.start < horizon_start and not demand_known:
+            missing_elapsed_demand.add(window.start)
 
         demand_kwh *= demand_multiplier
 
@@ -911,7 +918,72 @@ def build_energy_balance_slots(
             }
         )
 
-    return slots
+    if not solar_transition_buffer_minutes:
+        return slots
+    buffer = timedelta(minutes=solar_transition_buffer_minutes)
+    # Use elapsed forecast only when both PV and demand support the run.
+    # Missing historical demand is not evidence of historical surplus.
+    buffered = []
+    run = []
+
+    def flush_run():
+        if not run:
+            return
+        start, end = run[0]["start"], run[-1]["end"]
+        inset = min(buffer, (end - start) / 2)
+        lead_end, tail_start = start + inset, end - inset
+        tail_tariffs = tuple(
+            (max(slot["start"], tail_start), slot["end"], slot["import_price"])
+            for slot in run if slot["price_known"] and slot["end"] > tail_start
+        )
+        for slot in run:
+            edges = sorted({slot["start"], slot["end"], *(
+                edge for edge in (lead_end, tail_start) if slot["start"] < edge < slot["end"]
+            )})
+            for left, right in zip(edges, edges[1:]):
+                if right <= horizon_start:
+                    continue
+                hours = (right - left).total_seconds() / 3600
+                fraction = hours / slot["hours"]
+                part = {**slot, "start": left, "end": right, "hours": hours}
+                for key in ("solar_kwh", "demand_kwh", "net_solar_kwh"):
+                    part[key] *= fraction
+                if left != slot["start"] or right != slot["end"]:
+                    part["export_price"] = match_window_price(
+                        start=left, end=right, windows=export_price_windows, default=slot["import_price"],
+                    )
+                if right <= lead_end:
+                    part["solar_transition"] = "lead"
+                elif left >= tail_start:
+                    part["solar_transition"] = "tail"
+                    part["solar_transition_start"] = tail_start
+                    part["solar_tail_tariffs"] = tail_tariffs
+                buffered.append(part)
+        run.clear()
+
+    for slot in slots:
+        if slot["start"] in missing_elapsed_demand:
+            flush_run()
+            if slot["end"] <= horizon_start:
+                continue
+            hours = (slot["end"] - horizon_start).total_seconds() / 3600
+            fraction = hours / slot["hours"]
+            slot = {**slot, "start": horizon_start, "hours": hours}
+            for key in ("solar_kwh", "demand_kwh", "net_solar_kwh"):
+                slot[key] *= fraction
+        if run and (run[-1]["end"] != slot["start"] or slot["net_solar_kwh"] <= 0):
+            flush_run()
+        if slot["net_solar_kwh"] > 0:
+            run.append(slot)
+        elif slot["end"] > horizon_start:
+            buffered.append(slot)
+    flush_run()
+    return buffered
+
+
+def chargeable_solar_kwh(slot: dict[str, Any]) -> float:
+    """Surplus available to a solar-only charge command."""
+    return 0.0 if slot.get("solar_transition") else max(0.0, float(slot["net_solar_kwh"]))
 
 
 def match_window_price(

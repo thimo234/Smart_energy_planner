@@ -5,6 +5,26 @@ De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live
 geverifieerd is. Lees ook de open punten onderaan.
 
+## Instelbare tijdsmarge bij zonne-overschot
+
+- Kort elke aaneengesloten voorspelde periode met netto zonne-overschot aan
+  beide kanten met dezelfde instelbare tijd in. Standaard is 0 minuten; bij
+  30 minuten wordt 10:00–15:00 bijvoorbeeld 10:30–14:30. Als het venster te
+  kort is voor beide marges, blijft er geen zonnelaadvenster over.
+- Gebruik uitsluitend het resterende venster voor zonne-only laden en de
+  bijbehorende voltoets. Een net- of gemengde laadopdracht binnen de marge
+  blijft mogelijk als die daadwerkelijk netto stroom inkoopt en aan de
+  bestaande regels voor winst en volledig laden voldoet. De onderliggende
+  zonne- en huisprognose blijven ongewijzigd. Ontbrekende verstreken
+  huisprognoses gelden niet als bewijs van eerder overschot.
+- Aan de achterrand mag de accu op een werkelijk huistekort reageren als
+  voorraad, reserve, lopende laadverplichtingen en bestaande winstregels dat
+  toelaten. Deze stand-by heeft een apart reservebudget, loopt niet steeds
+  verder door bij een verversing met gelijke SOC en telt in de prognose niet
+  als ontlading, winst of nieuwe fase. Deze instelling geeft geen extra recht
+  op netexport en wijzigt de minimumwinst niet. Offline getest; niet op Home
+  Assistant geïnstalleerd.
+
 ## Actuele uitzondering: rendabel gedeeltelijk of volledig zonneladen boven reserve
 
 De gebruiker staat een nieuwe **uitsluitend zonne-laadfase** toe terwijl de
