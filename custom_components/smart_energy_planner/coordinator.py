@@ -2322,15 +2322,27 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             solar, grid = trial._plan_charge_windows_for_horizon(
                 **source_args, no_charge_reserve_kwh=0.0)
             trial._battery_cycle_discharge_floor_kwh = no_charge_reserve_kwh
-            if solar and trial._select_cycle_discharge_floor(
-                slots=slots, now=now, planned_solar_charge_windows=solar,
-                planned_grid_charge_windows=grid, initial_usable_energy_kwh=initial,
-                usable_capacity_kwh=usable_capacity_kwh, max_charge_kw=max_charge_kw,
-                max_discharge_kw=max_discharge_kw, battery_min_profit=battery_min_profit,
-                no_charge_reserve_kwh=no_charge_reserve_kwh,
-                average_price=sum(float(s['import_price']) for s in slots) / len(slots),
-                average_export_price=sum(float(s['export_price']) for s in slots) / len(slots),
-            ) == 0.0:
+            plan = dict(slots=slots, now=now, initial_usable_energy_kwh=initial,
+                        usable_capacity_kwh=usable_capacity_kwh, max_charge_kw=max_charge_kw,
+                        max_discharge_kw=max_discharge_kw, battery_min_profit=battery_min_profit,
+                        no_charge_reserve_kwh=no_charge_reserve_kwh,
+                        average_price=sum(float(s['import_price']) for s in slots) / len(slots),
+                        average_export_price=sum(float(s['export_price']) for s in slots) / len(slots))
+
+            def completes_solar_cycle(solar, grid):
+                return bool(solar) and trial._select_cycle_discharge_floor(
+                    **plan, planned_solar_charge_windows=solar,
+                    planned_grid_charge_windows=grid) == 0.0
+
+            accepted = completes_solar_cycle(solar, grid)
+            if not accepted and solar and not grid:
+                # Only repair incomplete PV selection; leave grid admission alone.
+                trial._full_arbitrage_intervals = []
+                solar = next((block for block in self._full_solar_refill_blocks(
+                    slots, now, usable_capacity_kwh, max_charge_kw, battery_min_profit)
+                    if completes_solar_cycle(block, grid)), [])
+                accepted = bool(solar)
+            if accepted:
                 self._battery_solar_reserve_relaxation = True
                 self._battery_cycle_discharge_floor_kwh = 0.0
                 self._full_arbitrage_intervals = trial._full_arbitrage_intervals
@@ -2342,6 +2354,47 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and initial < usable_capacity_kwh - 0.005 else boundary)
         return self._plan_charge_windows_for_horizon(
             **source_args, no_charge_reserve_kwh=source_floor)
+
+    def _full_solar_refill_blocks(self, slots, now, capacity_kwh, max_charge_kw, min_profit):
+        """Yield full, contiguous PV refills in chronological start order."""
+        if max_charge_kw <= 0 or capacity_kwh <= 0:
+            return
+        future = sorted((slot for slot in slots if slot['end'] > now),
+                        key=lambda slot: slot['start'])
+        if not future:
+            return
+        run = []
+        for slot in future:
+            start = max(now, slot['start'])
+            hours = (slot['end'] - start).total_seconds() / 3600
+            rate = min(max_charge_kw, chargeable_solar_kwh(slot) / max(float(slot['hours']), 1e-9))
+            price = float(slot['export_price'])
+            if not (slot.get('price_known', True) and float(slot['import_price']) >= 0
+                    and rate * hours > 1e-6 and self._has_profitable_discharge(
+                        slots=future, start=slot['end'], end=future[-1]['end'],
+                        cost=price, minimum_profit=min_profit)):
+                run = []
+                continue
+            if run and run[-1][1] != start:
+                run = []
+            run.append((start, slot['end'], rate, price))
+            # Each suffix only becomes a candidate once it can fill the battery.
+            # Later starts also leave more time to discharge before sunrise.
+            while run and sum((end - begin).total_seconds() / 3600 * kw
+                              for begin, end, kw, _ in run) >= capacity_kwh - 1e-9:
+                remaining = capacity_kwh
+                block = []
+                for begin, end, kw, tariff in run:
+                    hours = min((end - begin).total_seconds() / 3600, remaining / kw)
+                    amount = hours * kw
+                    block.append(dict(start=begin.isoformat(),
+                                      end=(begin + timedelta(hours=hours)).isoformat(),
+                                      price=tariff, usable_hours=hours, charge_kwh=amount))
+                    remaining -= amount
+                    if remaining <= 1e-9:
+                        break
+                yield block
+                run.pop(0)
 
     def _plan_charge_windows_for_horizon(
         self,
@@ -3566,16 +3619,23 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             emptied_before_refill = initial <= 0.005
             completes_new_refill = False
             cutoff = self._two_cycle_end(full_windows) if solar_relaxation else None
+            refill_until = None
             for action in execution_actions(
                     full_windows, plan["slots"], plan["max_charge_kw"], plan["max_discharge_kw"]):
-                hours = (datetime.fromisoformat(action["end"]) - datetime.fromisoformat(action["start"])).total_seconds() / 3600
+                action_start = datetime.fromisoformat(action["start"])
+                action_end = datetime.fromisoformat(action["end"])
+                hours = (action_end - action_start).total_seconds() / 3600
                 rate = (action["solar_kw"] + action["grid_kw"] if action["mode"].startswith("laden")
                         else -action["power"] if action["mode"].startswith("ontladen") else 0.0)
-                # Count only the solar refill in the executable plan, not the outlook.
-                if solar_relaxation and (cutoff is None or
-                        datetime.fromisoformat(action['end']) > cutoff or
-                        action['grid_kw'] > 0 or (rate > 0 and not emptied_before_refill)):
-                    break
+                # The reserve waiver needs a single executable PV refill, not
+                # pieces that happen to add up across an idle or discharge gap.
+                if solar_relaxation:
+                    if (cutoff is None or action_end > cutoff or action['grid_kw'] > 0
+                            or (rate > 0 and (not emptied_before_refill or
+                                (refill_until is not None and action_start > refill_until)))):
+                        break
+                    if rate > 0:
+                        refill_until = action_end
                 energy = min(capacity, max(0.0, energy + rate * hours))
                 emptied_before_refill = emptied_before_refill or energy <= 0.005
                 if rate > 0 and emptied_before_refill and energy >= capacity - 0.005:

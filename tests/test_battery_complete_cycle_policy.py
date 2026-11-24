@@ -242,6 +242,37 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         self.assertTrue(all(w['mode'] != 'ontladen_naar_net' for w in windows))
         self.assertTrue(self.c._battery_solar_reserve_relaxation)
 
+    def competing_refill_slots(self, solar_prices, later_price):
+        self.c._discharge_session_started = True
+        self.c._battery_cycle_discharge_floor_kwh = 4.
+        slots = self.slots(count=16, home=1., price=.34)
+        for slot in slots[:6]:
+            slot['export_price'] = .01
+        for i, slot in enumerate(slots[6:11]):
+            surplus = (1.6, 2.3, 2.4, 2.0, .86)[i]
+            slot.update(import_price=.75, export_price=solar_prices[i],
+                        demand_kwh=0., solar_kwh=surplus, net_solar_kwh=surplus)
+        for slot in slots[11:]:
+            slot.update(import_price=later_price, export_price=.01, demand_kwh=2., net_solar_kwh=-2.)
+        return slots
+
+    def test_full_solar_refill_uses_room_created_by_at_cost_discharge(self):
+        slots = self.competing_refill_slots((.35, .15, .42, .39, .39), .59)
+        windows, trace = self.run_solar_reserve_cycle(slots, 3.8)
+        self.assertTrue(self.c._battery_solar_reserve_relaxation)
+        first_fill = next(i for i, (_, _, mode) in enumerate(trace) if mode.startswith('laden_'))
+        self.assertAlmostEqual(trace[first_fill-1][1], 2., delta=.005)
+        self.assertAlmostEqual(max(e for _, e, mode in trace if mode == 'laden_met_zonne_energie'), 10., delta=.005)
+        self.assertFalse(any(w['mode'] in ('laden_van_net', 'ontladen_naar_net') for w in windows))
+
+    def test_full_solar_fallback_does_not_displace_profitable_grid_refill(self):
+        self.c._cycle_export_planning = False
+        slots = self.competing_refill_slots((.39, .36, .35, .36, .39), .55)
+        windows, trace = self.run_solar_reserve_cycle(slots, 3.8)
+        self.assertFalse(self.c._battery_solar_reserve_relaxation)
+        self.assertTrue(any(w['mode'] == 'laden_van_net' for w in windows))
+        self.assertAlmostEqual(max(e for _, e, mode in trace if mode == 'laden_van_net'), 10., delta=.005)
+
     def test_solar_relaxation_cannot_lose_money_or_release_stock_above_reserve(self):
         for price, initial in ((.29, 4.), (.34, 4.5)):
             with self.subTest(price=price, initial=initial):
@@ -294,6 +325,9 @@ class CompleteCyclePolicyTest(unittest.TestCase):
         for slot, (price, export, surplus) in zip(slots, rows):
             slot.update(import_price=price, export_price=export, net_solar_kwh=surplus,
                         solar_kwh=max(0, surplus), demand_kwh=max(0, -surplus))
+        # Even with enough PV in total, the daytime household peak separates
+        # the forecast into two blocks that cannot individually fill the battery.
+        slots[4].update(solar_kwh=0., demand_kwh=1., net_solar_kwh=-1.)
         _, trace = self.run_solar_reserve_cycle(slots, 3.)
         self.assertFalse(self.c._battery_solar_reserve_relaxation)
         self.assertTrue(all(e >= 4.995 for end, e, _ in trace

@@ -16,7 +16,9 @@ geverifieerd is. Lees ook de open punten onderaan.
   bereikt en de accu daarna uitsluitend op zon tot 100% kan laden. Herbereken
   daarvoor de zonnevensters met de ingestelde tijdsmarge. Bewijs dit opnieuw bij
   een nieuwe prognose of na herstel; gedeeltelijke zonlading op zichzelf is geen
-  toestemming om de hogere reserve los te laten.
+  toestemming om de hogere reserve los te laten. Als de prijsselectie slechts
+  een deel kiest, toets ook aaneengesloten volledige zonneblokken met dezelfde
+  uitvoeringssimulatie; combineer geen blokken over een onderbreking.
 - Voer de vaste regressies zonder Home Assistant uit met
   `PYTHONPATH=tests python -m unittest test_battery_complete_cycle_policy -q`.
   Hergebruik de fixture `solar_reserve_cycle` voor wijzigingen aan tarieven,
