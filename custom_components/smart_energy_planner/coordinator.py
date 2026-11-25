@@ -117,6 +117,8 @@ from .const import (
 )
 from .price_models import PlannerWindow
 from .planner_result import PlannerResult
+from .battery_optimizer import optimize_solar_plan
+from .const import CONF_BATTERY_OPTIMIZER_V2
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
@@ -1239,11 +1241,14 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # Startup sensors may remain unavailable over several refreshes.
             # Unknown SOC is not an empty battery: do not initialize, reverse
             # or persist a new cycle until a measured SOC is available.
-            return self._build_pending_result(
+            result = self._build_pending_result(
                 "waiting_for_battery_soc", PLANNER_KIND_BATTERY,
                 {**inputs["source_status"], "battery_soc_sensor": "waiting_for_battery_soc"},
                 list(inputs["source_errors"]),
             )
+            if self._config.get(CONF_BATTERY_OPTIMIZER_V2, False):
+                result.battery_planner_engine_reason = "missing_data"
+            return result
 
         now = dt_util.now()
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -1698,6 +1703,20 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             # source selection. An observed charging phase may still continue.
             planned_solar_charge_windows = []
             planned_grid_charge_windows = []
+        engine, engine_reason = "v1", "disabled"
+        if (battery_enabled and planner_kind == PLANNER_KIND_BATTERY
+                and self._config.get(CONF_BATTERY_OPTIMIZER_V2, False)):
+            improved, engine_reason = battery_planner._try_solar_optimizer(
+                baseline=planned_solar_charge_windows, grid=planned_grid_charge_windows,
+                slots=energy_balance_slots, now=now, initial_usable_energy_kwh=battery_energy_available_kwh,
+                usable_capacity_kwh=usable_battery_capacity_kwh, battery_soc_percent=battery_soc_percent,
+                average_price=average_price,
+                average_export_price=export_price_average if export_price_average is not None else average_price,
+                max_charge_kw=max_charge, max_discharge_kw=max_discharge,
+                no_charge_reserve_kwh=no_charge_reserve_kwh, battery_min_profit=battery_min_profit,
+            )
+            if improved is not None:
+                planned_solar_charge_windows, engine = improved, "v2"
         next_planned_solar_charge_start = min(
             (
                 window_start
@@ -2035,6 +2054,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             source_status=source_status,
             source_errors=source_errors,
             rationale=rationale,
+            battery_planner_engine=engine,
+            battery_planner_engine_reason=engine_reason,
         )
 
     def _serialize_planned_price_windows(
@@ -2354,6 +2375,61 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                         and initial < usable_capacity_kwh - 0.005 else boundary)
         return self._plan_charge_windows_for_horizon(
             **source_args, no_charge_reserve_kwh=source_floor)
+
+    def _try_solar_optimizer(self, *, baseline, grid, **plan):
+        """Compare alternatives without persisting trial state or relaxing V1 policy."""
+        if plan['battery_soc_percent'] is None or not plan['slots']:
+            return None, 'missing_data'
+        if (grid or getattr(self, '_charge_session_started', False)
+                or getattr(self, '_battery_solar_reserve_relaxation', False)):
+            return None, 'outside_solar_scope'
+
+        capacity = plan['usable_capacity_kwh']
+        initial = plan['initial_usable_energy_kwh']
+        if (not baseline or initial >= capacity - .005
+                or plan['max_charge_kw'] <= 0 or plan['max_discharge_kw'] <= 0):
+            return None, 'outside_solar_scope'
+        reserve = min(initial, plan['no_charge_reserve_kwh'])
+        # Interleave target sizes so one run cannot starve the other candidates.
+        sizes = sorted({capacity, capacity - initial, capacity - reserve}, reverse=True)
+        generators = [self._full_solar_refill_blocks(
+            plan['slots'], plan['now'], size, plan['max_charge_kw'], plan['battery_min_profit'])
+            for size in sizes if size > .005]
+
+        def candidates():
+            while generators:
+                for generate in tuple(generators):
+                    block = next(generate, None)
+                    if block is None:
+                        generators.remove(generate)
+                    else:
+                        yield block
+
+        def simulate(solar):
+            trial = copy(self)
+            trial._store_battery_cycle_state_snapshot = lambda timestamp: None
+            windows = trial._build_mode_windows_from_hourly_plan(
+                **plan, planned_solar_charge_windows=solar, planned_grid_charge_windows=[])[0]
+            if not getattr(self, '_cycle_export_planning', False):
+                return windows
+            # Charge neither alternative for tentative outlook commands. Score
+            # the commands actually published by _build_plan, with idle (zero
+            # incremental cost) for the rest of the same forecast horizon.
+            # Do not hide unsupported export/grid actions behind that cutoff.
+            if any(w['mode'] in ('ontladen_naar_net', 'laden_van_net') for w in windows):
+                return windows
+            tomorrow = plan['now'].replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            cutoff = self._two_cycle_end(windows) or tomorrow
+            return [{**w, 'end': min(datetime.fromisoformat(w['end']), cutoff).isoformat()}
+                    for w in windows if datetime.fromisoformat(w['start']) < cutoff]
+
+        try:
+            return optimize_solar_plan(baseline=baseline, candidates=candidates(), simulate=simulate,
+                settings=dict(slots=plan['slots'], now=plan['now'], initial=initial, capacity=capacity,
+                              max_charge=plan['max_charge_kw'], max_discharge=plan['max_discharge_kw']))
+        except Exception:
+            _LOGGER.exception("Experimental solar optimization failed; retaining V1")
+            return None, 'optimizer_error'
 
     def _full_solar_refill_blocks(self, slots, now, capacity_kwh, max_charge_kw, min_profit):
         """Yield full, contiguous PV refills in chronological start order."""

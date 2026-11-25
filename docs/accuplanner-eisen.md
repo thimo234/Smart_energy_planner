@@ -1,5 +1,22 @@
 # Eisen aan de accuplanner
 
+## Experimentele planner v2
+
+- V1 blijft de standaard en is direct terug te kiezen met de schakelaar
+  ‘Experimentele planner v2 (alleen zonneladen)’ in de accu-instellingen.
+- V2 vergelijkt een beperkt aantal alternatieve zonneblokken met v1. De
+  bestaande uitvoeringssimulatie beslist over SOC, reserve, tarieven en
+  overgangsmarge. V2 introduceert geen deelinkoop van netstroom en kiest
+  geen alternatieven voor netladen, teruglevering of een gebonden laadfase.
+- Een alternatief moet volledig zonneladen, in de normale prognose minstens
+  dezelfde eindvoorraad behouden en in zowel de normale als de 25% lagere
+  zonneprognose niet duurder zijn. Schakelen weegt mee in de rangschikking.
+  De lagere zonneprognose is een gevoeligheidstest, geen garantie bij live weer.
+- Bij ongeschikte of ontbrekende gegevens, geen beter plan, overschrijding
+  van het rekenbudget of een fout blijft v1 leidend. De kaart en de Battery
+  Strategy-attributen tonen de gekozen planner en de reden. Offline te testen
+  met `PYTHONPATH=tests python -m unittest test_battery_optimizer_v2 -q`.
+
 Dit is de blijvende afsprakenlijst voor werkzaamheden aan de accuplanner.
 De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het
 gewenste gedrag; ze zijn geen verklaring dat alles al geïmplementeerd of live

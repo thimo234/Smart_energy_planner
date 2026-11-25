@@ -88,6 +88,7 @@ class SmartEnergyPlannerCard extends HTMLElement {
         <div class="card">
           ${this.config.show_title === false ? "" : this.renderHeader(horizonStart, horizonEnd)}
           ${this.forecastNotice(plannerState)}
+          ${this.plannerEngineNotice(plannerState)}
           ${this.renderSummary(priceWindows, demandPoints, solarPoints, now)}
           ${this.renderChart(priceWindows, demandPoints, solarPoints, modeBands, plannerState, horizonStart, horizonEnd, now, chartWidth)}
           ${this.renderModeTimeline(modeBands, plannerState, priceWindows, demandPoints, solarPoints, horizonStart, horizonEnd, now, chartWidth)}
@@ -98,6 +99,20 @@ class SmartEnergyPlannerCard extends HTMLElement {
       </ha-card>
       ${this.renderStyles()}
     `);
+  }
+
+  plannerEngineNotice(plannerState) {
+    const {battery_planner_engine: engine, battery_planner_engine_reason: reason} = plannerState.attributes || {};
+    if (!engine) return '';
+    const reasons = {
+      solar_cost_and_cloud_risk: 'Zonnelaadblok gekozen op kosten, minder zon en minder schakelen.',
+      outside_solar_scope: 'Dit plan valt buiten de zonneproef (bijvoorbeeld netladen, teruglevering of een lopende cyclus).',
+      no_better_solar_plan: 'Geen beter volledig zonnelaadplan gevonden.',
+      missing_data: 'Onvoldoende gegevens voor de zonneproef.',
+      time_budget: 'De zonneproef bereikte de rekentijdlimiet.',
+      optimizer_error: 'De zonneproef kon niet worden berekend.',
+    };
+    return `<div class="legend">Planner ${engine === 'v2' ? 'v2 (experimenteel)' : 'v1'}${Object.hasOwn(reasons, reason) ? ` · ${reasons[reason]}` : ''}</div>`;
   }
 
   renderHeader(horizonStart, horizonEnd) {

@@ -47,6 +47,7 @@ CONF_BATTERY_MAX_CHARGE_KW = "battery_max_charge_kw"
 CONF_BATTERY_MAX_DISCHARGE_KW = "battery_max_discharge_kw"
 CONF_BATTERY_CHARGE_SAFETY_MARGIN = "battery_charge_safety_margin"
 CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES = "battery_solar_transition_buffer_minutes"
+CONF_BATTERY_OPTIMIZER_V2 = "battery_optimizer_v2"
 CONF_BATTERY_DEMAND_SAFETY_MARGIN = "battery_demand_safety_margin"
 
 PLANNER_KIND_BATTERY = "battery"

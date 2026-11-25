@@ -121,7 +121,7 @@ class November15LocalCaptureReplayTest(unittest.TestCase):
                                   'battery_2026_11_15_outlook.json').read_text())
         cls.history = cls.capture['history']
 
-    def replay(self, timestamp=None, soc=None):
+    def replay(self, timestamp=None, soc=None, optimizer_v2=False):
         p = self.capture
         a = p['plan']
         def items(key):
@@ -141,7 +141,7 @@ class November15LocalCaptureReplayTest(unittest.TestCase):
         now = parse(timestamp or items('planned_battery_mode_windows')[0]['start'])
         c = coordinator()
         c.config_entry = SimpleNamespace(entry_id='nov15-investigation', options={},
-                                        data=p['effective_config'])
+                                        data={**p['effective_config'], 'battery_optimizer_v2': optimizer_v2})
         for key, value in p['coordinator_state'].items():
             if key == 'battery_margin_state':
                 # The diagnostic state was captured after planning, not before

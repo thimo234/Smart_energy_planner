@@ -14,8 +14,9 @@ from custom_components.smart_energy_planner.price_models import PlannerWindow
 from custom_components.smart_energy_planner.price_helpers import extend_price_window_tail
 
 
-def feedback_slots(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00"):
-    data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
+def feedback_slots(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", *, data=None):
+    if data is None:
+        data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
     parse = datetime.fromisoformat
     now = parse(timestamp)
     prices = [PlannerWindow(parse(w["start"]), parse(w["end"]), w["price"], w["price_known"])
@@ -60,10 +61,12 @@ def replay():
 def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00", soc=68,
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
                      solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False,
-                     snapshot_exports=False, external_demand=None, demand_margin=0):
+                     snapshot_exports=False, external_demand=None, demand_margin=0,
+                     optimizer_v2=False, fixture_data=None):
     """Exercise final sensor scheduling with the already computed demand input."""
-    now, slots = feedback_slots(snapshot, timestamp)
-    data = json.loads((Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
+    data = fixture_data if fixture_data is not None else json.loads(
+        (Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
+    now, slots = feedback_slots(snapshot, timestamp, data=data)
     prices = [PlannerWindow(s["start"], s["end"], s["import_price"], s["price_known"]) for s in slots]
     if estimate_tomorrow:
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -91,6 +94,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                                           "battery_min_profit_per_kwh": profit,
                                           "battery_demand_safety_margin": demand_margin,
                                           "battery_charge_safety_margin": solar_margin,
+                                          "battery_optimizer_v2": optimizer_v2,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
     namespace = c._build_plan_for_horizon.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {

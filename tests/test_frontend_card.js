@@ -18,6 +18,13 @@ require(path.resolve(
 ));
 
 const Card = registered.get("smart-energy-planner-card");
+assert.match(Card.prototype.plannerEngineNotice({attributes: {
+  battery_planner_engine: 'v2', battery_planner_engine_reason: 'solar_cost_and_cloud_risk',
+}}), /Planner v2.*minder zon/);
+assert.match(Card.prototype.plannerEngineNotice({attributes: {
+  battery_planner_engine: 'v1', battery_planner_engine_reason: 'time_budget',
+}}), /Planner v1.*rekentijdlimiet/);
+assert.equal(Card.prototype.plannerEngineNotice({attributes: {}}), '');
 const Mini = registered.get('smart-energy-planner-mini-card');
 assert.ok(Mini);
 const mini = new Mini();
