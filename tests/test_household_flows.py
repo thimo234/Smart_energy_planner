@@ -280,6 +280,7 @@ def load_runtime():
         'homeassistant.components.http': module('http', StaticPathConfig=Mock()),
         'homeassistant.config_entries': module('entries', ConfigEntry=object, ConfigEntryNotReady=RuntimeError),
         'homeassistant.const': module('const', EVENT_HOMEASSISTANT_STARTED='started',
+                                     STATE_UNKNOWN='unknown', STATE_UNAVAILABLE='unavailable',
                                      Platform=NS(SENSOR='sensor', BINARY_SENSOR='binary_sensor')),
         'homeassistant.core': module('core', CoreState=NS(running='running'), Event=object,
             EventStateChangedData=object, HomeAssistant=object, callback=lambda func: func),
@@ -304,6 +305,46 @@ def load_runtime():
 
 
 class RuntimeContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_battery_source_ticks_wait_but_safety_and_recovery_refresh(self):
+        runtime, _, events = load_runtime()
+        battery = entry('battery', 'battery', price_sensor='sensor.price',
+                        battery_soc_sensor='sensor.soc', battery_min_soc_percent=20,
+                        battery_no_charge_min_soc_percent=60,
+                        solcast_today_sensor='sensor.sun')
+        battery.async_on_unload = Mock()
+        tasks = []
+        hass = NS(data={}, state='starting', bus=NS(async_listen_once=Mock()),
+                  async_create_task=tasks.append)
+        coordinator = await runtime._async_setup_planner(hass, battery)
+        changed = events.async_track_state_change_event.call_args.args[2]
+
+        def emit(entity, old, new):
+            changed(NS(data={'entity_id': entity, 'old_state': NS(state=old),
+                             'new_state': None if new is None else NS(state=new)}))
+
+        emit('sensor.price', '0.20', '0.22')
+        emit('sensor.sun', '4', '3')
+        emit('sensor.soc', '70', '69')
+        regular_count = len(tasks)
+        while tasks:
+            await tasks.pop()
+        self.assertEqual(regular_count, 0)
+
+        for entity, old, new in [('sensor.soc', '61', '60'), ('sensor.soc', '21', '20'),
+                                 ('sensor.soc', '99', '100'), ('sensor.price', '0.22', None),
+                                 ('sensor.sun', 'unavailable', '3')]:
+            with self.subTest(entity=entity, old=old, new=new):
+                emit(entity, old, new)
+                count = len(tasks)
+                while tasks:
+                    await tasks.pop()
+                self.assertEqual(count, 1)
+
+        coordinator.data.source_errors = ['forecast missing']
+        events.async_track_time_interval.call_args.args[1](None)
+        self.assertEqual(len(tasks), 1)
+        await tasks.pop()
+
     async def test_failed_adoption_preserves_live_legacy_identity_and_runtime(self):
         for reason in ('source_conflict', 'unload_failed'):
             with self.subTest(reason=reason):
@@ -436,11 +477,16 @@ class RuntimeContractTest(unittest.IsolatedAsyncioTestCase):
         # A single parent subscription dispatches only to interested children.
         self.assertEqual(events.async_track_state_change_event.call_count, 1)
         source_changed = events.async_track_state_change_event.call_args.args[2]
-        source_changed(NS(data={'entity_id': 'sensor.soc'}))
+        source_changed(NS(data={'entity_id': 'sensor.soc', 'old_state': NS(state='49'),
+                                'new_state': NS(state='48')}))
+        self.assertEqual(len(tasks), 0)
+        source_changed(NS(data={'entity_id': 'sensor.soc', 'old_state': NS(state='21'),
+                                'new_state': NS(state='20')}))
         self.assertEqual(len(tasks), 1)
         await tasks.pop()
-        source_changed(NS(data={'entity_id': 'sensor.price'}))
-        self.assertEqual(len(tasks), 6)
+        source_changed(NS(data={'entity_id': 'sensor.price', 'old_state': NS(state='0.2'),
+                                'new_state': NS(state='0.3')}))
+        self.assertEqual(len(tasks), 5)
         for task in tasks:
             await task
         tasks.clear()

@@ -6,12 +6,13 @@ import asyncio
 import hashlib
 import logging
 from datetime import timedelta
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from homeassistant.core import CoreState, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_call_later,
@@ -26,10 +27,13 @@ from .const import (
     CONF_EXPORT_PRICE_SENSOR,
     CONF_PLANNER_KIND,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_BATTERY_MIN_SOC_PERCENT,
+    CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT,
     CONF_PRICE_SENSOR,
     CONF_SOLCAST_TODAY_SENSOR,
     CONF_SOLCAST_TOMORROW_SENSOR,
     CONF_TOTAL_ENERGY_SENSOR,
+    DEFAULT_BATTERY_MIN_SOC_PERCENT,
     DOMAIN,
     PLANNER_KIND_BATTERY,
     PLANNER_KIND_PRICE_WINDOW,
@@ -149,19 +153,37 @@ async def _async_setup_planner(hass, entry, shared=None):
     tracked = [entity_id for entity_id in tracked_entities if entity_id]
     _LOGGER.info("Smart Energy Planner: tracking state changes for entities: %s", tracked)
 
+    is_battery = planner_kind == PLANNER_KIND_BATTERY
+    soc_entity = _entity_id(CONF_BATTERY_SOC_SENSOR) if is_battery else None
+    soc_limits = ()
+    if soc_entity:
+        min_soc = float(merged.get(CONF_BATTERY_MIN_SOC_PERCENT, DEFAULT_BATTERY_MIN_SOC_PERCENT))
+        reserve_soc = float(merged.get(CONF_BATTERY_NO_CHARGE_MIN_SOC_PERCENT, min_soc))
+        soc_limits = (min_soc, reserve_soc)
+
     @callback
     def _handle_source_state_change(event: Event[EventStateChangedData]) -> None:
+        old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
-        if new_state is None:
+        entity_id = event.data.get("entity_id")
+        if is_battery:
+            old = old_state.state if old_state is not None else None
+            new = new_state.state if new_state is not None else None
+            if not _battery_source_requires_refresh(
+                old, new, soc_limits if entity_id == soc_entity else ()
+            ):
+                return
+        elif new_state is None and shared is None:
             return
         _LOGGER.info(
             "Smart Energy Planner: state change for %s (state=%s), triggering refresh",
-            event.data.get("entity_id", "?"),
-            new_state.state,
+            entity_id,
+            new_state.state if new_state is not None else None,
         )
         hass.async_create_task(coordinator.async_request_refresh())
 
     coordinator.source_entities = set(tracked)
+    coordinator.handle_source_state_change = _handle_source_state_change
     if shared is None:
         entry.async_on_unload(async_track_state_change_event(
             hass, tracked, _handle_source_state_change,
@@ -177,6 +199,8 @@ async def _async_setup_planner(hass, entry, shared=None):
     #    refresh immediately and schedule a 30-second delayed refresh.
     @callback
     def _do_refresh(_=None) -> None:
+        if is_battery and coordinator.data is not None and not coordinator.data.source_errors:
+            return  # Setup has already refreshed healthy battery sources.
         hass.async_create_task(coordinator.async_request_refresh())
 
     @callback
@@ -219,6 +243,28 @@ async def _async_setup_planner(hass, entry, shared=None):
 
     entry.async_on_unload(coordinator._cancel_source_error_retry)
     return coordinator
+
+
+def _battery_source_requires_refresh(
+    old: str | None, new: str | None, soc_limits: tuple[float, ...],
+) -> bool:
+    """Leave ordinary changes for the poll; react to health and safety edges."""
+    if not soc_limits:
+        missing = (None, STATE_UNKNOWN, STATE_UNAVAILABLE)
+        return (old in missing) != (new in missing)
+
+    def soc(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if isfinite(number) else None
+
+    previous, current = soc(old), soc(new)
+    if previous is None or current is None:
+        return (previous is None) != (current is None)
+    return (previous < 100 <= current
+            or any(current <= limit < previous for limit in soc_limits))
 
 
 async def _async_setup_household(hass, entry):
@@ -268,7 +314,7 @@ async def _async_setup_household(hass, entry):
         shared.invalidate()
         for coordinator in children.values():
             if entity_id in coordinator.source_entities:
-                hass.async_create_task(coordinator.async_request_refresh())
+                coordinator.handle_source_state_change(event)
 
     tracked = set().union(*(c.source_entities for c in children.values())) if children else set()
     if tracked:

@@ -1,5 +1,16 @@
 # Eisen aan de accuplanner
 
+## Verversing per kwartier
+
+- V1 en v2 gebruiken per accuplanner de normale coordinatorverversing van
+  15 minuten. Gewone updates van tarieven, prognoses en metingen starten
+  geen extra berekening; de volgende verversing leest de nieuwste waarden.
+- Bronuitval en herstel, het bereiken van de ingestelde ondergrens of reserve
+  bij ontladen en het bereiken van 100% bij laden mogen direct verversen.
+  Opstart en de bestaande snelle bronherstelcontrole blijven beschikbaar.
+  Geplande schakeltijden en het verversingsgedrag van andere planners wijzigen
+  niet. Offline getest in `test_household_flows`.
+
 ## Experimentele planner v2
 
 - V1 blijft de standaard wanneer beide experimentele schakelaars uit staan.
