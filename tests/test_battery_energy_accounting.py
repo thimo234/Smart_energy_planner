@@ -62,7 +62,7 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                      discharging=False, reserve=20, max_charge=3, profit=.08, instance=None,
                      solar_margin=0, tax_deduction=.10, estimate_tomorrow=False, isolated_cycles=False,
                      snapshot_exports=False, external_demand=None, demand_margin=0,
-                     optimizer_v2=False, fixture_data=None):
+                     optimizer_v2=False, optimizer_solar_only=False, fixture_data=None):
     """Exercise final sensor scheduling with the already computed demand input."""
     data = fixture_data if fixture_data is not None else json.loads(
         (Path(__file__).parent / f"fixtures/battery_{snapshot}.json").read_text())
@@ -94,7 +94,8 @@ def replay_full_plan(snapshot="2026_09_17", timestamp="2026-09-17T12:33:32+02:00
                                           "battery_min_profit_per_kwh": profit,
                                           "battery_demand_safety_margin": demand_margin,
                                           "battery_charge_safety_margin": solar_margin,
-                                          "battery_optimizer_v2": optimizer_v2,
+                                          "battery_optimizer_v2_full": optimizer_v2,
+                                          "battery_optimizer_v2": optimizer_solar_only,
                                           "battery_no_charge_min_soc_percent": reserve}, options={})
     namespace = c._build_plan_for_horizon.__globals__
     with patch.object(namespace["dt_util"], "now", return_value=now), patch.dict(namespace, {

@@ -1,4 +1,5 @@
 """Opt-in optimizer: score command windows, not proposed energy."""
+from copy import copy
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -7,14 +8,14 @@ from unittest.mock import Mock, patch
 from typing import Any
 
 from partial_solar_assertions import assert_executable_plan
-from test_battery_energy_accounting import replay_full_plan
+from test_battery_energy_accounting import coordinator, replay_full_plan
 from test_battery_evening_peak_regression import replay_evening_gap
 import test_battery_nov15_brief_discharge
 from test_support import install_package_stub
 
 install_package_stub()
 
-from custom_components.smart_energy_planner.battery_optimizer import evaluate_solar_plan, optimize_solar_plan
+from custom_components.smart_energy_planner.battery_optimizer import evaluate_battery_plan, optimize_battery_plan
 
 
 class OptimizerScoreTest(unittest.TestCase):
@@ -34,7 +35,7 @@ class OptimizerScoreTest(unittest.TestCase):
         return dict(start=slot['start'].isoformat(), end=slot['end'].isoformat(), mode=mode)
 
     def score(self, windows, factor=1.):
-        return evaluate_solar_plan(self.slots, windows, now=self.now, initial=0.,
+        return evaluate_battery_plan(self.slots, windows, now=self.now, initial=0.,
                                    capacity=2., max_charge=2., max_discharge=2.,
                                    solar_factor=factor)
 
@@ -48,11 +49,16 @@ class OptimizerScoreTest(unittest.TestCase):
         self.assertAlmostEqual(clouds.peak, 1.25)
         self.assertEqual(clear.switches, 1)
 
-    def test_rejects_unknown_tariff_overlap_and_non_solar_actions(self):
+    def test_prices_grid_import_and_separates_home_from_export(self):
+        windows = [self.window(0, 'laden_van_net'), self.window(1, 'ontladen_naar_net')]
+        self.slots[1].update(demand_kwh=1., net_solar_kwh=-1.)
+        self.slots[0].update(solar_kwh=2., net_solar_kwh=1.)
+        self.assertAlmostEqual(self.score(windows).cost, .25 + .10 - .70 - .10)
+        self.assertAlmostEqual(self.score(windows, .75).cost, 1.5*.25 + .5*.10 - .70 - .10)
+
+    def test_rejects_unknown_tariff_and_overlap(self):
         charge = self.window(0, 'laden_met_zonne_energie')
         self.assertIsNone(self.score([charge, charge]))
-        self.assertIsNone(self.score([self.window(1, 'ontladen_naar_net')]))
-        self.assertIsNone(self.score([self.window(1, 'laden_van_net')]))
         self.slots[0]['price_known'] = False
         self.assertIsNone(self.score([charge]))
 
@@ -60,8 +66,29 @@ class OptimizerScoreTest(unittest.TestCase):
         self.slots[0]['solar_transition'] = 'lead'
         self.assertIsNone(self.score([self.window(0, 'laden_met_zonne_energie')]))
 
+    def test_cheaper_but_incomplete_grid_fill_cannot_win(self):
+        self.slots[0].update(import_price=-.50, solar_kwh=0., net_solar_kwh=-1.)
+        charge = dict(self.window(0, 'laden_van_net'), end=(self.now + timedelta(minutes=30)).isoformat())
+        self.assertTrue(self.score([charge]).incomplete_grid_fill)
+        result = optimize_battery_plan(baseline=('reference', None), candidates=[('grid', 1)],
+            simulate=lambda variant: [charge] if variant[0] == 'grid' else [],
+            settings=dict(slots=self.slots, now=self.now, initial=0., capacity=2.,
+                          max_charge=2., max_discharge=2.))
+        self.assertEqual(result, (None, 'no_better_battery_plan'))
+
+    def test_starting_full_does_not_count_as_solar_refill(self):
+        self.slots[0].update(demand_kwh=1., solar_kwh=0., net_solar_kwh=-1.)
+        self.slots[1].update(solar_kwh=.5, demand_kwh=0., net_solar_kwh=.5, export_price=-.50)
+        discharge = self.window(0, 'ontladen')
+        refill = self.window(1, 'laden_met_zonne_energie')
+        result = optimize_battery_plan(baseline=('reference', None), candidates=[('solar', 1)],
+            simulate=lambda variant: [discharge, refill] if variant[0] == 'solar' else [discharge],
+            settings=dict(slots=self.slots, now=self.now, initial=2., capacity=2.,
+                          max_charge=2., max_discharge=2.))
+        self.assertEqual(result, (None, 'no_better_battery_plan'))
+
     def test_deadline_keeps_baseline_even_if_candidate_would_be_better(self):
-        result = optimize_solar_plan(baseline=[], candidates=[[1]],
+        result = optimize_battery_plan(baseline=[], candidates=[("solar", 1)],
             simulate=lambda source: ([self.window(0, 'laden_met_zonne_energie'),
                                       self.window(1, 'ontladen')] if source else []),
             settings=dict(slots=self.slots, now=self.now, initial=0., capacity=2.,
@@ -93,13 +120,80 @@ def solar_scenario():
 
 
 class OptimizerIntegrationTest(unittest.TestCase):
+    def test_solar_candidate_starts_before_reference_cycle_admission(self):
+        now = datetime.fromisoformat(solar_scenario()['timestamp'])
+        reference = coordinator()
+        reference._charge_session_started = False
+        reference._battery_cycle_discharge_floor_kwh = 4.
+        seed = copy(reference)
+        reference._battery_cycle_discharge_floor_kwh = 0.
+        reference._full_arbitrage_intervals = [(now, now + timedelta(hours=1))]
+        solar = [{'start': now.isoformat(), 'end': (now + timedelta(hours=1)).isoformat()}]
+        observed = []
+
+        def build(trial, **plan):
+            observed.append((trial._battery_cycle_discharge_floor_kwh,
+                             getattr(trial, '_full_arbitrage_intervals', [])))
+            return [{**solar[0], 'mode': 'laden_met_zonne_energie'}], None
+
+        def compare(*, baseline, candidates, simulate, settings):
+            simulate(baseline)
+            simulate(next(candidates))
+            return None, 'no_better_battery_plan'
+
+        with (patch.object(type(reference), '_build_mode_windows_from_hourly_plan', build),
+              patch.object(type(reference), '_full_solar_refill_blocks', side_effect=lambda *_: iter([solar])),
+              patch.dict(reference._try_battery_optimizer.__func__.__globals__, optimize_battery_plan=compare)):
+            result = reference._try_battery_optimizer(
+                baseline=solar, grid=[], source_seed=seed, source_args={}, full=True,
+                slots=[{'start': now, 'end': now + timedelta(hours=1), 'import_price': .2}],
+                now=now, usable_capacity_kwh=8., initial_usable_energy_kwh=8.,
+                no_charge_reserve_kwh=4., max_charge_kw=3., max_discharge_kw=3., battery_min_profit=.1)
+        self.assertEqual(result, (None, 'no_better_battery_plan'))
+        self.assertEqual(observed, [(0., reference._full_arbitrage_intervals), (4., [])])
+        self.assertEqual(reference._battery_cycle_discharge_floor_kwh, 0.)
+
+    def test_opt_in_jointly_selects_grid_solar_home_and_export(self):
+        args = solar_scenario()
+        args['soc'] = 60.
+        data = args['fixture_data']
+        for series, field, values in (
+            ('upcoming_energy_price_windows', 'price', [.20,.65,.09,.20,.48,.20,.48,.65,.65,.04,.48,.04,.48,.85,.04]),
+            ('upcoming_export_price_windows', 'price', [.05,.25,.01,.12,.33,.01,.33,.57,.25,.01,.40,.01,.40,.70,.01]),
+            ('estimated_hourly_home_demand', 'estimated_kwh', [.5,2.,1.,3.,3.,0.,2.,0.,.5,.5,.5,1.,3.,.5,3.]),
+            ('estimated_hourly_solar_forecast', 'estimated_kwh', [0.,0.,0.,.5,1.]),
+        ):
+            for row, value in zip(data[series], values, strict=True):
+                row[field] = value
+        now, slots, v1 = replay_full_plan(**args)
+        _, _, v2 = replay_full_plan(**args, optimizer_v2=True)
+        self.assertEqual(v2.battery_planner_engine, 'v2', v2.battery_planner_engine_reason)
+        self.assertFalse(v1.planned_grid_charge_windows)
+        self.assertTrue(v2.planned_grid_charge_windows)
+        _, _, solar_only = replay_full_plan(**args, optimizer_solar_only=True)
+        self.assertFalse(solar_only.planned_grid_charge_windows)
+        self.assertTrue({'laden_van_net', 'laden_met_zonne_energie', 'ontladen', 'ontladen_naar_net'}
+                        <= {w['mode'] for w in v2.planned_battery_mode_windows})
+        exports = {row['start']: row['price'] for row in data['upcoming_export_price_windows']}
+        for slot in slots:
+            slot['export_price'] = exports[slot['start'].isoformat()]
+        trace = assert_executable_plan(self, slots, v2.planned_battery_mode_windows, initial=6., reserve=6.)
+        self.assertTrue(trace['saw_full'])
+        for factor in (1., .75):
+            settings = dict(now=now, slots=slots, initial=4., capacity=8., max_charge=3.,
+                            max_discharge=3., solar_factor=factor)
+            before, after = (evaluate_battery_plan(windows=p.planned_battery_mode_windows, **settings)
+                             for p in (v1, v2))
+            self.assertLess(after.cost, before.cost)
+            self.assertGreaterEqual(after.end + .005, before.end)
+
     def test_opt_in_selects_cheaper_full_refill_and_remains_executable(self):
         args = solar_scenario()
         now, _, v1 = replay_full_plan(**args)
         _, slots, v2 = replay_full_plan(**args, optimizer_v2=True)
         self.assertEqual((v1.battery_planner_engine, v1.battery_planner_engine_reason), ('v1', 'disabled'))
         self.assertEqual((v2.battery_planner_engine, v2.battery_planner_engine_reason),
-                         ('v2', 'solar_cost_and_cloud_risk'))
+                         ('v2', 'battery_cost_and_cloud_risk'))
         self.assertNotEqual(v2.planned_solar_charge_windows, v1.planned_solar_charge_windows)
         self.assertFalse(v2.planned_grid_charge_windows)
         trace = assert_executable_plan(self, slots, v2.planned_battery_mode_windows, initial=8., reserve=6.)
@@ -111,18 +205,16 @@ class OptimizerIntegrationTest(unittest.TestCase):
             slot['export_price'] = export[slot['start'].isoformat()]
         for factor in (1., .75):
             with self.subTest(solar_factor=factor):
-                baseline = evaluate_solar_plan(windows=v1.planned_battery_mode_windows, solar_factor=factor, **settings)
-                optimized = evaluate_solar_plan(windows=v2.planned_battery_mode_windows, solar_factor=factor, **settings)
+                baseline = evaluate_battery_plan(windows=v1.planned_battery_mode_windows, solar_factor=factor, **settings)
+                optimized = evaluate_battery_plan(windows=v2.planned_battery_mode_windows, solar_factor=factor, **settings)
                 self.assertLess(optimized.cost, baseline.cost)
 
     def test_unexpected_error_retains_exact_v1_commands(self):
         args = solar_scenario()
         _, _, v1 = replay_full_plan(**args)
-        from test_battery_energy_accounting import coordinator
-
         namespace = coordinator()._build_plan_for_horizon.__globals__
         broken_optimizer = Mock(side_effect=ValueError('bad input'))
-        with patch.dict(namespace, optimize_solar_plan=broken_optimizer, _LOGGER=Mock()):
+        with patch.dict(namespace, optimize_battery_plan=broken_optimizer, _LOGGER=Mock()):
             _, _, v2 = replay_full_plan(**args, optimizer_v2=True)
         broken_optimizer.assert_called_once()
         self.assertEqual((v2.battery_planner_engine, v2.battery_planner_engine_reason), ('v1', 'optimizer_error'))
@@ -168,7 +260,6 @@ class OptimizerIntegrationTest(unittest.TestCase):
                     self.assertEqual(v2.planned_grid_charge_windows, v1.planned_grid_charge_windows)
                     self.assertEqual(v2.planned_solar_charge_windows, v1.planned_solar_charge_windows)
                 else:
-                    self.assertFalse(v2.planned_grid_charge_windows)
                     assert_executable_plan(self, slots, v2.planned_battery_mode_windows,
                         initial=soc/10, reserve=reserve/10, minimum=minimum/10,
                         max_charge=max_charge, max_discharge=max_discharge)

@@ -141,7 +141,7 @@ class November15LocalCaptureReplayTest(unittest.TestCase):
         now = parse(timestamp or items('planned_battery_mode_windows')[0]['start'])
         c = coordinator()
         c.config_entry = SimpleNamespace(entry_id='nov15-investigation', options={},
-                                        data={**p['effective_config'], 'battery_optimizer_v2': optimizer_v2})
+                                        data={**p['effective_config'], 'battery_optimizer_v2_full': optimizer_v2})
         for key, value in p['coordinator_state'].items():
             if key == 'battery_margin_state':
                 # The diagnostic state was captured after planning, not before

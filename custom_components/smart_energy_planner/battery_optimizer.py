@@ -1,4 +1,4 @@
-"""Bounded, solar-only optimizer over policy-validated command schedules."""
+"""Bounded optimizer over policy-validated battery command schedules."""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,6 +7,8 @@ from time import monotonic
 
 SOLAR = 'laden_met_zonne_energie'
 HOME = 'ontladen'
+GRID = 'laden_van_net'
+EXPORT = 'ontladen_naar_net'
 IDLE = 'accu_uit'
 EPSILON = .005
 _SWITCH_COST = .01
@@ -15,16 +17,18 @@ _MAX_SECONDS = .15
 
 
 @dataclass(frozen=True, slots=True)
-class SolarScore:
+class BatteryScore:
     cost: float  # Incremental grid bill versus leaving the battery idle.
     peak: float
     end: float
     switches: int
+    incomplete_grid_fill: bool
+    completed_solar_fill: bool
 
 
-def evaluate_solar_plan(slots, windows, *, now, initial, capacity, max_charge,
-                        max_discharge, solar_factor=1.):
-    """Replay solar/home commands; less sun can turn surplus into a deficit.
+def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
+                          max_discharge, solar_factor=1.):
+    """Replay published commands using import and export rates separately.
 
     Baseline and candidates have identical idle-grid costs, so only battery
     transactions are scored. In the cloud replay, SOC limits actual delivery;
@@ -37,13 +41,15 @@ def evaluate_solar_plan(slots, windows, *, now, initial, capacity, max_charge,
     stock = peak = initial
     cost = 0.
     switches = 0
+    grid_fill = incomplete_grid_fill = False
+    completed_solar_fill = False
     last_mode, last_end = IDLE, now
     i = 0
     for window in windows:
         mode = window['mode']
         if mode == IDLE or (mode == HOME and window.get('standby')):
             continue
-        if mode not in (SOLAR, HOME):
+        if mode not in (SOLAR, GRID, HOME, EXPORT):
             return None
         start = max(now, datetime.fromisoformat(window['start']))
         end = datetime.fromisoformat(window['end'])
@@ -72,22 +78,34 @@ def evaluate_solar_plan(slots, windows, *, now, initial, capacity, max_charge,
             net = (float(slot['net_solar_kwh']) - (1 - solar_factor) * production) / duration
             if not isfinite(net):
                 return None
-            if mode == SOLAR:
-                if slot.get('solar_transition') or tariff_in < 0:
+            if mode in (SOLAR, GRID):
+                if mode == SOLAR and (slot.get('solar_transition') or tariff_in < 0):
                     return None
-                energy = min(max_charge, max(0., net)) * hours
+                solar_kw = min(max_charge, max(0., net))
+                power = max_charge if mode == GRID else solar_kw
+                energy = power * hours
                 if solar_factor == 1. and stock + energy > capacity + EPSILON:
                     return None
                 energy = min(max(0., capacity - stock), energy)
+                solar = energy * (solar_kw / power) if power else 0.
+                grid = energy - solar
+                grid_fill |= grid > 1e-9
                 stock += energy
-                cost += tariff_out * energy
+                cost += tariff_out * solar + tariff_in * grid
+                if stock >= capacity - EPSILON:
+                    grid_fill = False
+                    completed_solar_fill |= mode == SOLAR and energy > 1e-9
             else:
-                energy = min(max_discharge, max(0., -net)) * hours
+                home_kw = min(max_discharge, max(0., -net))
+                energy = (max_discharge if mode == EXPORT else home_kw) * hours
                 if solar_factor == 1. and energy > stock + EPSILON:
                     return None
                 energy = min(stock, energy)
+                if energy > 1e-9 and grid_fill:
+                    incomplete_grid_fill = True
                 stock -= energy
-                cost -= tariff_in * energy
+                home = min(energy, home_kw * hours)
+                cost -= tariff_in * home + tariff_out * (energy - home)
             peak = max(peak, stock)
             cursor = until
             if slot['end'] > end:
@@ -95,16 +113,18 @@ def evaluate_solar_plan(slots, windows, *, now, initial, capacity, max_charge,
             i += 1
         if cursor != end:
             return None
-    return SolarScore(cost, peak, stock, switches)
+    return BatteryScore(cost, peak, stock, switches, incomplete_grid_fill or grid_fill, completed_solar_fill)
 
 
-def optimize_solar_plan(*, baseline, candidates, simulate, settings, clock=monotonic):
-    """Return the selected solar source windows, or a V1 fallback reason."""
+def optimize_battery_plan(*, baseline, candidates, simulate, settings, clock=monotonic):
+    """Return the selected policy-approved variant, or a V1 fallback reason."""
     deadline = clock() + _MAX_SECONDS
 
     def assess(windows):
-        normal = evaluate_solar_plan(windows=windows, **settings)
-        cloudy = evaluate_solar_plan(windows=windows, solar_factor=.75, **settings)
+        if windows is None:
+            return None
+        normal = evaluate_battery_plan(windows=windows, **settings)
+        cloudy = evaluate_battery_plan(windows=windows, solar_factor=.75, **settings)
         if normal is None or cloudy is None:
             return None
         objective = .5 * (normal.cost + cloudy.cost) + normal.switches * _SWITCH_COST
@@ -114,7 +134,7 @@ def optimize_solar_plan(*, baseline, candidates, simulate, settings, clock=monot
     if clock() >= deadline:
         return None, 'time_budget'
     if reference is None:
-        return None, 'outside_solar_scope'
+        return None, 'invalid_reference_plan'
     best, best_value = None, reference[1] - .01
     candidates = iter(candidates)
     for _ in range(_MAX_CANDIDATES):
@@ -128,11 +148,14 @@ def optimize_solar_plan(*, baseline, candidates, simulate, settings, clock=monot
         trial = assess(simulate(candidate))
         if clock() >= deadline:
             return None, 'time_budget'
-        if (trial is not None and trial[0].peak >= settings['capacity'] - EPSILON
+        if (trial is not None and not trial[0].incomplete_grid_fill
+                and trial[0].peak >= reference[0].peak - EPSILON
+                and (candidate[0] != 'solar' or trial[0].completed_solar_fill)
                 and trial[0].cost <= reference[0].cost + 1e-9
                 and trial[2].cost <= reference[2].cost + 1e-9
-                and trial[0].end >= reference[0].end - EPSILON and trial[1] < best_value):
+                and trial[0].end >= reference[0].end - EPSILON
+                and trial[2].end >= reference[2].end - EPSILON and trial[1] < best_value):
             best, best_value = candidate, trial[1]
     if clock() >= deadline:
         return None, 'time_budget'
-    return (best, 'solar_cost_and_cloud_risk') if best is not None else (None, 'no_better_solar_plan')
+    return (best, 'battery_cost_and_cloud_risk') if best is not None else (None, 'no_better_battery_plan')

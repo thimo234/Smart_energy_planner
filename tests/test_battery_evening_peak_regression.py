@@ -41,7 +41,7 @@ def replay_evening_gap(*, soc=None, instance=None, charge_started=False, dischar
         "battery_no_charge_min_soc_percent": 60., "battery_max_charge_kw": 2.5,
         "battery_max_discharge_kw": 3., "battery_min_profit_per_kwh": .1,
         "battery_demand_safety_margin": 0., "battery_charge_safety_margin": 0.,
-        "battery_optimizer_v2": optimizer_v2,
+        "battery_optimizer_v2_full": optimizer_v2,
     }, options={})
     c._charge_session_started = charge_started
     c._discharge_session_started = discharge_started

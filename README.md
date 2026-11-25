@@ -195,14 +195,18 @@ Battery strategy values:
 
 ## Experimental planner v2
 
-In the battery planner options, turn on **Experimental planner v2 (solar only)**
-to compare alternative solar charging windows. It keeps the existing battery
-limits and pricing rules, scores published commands under both the original and
-a lower-sun forecast, and accounts for mode changes. It does not optimize grid
-charging or battery export in this release. V1 remains the default and is used
-whenever v2 cannot find a suitable improvement within its compute budget.
+In the battery planner options, turn on **Experimental planner v2 (full battery planning)**
+to compare complete schedules for solar charging, grid charging, home discharge
+and eligible battery export. V2 compares a bounded set of charging alternatives
+and recalculates the resulting discharge schedule using the existing battery and
+pricing rules. It does not permit new partial grid purchases. It scores published
+commands under both the original and a lower-sun forecast, and accounts for mode
+changes. V1 remains the default and is used for an ongoing charge or whenever v2
+cannot find a suitable improvement within its compute budget.
 The main card and Battery Strategy attributes show the selected planner and
-why it was chosen. Turn the option off to return to v1.
+why it was chosen. The separate solar-only option stays available. Full planning
+is off by default and takes priority if both options are on. Turn both off to
+return to v1.
 
 ## Battery reserve
 

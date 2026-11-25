@@ -54,6 +54,7 @@ from .const import (
     CONF_BATTERY_DEMAND_SAFETY_MARGIN,
     CONF_BATTERY_SOLAR_TRANSITION_BUFFER_MINUTES,
     CONF_BATTERY_OPTIMIZER_V2,
+    CONF_BATTERY_OPTIMIZER_V2_FULL,
     CONF_BATTERY_ENABLED,
     CONF_BATTERY_MAX_CHARGE_KW,
     CONF_BATTERY_MAX_DISCHARGE_KW,
@@ -329,6 +330,8 @@ def _build_battery_schema(hass: HomeAssistant, user_input: dict[str, Any] | None
             )),
             vol.Optional(CONF_BATTERY_OPTIMIZER_V2,
                          default=user_input.get(CONF_BATTERY_OPTIMIZER_V2, False)): selector.BooleanSelector(),
+            vol.Optional(CONF_BATTERY_OPTIMIZER_V2_FULL,
+                         default=user_input.get(CONF_BATTERY_OPTIMIZER_V2_FULL, False)): selector.BooleanSelector(),
         }
     )
 

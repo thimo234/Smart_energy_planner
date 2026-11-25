@@ -2,15 +2,20 @@
 
 ## Experimentele planner v2
 
-- V1 blijft de standaard en is direct terug te kiezen met de schakelaar
-  ‘Experimentele planner v2 (alleen zonneladen)’ in de accu-instellingen.
-- V2 vergelijkt een beperkt aantal alternatieve zonneblokken met v1. De
-  bestaande uitvoeringssimulatie beslist over SOC, reserve, tarieven en
-  overgangsmarge. V2 introduceert geen deelinkoop van netstroom en kiest
-  geen alternatieven voor netladen, teruglevering of een gebonden laadfase.
-- Een alternatief moet volledig zonneladen, in de normale prognose minstens
-  dezelfde eindvoorraad behouden en in zowel de normale als de 25% lagere
-  zonneprognose niet duurder zijn. Schakelen weegt mee in de rangschikking.
+- V1 blijft de standaard wanneer beide experimentele schakelaars uit staan.
+  ‘Experimentele planner v2 (volledige accuplanning)’ staat standaard uit en
+  krijgt voorrang als beide opties aan staan. De bestaande instelling voor
+  ‘alleen zonneladen’ wordt niet automatisch omgezet.
+- V2 vergelijkt een beperkt aantal uitvoerbare accuvarianten met v1. Het
+  probeert andere zonneblokken of beperkt de beschikbare inkoopmomenten en
+  berekent daarna opnieuw ontladen voor huisverbruik en toegestane teruglevering.
+  De bestaande simulatie bewaakt SOC, reserve, winst en overgangsmarge.
+  V2 laat een al gebonden laadfase ongemoeid en voert geen deelinkoop in.
+- Een nieuw uitsluitend zonneblok moet volledig kunnen vullen; inkoop mag in
+  de gepubliceerde planning niet vóór vol worden afgebroken. Een alternatief
+  mag de hoogst geplande SOC niet verlagen. Het moet in de normale en de 25%
+  lagere zonneprognose minstens dezelfde eindvoorraad behouden en mag in geen
+  van beide duurder zijn. Schakelen weegt mee in de rangschikking.
   De lagere zonneprognose is een gevoeligheidstest, geen garantie bij live weer.
 - Bij ongeschikte of ontbrekende gegevens, geen beter plan, overschrijding
   van het rekenbudget of een fout blijft v1 leidend. De kaart en de Battery

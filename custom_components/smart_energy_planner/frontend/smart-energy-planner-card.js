@@ -105,12 +105,14 @@ class SmartEnergyPlannerCard extends HTMLElement {
     const {battery_planner_engine: engine, battery_planner_engine_reason: reason} = plannerState.attributes || {};
     if (!engine) return '';
     const reasons = {
-      solar_cost_and_cloud_risk: 'Zonnelaadblok gekozen op kosten, minder zon en minder schakelen.',
-      outside_solar_scope: 'Dit plan valt buiten de zonneproef (bijvoorbeeld netladen, teruglevering of een lopende cyclus).',
-      no_better_solar_plan: 'Geen beter volledig zonnelaadplan gevonden.',
-      missing_data: 'Onvoldoende gegevens voor de zonneproef.',
-      time_budget: 'De zonneproef bereikte de rekentijdlimiet.',
-      optimizer_error: 'De zonneproef kon niet worden berekend.',
+      battery_cost_and_cloud_risk: 'Accuplan gekozen op kosten, minder zon en schakelgedrag.',
+      active_charge: 'De bestaande laadfase blijft leidend.',
+      outside_solar_scope: 'Dit plan valt buiten de modus voor alleen zonneladen.',
+      invalid_reference_plan: 'Het bestaande accuplan kon niet betrouwbaar worden vergeleken.',
+      no_better_battery_plan: 'Geen beter accuplan gevonden binnen de bestaande regels.',
+      missing_data: 'Onvoldoende gegevens om accuvarianten te vergelijken.',
+      time_budget: 'De accuplanner bereikte de rekentijdlimiet.',
+      optimizer_error: 'De accuvarianten konden niet worden berekend.',
     };
     return `<div class="legend">Planner ${engine === 'v2' ? 'v2 (experimenteel)' : 'v1'}${Object.hasOwn(reasons, reason) ? ` · ${reasons[reason]}` : ''}</div>`;
   }

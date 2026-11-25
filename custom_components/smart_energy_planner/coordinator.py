@@ -117,8 +117,8 @@ from .const import (
 )
 from .price_models import PlannerWindow
 from .planner_result import PlannerResult
-from .battery_optimizer import optimize_solar_plan
-from .const import CONF_BATTERY_OPTIMIZER_V2
+from .battery_optimizer import optimize_battery_plan
+from .const import CONF_BATTERY_OPTIMIZER_V2, CONF_BATTERY_OPTIMIZER_V2_FULL
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
@@ -1246,7 +1246,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 {**inputs["source_status"], "battery_soc_sensor": "waiting_for_battery_soc"},
                 list(inputs["source_errors"]),
             )
-            if self._config.get(CONF_BATTERY_OPTIMIZER_V2, False):
+            if (self._config.get(CONF_BATTERY_OPTIMIZER_V2, False)
+                    or self._config.get(CONF_BATTERY_OPTIMIZER_V2_FULL, False)):
                 result.battery_planner_engine_reason = "missing_data"
             return result
 
@@ -1683,7 +1684,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         if battery_soc_percent is None:
             battery_planner = copy(self)
             battery_planner._store_battery_cycle_state_snapshot = lambda timestamp: None
-        planned_solar_charge_windows, planned_grid_charge_windows = battery_planner._plan_bound_charge_windows(
+        full_optimizer = self._config.get(CONF_BATTERY_OPTIMIZER_V2_FULL, False)
+        use_optimizer = (battery_enabled and planner_kind == PLANNER_KIND_BATTERY
+                         and (full_optimizer or self._config.get(CONF_BATTERY_OPTIMIZER_V2, False)))
+        source_seed = copy(battery_planner) if use_optimizer and battery_soc_percent is not None else None
+        source_args = dict(
             slots=energy_balance_slots,
             now=now,
             usable_capacity_kwh=usable_battery_capacity_kwh,
@@ -1695,6 +1700,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             charge_safety_margin=0.0,
             no_charge_reserve_kwh=no_charge_reserve_kwh,
         )
+        planned_solar_charge_windows, planned_grid_charge_windows = battery_planner._plan_bound_charge_windows(**source_args)
         if (planned_grid_charge_windows and not planned_solar_charge_windows
                 and not getattr(battery_planner, "_charge_session_started", False)
                 and sum(float(w.get("charge_kwh", 0.0)) for w in planned_grid_charge_windows)
@@ -1704,10 +1710,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             planned_solar_charge_windows = []
             planned_grid_charge_windows = []
         engine, engine_reason = "v1", "disabled"
-        if (battery_enabled and planner_kind == PLANNER_KIND_BATTERY
-                and self._config.get(CONF_BATTERY_OPTIMIZER_V2, False)):
-            improved, engine_reason = battery_planner._try_solar_optimizer(
+        if use_optimizer:
+            improved, engine_reason = battery_planner._try_battery_optimizer(
                 baseline=planned_solar_charge_windows, grid=planned_grid_charge_windows,
+                source_seed=source_seed, source_args=source_args, full=full_optimizer,
                 slots=energy_balance_slots, now=now, initial_usable_energy_kwh=battery_energy_available_kwh,
                 usable_capacity_kwh=usable_battery_capacity_kwh, battery_soc_percent=battery_soc_percent,
                 average_price=average_price,
@@ -1716,7 +1722,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 no_charge_reserve_kwh=no_charge_reserve_kwh, battery_min_profit=battery_min_profit,
             )
             if improved is not None:
-                planned_solar_charge_windows, engine = improved, "v2"
+                planned_solar_charge_windows, planned_grid_charge_windows = improved
+                engine = "v2"
         next_planned_solar_charge_start = min(
             (
                 window_start
@@ -2376,18 +2383,17 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         return self._plan_charge_windows_for_horizon(
             **source_args, no_charge_reserve_kwh=source_floor)
 
-    def _try_solar_optimizer(self, *, baseline, grid, **plan):
-        """Compare alternatives without persisting trial state or relaxing V1 policy."""
-        if plan['battery_soc_percent'] is None or not plan['slots']:
+    def _try_battery_optimizer(self, *, baseline, grid, source_seed, source_args, full, **plan):
+        """Compare complete schedules without persisting rejected trial state."""
+        if source_seed is None or not plan['slots'] or min(plan['max_charge_kw'], plan['max_discharge_kw']) <= 0:
             return None, 'missing_data'
-        if (grid or getattr(self, '_charge_session_started', False)
-                or getattr(self, '_battery_solar_reserve_relaxation', False)):
-            return None, 'outside_solar_scope'
+        if getattr(self, '_charge_session_started', False):
+            return None, 'active_charge'
 
         capacity = plan['usable_capacity_kwh']
         initial = plan['initial_usable_energy_kwh']
-        if (not baseline or initial >= capacity - .005
-                or plan['max_charge_kw'] <= 0 or plan['max_discharge_kw'] <= 0):
+        if not full and (grid or not baseline or initial >= capacity - .005
+                         or getattr(self, '_battery_solar_reserve_relaxation', False)):
             return None, 'outside_solar_scope'
         reserve = min(initial, plan['no_charge_reserve_kwh'])
         # Interleave target sizes so one run cannot starve the other candidates.
@@ -2397,38 +2403,87 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             for size in sizes if size > .005]
 
         def candidates():
+            # Limit the available purchase opportunities, not the tariffs or
+            # demand used for admission/discharge. Each trial re-sizes its fill.
+            if full and grid:
+                yield 'grid', frozenset()
+                start = datetime.fromisoformat(grid[0]['start'])
+                yield 'grid', frozenset(s['start'] for s in plan['slots'] if s['start'] > start)
+            eligible = [s for s in plan['slots'] if s['end'] > plan['now'] and s.get('price_known', True)]
+            if full and eligible:
+                prices = sorted({float(s['import_price']) for s in eligible})
+                if len(prices) > 1:
+                    cap = prices[(len(prices) - 1) // 3]
+                    yield 'grid', frozenset(s['start'] for s in eligible if s['import_price'] <= cap)
             while generators:
                 for generate in tuple(generators):
                     block = next(generate, None)
                     if block is None:
                         generators.remove(generate)
                     else:
-                        yield block
+                        yield 'solar', block
 
-        def simulate(solar):
-            trial = copy(self)
+        assessed = []
+
+        def simulate(variant):
+            kind, value = variant
+            # Only the reference may inherit permissions granted by selecting
+            # V1's charge sources. Alternatives start with observed state.
+            trial = copy(self if kind == 'reference' else source_seed)
             trial._store_battery_cycle_state_snapshot = lambda timestamp: None
+            if kind == 'grid':
+                trial._optimizer_grid_starts = value
+                solar, purchased = trial._plan_bound_charge_windows(**source_args)
+                if (purchased and not solar and not getattr(trial, '_charge_session_started', False)
+                        and sum(float(w['charge_kwh']) for w in purchased)
+                            < source_args['current_remaining_capacity_kwh'] - .005):
+                    return None
+            elif kind == 'solar':
+                solar, purchased = value, []
+                # Export permission must be re-earned by this alternative.
+                trial._full_arbitrage_intervals = []
+            else:
+                solar, purchased = baseline, grid
+            assessed.append((variant, solar, purchased, copy(trial)))
             windows = trial._build_mode_windows_from_hourly_plan(
-                **plan, planned_solar_charge_windows=solar, planned_grid_charge_windows=[])[0]
+                **plan, planned_solar_charge_windows=solar, planned_grid_charge_windows=purchased)[0]
+            if not full and any(w['mode'] in ('laden_van_net', 'ontladen_naar_net') for w in windows):
+                return None
+            if (solar or purchased) and not any(w['mode'] in ('laden_van_net', 'laden_met_zonne_energie')
+                                                for w in windows):
+                if kind != 'reference':
+                    return None
+                # Mirror the second pass used when V1's proposed fill is not
+                # executable; otherwise an unpublishable reference sets the bar.
+                windows = trial._build_mode_windows_from_hourly_plan(
+                    **plan, planned_solar_charge_windows=[], planned_grid_charge_windows=[])[0]
             if not getattr(self, '_cycle_export_planning', False):
                 return windows
             # Charge neither alternative for tentative outlook commands. Score
             # the commands actually published by _build_plan, with idle (zero
             # incremental cost) for the rest of the same forecast horizon.
-            # Do not hide unsupported export/grid actions behind that cutoff.
-            if any(w['mode'] in ('ontladen_naar_net', 'laden_van_net') for w in windows):
-                return windows
             tomorrow = plan['now'].replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
             cutoff = self._two_cycle_end(windows) or tomorrow
             return [{**w, 'end': min(datetime.fromisoformat(w['end']), cutoff).isoformat()}
                     for w in windows if datetime.fromisoformat(w['start']) < cutoff]
 
         try:
-            return optimize_solar_plan(baseline=baseline, candidates=candidates(), simulate=simulate,
+            selected, reason = optimize_battery_plan(baseline=('reference', None), candidates=candidates(), simulate=simulate,
                 settings=dict(slots=plan['slots'], now=plan['now'], initial=initial, capacity=capacity,
                               max_charge=plan['max_charge_kw'], max_discharge=plan['max_discharge_kw']))
+            if selected is None:
+                return None, reason
+            _, solar, purchased, admitted = next(row for row in assessed if row[0] == selected)
+            # Copy only pre-execution source-selection decisions, not simulated
+            # future stock, margin history or phase changes.
+            for attr in ('_full_arbitrage_intervals', '_battery_cycle_discharge_floor_kwh',
+                         '_battery_solar_reserve_relaxation', '_charge_session_started',
+                         '_discharge_session_started'):
+                if hasattr(admitted, attr):
+                    setattr(self, attr, getattr(admitted, attr))
+            return (solar, purchased), reason
         except Exception:
-            _LOGGER.exception("Experimental solar optimization failed; retaining V1")
+            _LOGGER.exception("Experimental battery optimization failed; retaining V1")
             return None, 'optimizer_error'
 
     def _full_solar_refill_blocks(self, slots, now, capacity_kwh, max_charge_kw, min_profit):
@@ -2525,6 +2580,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         horizon_end = max(cast(datetime, slot["end"]) for slot in future_slots)
         selected_solar_charge_by_start: dict[datetime, float] = {}
         selected_grid_charge_by_start: dict[datetime, float] = {}
+        eligible_grid_starts = getattr(self, '_optimizer_grid_starts', None)
 
         def _solar_cost(slot: dict[str, Any]) -> float:
             # Storing solar forgoes the configured export revenue. That tariff
@@ -2574,7 +2630,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 import_price = float(slot["import_price"])
                 # Genuine imports remain subject to normal fill/margin checks;
                 # a PV-only grid command cannot sidestep a buffered solar slot.
-                if grid_kwh > 0 and (not transition or grid_kwh - solar_kwh > 1e-6):
+                if (grid_kwh > 0 and (eligible_grid_starts is None or slot_start in eligible_grid_starts)
+                        and (not transition or grid_kwh - solar_kwh > 1e-6)):
                     mixed_cost = (
                         (solar_kwh * _solar_cost(slot) if solar_kwh > 0 else 0.0)
                         + max(0.0, grid_kwh - solar_kwh) * import_price
