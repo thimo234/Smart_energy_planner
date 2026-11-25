@@ -27,7 +27,7 @@ class BatteryScore:
 
 
 def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
-                          max_discharge, solar_factor=1.):
+                          max_discharge, solar_factor=1., solar_factors=None):
     """Replay published commands using import and export rates separately.
 
     Baseline and candidates have identical idle-grid costs, so only battery
@@ -38,6 +38,10 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
             and 0 <= initial <= capacity + EPSILON and min(max_charge, max_discharge) > 0
             and 0 <= solar_factor <= 1):
         return None
+    if solar_factors is not None and (len(solar_factors) != len(slots) or not all(
+            isfinite(factor) and 0 <= factor <= 1 for factor in solar_factors)):
+        return None
+    nominal = solar_factor == 1. and solar_factors is None
     stock = peak = initial
     cost = 0.
     switches = 0
@@ -75,7 +79,8 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
             if not (duration > 0 and production >= 0 and demand >= 0
                     and all(isfinite(v) for v in (duration, production, demand, tariff_in, tariff_out))):
                 return None
-            net = (float(slot['net_solar_kwh']) - (1 - solar_factor) * production) / duration
+            factor = solar_factor if solar_factors is None else solar_factors[i]
+            net = (float(slot['net_solar_kwh']) - (1 - factor) * production) / duration
             if not isfinite(net):
                 return None
             if mode in (SOLAR, GRID):
@@ -84,7 +89,7 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
                 solar_kw = min(max_charge, max(0., net))
                 power = max_charge if mode == GRID else solar_kw
                 energy = power * hours
-                if solar_factor == 1. and stock + energy > capacity + EPSILON:
+                if nominal and stock + energy > capacity + EPSILON:
                     return None
                 energy = min(max(0., capacity - stock), energy)
                 solar = energy * (solar_kw / power) if power else 0.
@@ -98,7 +103,7 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
             else:
                 home_kw = min(max_discharge, max(0., -net))
                 energy = (max_discharge if mode == EXPORT else home_kw) * hours
-                if solar_factor == 1. and energy > stock + EPSILON:
+                if nominal and energy > stock + EPSILON:
                     return None
                 energy = min(stock, energy)
                 if energy > 1e-9 and grid_fill:
@@ -116,15 +121,21 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
     return BatteryScore(cost, peak, stock, switches, incomplete_grid_fill or grid_fill, completed_solar_fill)
 
 
-def optimize_battery_plan(*, baseline, candidates, simulate, settings, clock=monotonic):
-    """Return the selected policy-approved variant, or a V1 fallback reason."""
+def optimize_battery_plan(*, baseline, candidates, simulate, settings, clock=monotonic,
+                          cloudy_solar_factors=None):
+    """Return the selected policy-approved variant, or a V1 fallback reason.
+
+    Offline replay can supply a slot-aligned cloud scenario; the live caller
+    uses the original fixed factor. Nominal scoring and guards are unchanged.
+    """
     deadline = clock() + _MAX_SECONDS
 
     def assess(windows):
         if windows is None:
             return None
         normal = evaluate_battery_plan(windows=windows, **settings)
-        cloudy = evaluate_battery_plan(windows=windows, solar_factor=.75, **settings)
+        cloudy = evaluate_battery_plan(windows=windows, solar_factor=.75,
+                                       solar_factors=cloudy_solar_factors, **settings)
         if normal is None or cloudy is None:
             return None
         objective = .5 * (normal.cost + cloudy.cost) + normal.switches * _SWITCH_COST
