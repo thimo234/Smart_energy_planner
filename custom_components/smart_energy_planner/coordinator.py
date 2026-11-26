@@ -117,7 +117,7 @@ from .const import (
 )
 from .price_models import PlannerWindow
 from .planner_result import PlannerResult
-from .battery_optimizer import optimize_battery_plan
+from .battery_optimizer import executable_windows, instant, night_topup_target, optimize_battery_plan
 
 _LOGGER = logging.getLogger(__name__)
 _HISTORY_LOOKBACK_DAYS = 7
@@ -1290,7 +1290,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 retry._store_battery_cycle_state_snapshot = lambda timestamp: None
                 replacement = retry._build_plan_for_horizon(**inputs)
                 if (replacement.battery_planner_engine_reason not in
-                        ('optimizer_error', 'no_valid_plan', 'missing_data')
+                        ('optimizer_error', 'no_valid_plan', 'missing_data', 'publication_mismatch')
                         and (replacement.battery_planner_engine_reason != 'time_budget'
                              or replacement.planned_battery_mode_windows)):
                     result = replacement
@@ -1300,15 +1300,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         finally:
             self._cycle_export_planning = previous_export_planning
         cutoff = self._two_cycle_end(result.planned_battery_mode_windows) or tomorrow
-        result.planned_battery_mode_windows = [
-            {**w, "end": min(datetime.fromisoformat(w["end"]), cutoff).isoformat(),
-             "usable_hours": (min(datetime.fromisoformat(w["end"]), cutoff)
-                              - datetime.fromisoformat(w["start"])).total_seconds() / 3600}
-            for w in result.planned_battery_mode_windows
-            if datetime.fromisoformat(w["start"]) < cutoff
-        ]
+        result.planned_battery_mode_windows = executable_windows(result.planned_battery_mode_windows, cutoff)
         result.planned_battery_mode_schedule = [w for w in result.planned_battery_mode_schedule
-                                               if datetime.fromisoformat(w["at"]) < cutoff]
+                                               if instant(w["at"]) < instant(cutoff)]
         result.planned_battery_mode_schedule.append({"at": cutoff.isoformat(), "mode": "accu_uit"})
 
         # These complete series are presentation inputs only. They are attached
@@ -1706,10 +1700,13 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         )
         engine = "v2" if planner_kind == PLANNER_KIND_BATTERY else None
         engine_reason = "disabled"
+        diagnostics: set[str] = set()
         selected = None
         if battery_enabled and engine:
+            battery_planner = copy(battery_planner)
+            battery_planner._store_battery_cycle_state_snapshot = lambda timestamp: None
             selected, engine_reason = battery_planner._select_battery_plan(
-                source_args=source_args,
+                source_args=source_args, diagnostics=diagnostics,
                 slots=energy_balance_slots, now=now, initial_usable_energy_kwh=battery_energy_available_kwh,
                 usable_capacity_kwh=usable_battery_capacity_kwh, battery_soc_percent=battery_soc_percent,
                 average_price=average_price,
@@ -1717,7 +1714,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 max_charge_kw=max_charge, max_discharge_kw=max_discharge,
                 no_charge_reserve_kwh=no_charge_reserve_kwh, battery_min_profit=battery_min_profit,
             )
-        planned_solar_charge_windows, planned_grid_charge_windows = selected or ([], [])
+        planned_solar_charge_windows, planned_grid_charge_windows = selected[:2] if selected is not None else ([], [])
         next_planned_solar_charge_start = min(
             (
                 window_start
@@ -1797,6 +1794,29 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             home_demand_until_next_charge_kwh = round(
                 sum_remaining_home_demand_until(estimated_hourly_home_demand, now, None), 3,
             )
+        if selected is not None:
+            published = battery_planner._executable_battery_windows(full_planned_mode_windows, now)
+            if published != selected[2]:
+                # Never publish or persist a different simulation from the one vetted by v2.
+                _LOGGER.warning("Battery final replay differed from the validated commands; publishing idle")
+                selected, engine_reason = None, 'publication_mismatch'
+                diagnostics.add(engine_reason)
+                full_planned_mode_windows, planned_current_mode = [], 'accu_uit'
+                planned_grid_charge_windows, planned_solar_charge_windows = [], []
+                next_planned_grid_charge_start = next_planned_solar_charge_start = None
+                next_charge_opportunity = None
+                battery_reserved_energy_kwh = min(battery_energy_available_kwh, no_charge_reserve_kwh)
+                battery_energy_available_for_discharge_kwh = battery_exportable_energy_kwh = max(
+                    0., battery_energy_available_kwh - battery_reserved_energy_kwh)
+                home_demand_until_next_charge_kwh = round(
+                    sum_remaining_home_demand_until(estimated_hourly_home_demand, now, None), 3)
+            else:
+                original_state = vars(self)
+                for key, value in vars(battery_planner).items():
+                    if key != '_store_battery_cycle_state_snapshot' and original_state.get(key) is not value:
+                        setattr(self, key, value)
+                self._store_battery_cycle_state_snapshot(now)
+        battery_planner = self
         if planner_kind == PLANNER_KIND_BATTERY and battery_soc_percent is None:
             full_planned_mode_windows = []
             planned_current_mode = "accu_uit"
@@ -2058,6 +2078,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
             rationale=rationale,
             battery_planner_engine=engine,
             battery_planner_engine_reason=engine_reason,
+            battery_plan_rejection_reasons=tuple(sorted(diagnostics)),
         )
 
     def _serialize_planned_price_windows(
@@ -2378,17 +2399,41 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
         return self._plan_charge_windows_for_horizon(
             **source_args, no_charge_reserve_kwh=source_floor)
 
-    def _select_battery_plan(self, *, source_args, **plan):
+    def _executable_battery_windows(self, windows, now):
+        if not getattr(self, '_cycle_export_planning', False):
+            return windows
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        return executable_windows(windows, self._two_cycle_end(windows) or tomorrow)
+
+    def _select_battery_plan(self, *, source_args, diagnostics, **plan):
         """Search from observed state without persisting rejected trial state."""
         if (plan['battery_soc_percent'] is None or not plan['slots']
                 or min(plan['max_charge_kw'], plan['max_discharge_kw']) <= 0):
             return None, 'missing_data'
-        continuing = getattr(self, '_charge_session_started', False)
         capacity = plan['usable_capacity_kwh']
         initial = plan['initial_usable_energy_kwh']
+        # A partial PV charge does not lock direction or inherit a full-cycle
+        # discharge waiver. Release it before deciding which plans to try.
+        was_charging = getattr(self, '_charge_session_started', False)
+        self._release_solar_charge_hold(plan['no_charge_reserve_kwh'])
+        continuing = getattr(self, '_charge_session_started', False)
+        if was_charging and not continuing and initial < capacity - .005:
+            self._battery_cycle_discharge_floor_kwh = plan['no_charge_reserve_kwh']
+        # Do not restart a released, reserve-bound PV fill on residual sunlight
+        # alone. A new executable full PV refill can still be admitted.
+        released_solar_fill = (not continuing and initial < capacity - .005
+                               and getattr(self, '_battery_charge_source', None) == 'laden_met_zonne_energie'
+                               and getattr(self, '_battery_cycle_discharge_floor_kwh', 0.) == plan['no_charge_reserve_kwh'])
         reserve = min(initial, plan['no_charge_reserve_kwh'])
         unrestricted = ('grid', None)
         assessed = []
+        committed_full = (getattr(self, '_battery_cycle_discharge_floor_kwh', None) == 0.
+                          and getattr(self, '_discharge_session_started', False)
+                          and not getattr(self, '_charge_session_started', False)
+                          and not getattr(self, '_battery_solar_reserve_relaxation', False))
+        keep_full_boundary = committed_full and initial > .005
+
+        target, night = night_topup_target(plan['slots'], plan['now'], initial, capacity, plan['max_charge_kw'])
 
         def candidates():
             if continuing:
@@ -2396,8 +2441,10 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 yield 'continuation', None
                 return
             yield 'reserve_only', None
+            if target is not None and night:
+                yield 'night_topup', frozenset(s['start'] for s in night)
             yield unrestricted
-            grid = next((purchased for variant, _, purchased, _ in assessed if variant == unrestricted), [])
+            grid = next((row[2] for row in assessed if row[0] == unrestricted), [])
             if grid:
                 yield 'grid', frozenset()
                 start = datetime.fromisoformat(grid[0]['start'])
@@ -2448,6 +2495,9 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                     trial._battery_solar_reserve_relaxation = False
                     trial._battery_cycle_discharge_floor_kwh = plan['no_charge_reserve_kwh']
             admitted = copy(trial)
+            if keep_full_boundary:
+                admitted._battery_cycle_discharge_floor_kwh = 0.
+                trial._battery_cycle_discharge_floor_kwh = 0.
             windows = trial._build_mode_windows_from_hourly_plan(
                 **plan, planned_solar_charge_windows=solar, planned_grid_charge_windows=purchased)[0]
             if (solar or purchased) and not any(w['mode'] in ('laden_van_net', 'laden_met_zonne_energie')
@@ -2458,33 +2508,38 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 solar, purchased = [], []
                 admitted._full_arbitrage_intervals = []
                 admitted._battery_solar_reserve_relaxation = False
-                admitted._battery_cycle_discharge_floor_kwh = plan['no_charge_reserve_kwh']
+                admitted._battery_cycle_discharge_floor_kwh = 0. if keep_full_boundary else plan['no_charge_reserve_kwh']
                 trial = copy(admitted)
                 windows = trial._build_mode_windows_from_hourly_plan(
                     **plan, planned_solar_charge_windows=[], planned_grid_charge_windows=[])[0]
-            assessed.append((variant, solar, purchased, admitted))
-            if not getattr(self, '_cycle_export_planning', False):
-                return windows
-            # Score the commands that _build_plan publishes, not the outlook.
-            tomorrow = plan['now'].replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-            cutoff = self._two_cycle_end(windows) or tomorrow
-            return [{**w, 'end': min(datetime.fromisoformat(w['end']), cutoff).isoformat()}
-                    for w in windows if datetime.fromisoformat(w['start']) < cutoff]
+            executable = self._executable_battery_windows(windows, plan['now'])
+            refill_backed = bool(solar or purchased) and trial._battery_cycle_discharge_floor_kwh == 0.
+            assessed.append((variant, solar, purchased, admitted, executable, refill_backed, windows))
+            return executable
 
         try:
             selected, reason = optimize_battery_plan(candidates=candidates(), simulate=simulate,
                 settings=dict(slots=plan['slots'], now=plan['now'], initial=initial, capacity=capacity,
-                              max_charge=plan['max_charge_kw'], max_discharge=plan['max_discharge_kw']))
+                              max_charge=plan['max_charge_kw'], max_discharge=plan['max_discharge_kw'],
+                              allow_export=self._cycle_export_enabled, fallback_reserve=plan['no_charge_reserve_kwh'],
+                              committed_full=committed_full, minimum_profit=plan['battery_min_profit']),
+                rejection_reasons=diagnostics,
+                candidate_settings=lambda _: {'allow_refill_backed_discharge': assessed[-1][5],
+                                               'require_solar_completion': released_solar_fill,
+                                               'profit_outlook': assessed[-1][6]},
+                feedback=getattr(self, '_battery_plan_feedback', ()), topup_target=target)
             if selected is None:
+                if diagnostics:
+                    _LOGGER.warning("No executable v2 plan (%s): %s", reason, ', '.join(sorted(diagnostics)))
                 return None, reason
-            _, solar, purchased, admitted = next(row for row in assessed if row[0] is selected)
+            _, solar, purchased, admitted, executable, _, _ = next(row for row in assessed if row[0] is selected)
             # Commit only selected source permissions, never speculative future SOC.
             for attr in ('_full_arbitrage_intervals', '_battery_cycle_discharge_floor_kwh',
                          '_battery_solar_reserve_relaxation', '_charge_session_started',
                          '_discharge_session_started'):
                 if hasattr(admitted, attr):
                     setattr(self, attr, getattr(admitted, attr))
-            return (solar, purchased), 'active_charge' if continuing and reason != 'time_budget' else reason
+            return (solar, purchased, executable), 'active_charge' if continuing and reason != 'time_budget' else reason
         except Exception:
             _LOGGER.exception("Battery optimization failed; no new battery commands")
             return None, 'optimizer_error'

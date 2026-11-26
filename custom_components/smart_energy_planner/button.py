@@ -39,6 +39,7 @@ async def _async_setup_buttons(hass, entry, async_add_entities) -> None:
     if coordinator._config.get(CONF_PLANNER_KIND, PLANNER_KIND_BATTERY) != PLANNER_KIND_BATTERY:
         return
     feedback = PlanFeedback(hass, entry.entry_id, coordinator)
+    await feedback.async_load()
     async_add_entities([PlanFeedbackButton(entry, feedback, reject=False),
                         PlanFeedbackButton(entry, feedback, reject=True)])
 
@@ -50,6 +51,10 @@ class PlanFeedback:
         self.coordinator = coordinator
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.plan_feedback.{identity}")
         self._lock = Lock()
+
+    async def async_load(self) -> None:
+        data = await self._store.async_load() or {}
+        self.coordinator._battery_plan_feedback = tuple(data.get("records", []))
 
     async def async_vote(self, *, reject: bool) -> None:
         plan = self.coordinator.data
@@ -66,6 +71,7 @@ class PlanFeedback:
             data = await self._store.async_load() or {}
             records = [*data.get("records", []), record][-FEEDBACK_LIMIT:]
             await self._store.async_save({"records": records})
+            self.coordinator._battery_plan_feedback = tuple(records)
         if reject:
             await self.coordinator.async_request_refresh()
 

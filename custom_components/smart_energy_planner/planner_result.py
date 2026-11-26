@@ -94,3 +94,4 @@ class PlannerResult:
     forecast_generated_at: str | None = None
     battery_planner_engine: str | None = None
     battery_planner_engine_reason: str = "disabled"
+    battery_plan_rejection_reasons: tuple[str, ...] = ()

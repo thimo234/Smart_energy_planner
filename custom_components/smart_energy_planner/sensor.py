@@ -223,6 +223,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "next_cheap_window_end": data.next_window_end,
             "battery_planner_engine": getattr(data, "battery_planner_engine", None),
             "battery_planner_engine_reason": getattr(data, "battery_planner_engine_reason", "disabled"),
+            "battery_plan_rejection_reasons": list(getattr(data, "battery_plan_rejection_reasons", ())),
             "battery_soc_percent": getattr(data, "battery_soc_percent", None),
             "battery_total_energy_kwh": getattr(data, "battery_total_energy_kwh", 0.0),
             "battery_energy_available_kwh": getattr(data, "battery_energy_available_kwh", 0.0),

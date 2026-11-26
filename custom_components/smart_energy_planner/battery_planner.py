@@ -281,12 +281,15 @@ def build_battery_cycle_windows(
         if start is None or end is None:
             continue
 
+        # Published commands omit usable_hours; their exact timestamps still
+        # carry the duration, including through a daylight-saving transition.
+        usable_hours = float(window.get("usable_hours", (end.timestamp() - start.timestamp()) / 3600))
         family = (BATTERY_MODE_OFF if window.get("standby")
                   else battery_mode_family(str(window.get("mode", BATTERY_MODE_OFF))))
         if cycles and cast(datetime, cycles[-1]["end"]) == start and str(cycles[-1]["family"]) == family:
             cycles[-1]["end"] = end
             cycles[-1]["usable_hours"] = round(
-                float(cycles[-1].get("usable_hours", 0.0)) + float(window.get("usable_hours", 0.0)),
+                float(cycles[-1].get("usable_hours", 0.0)) + usable_hours,
                 3,
             )
             continue
@@ -296,7 +299,7 @@ def build_battery_cycle_windows(
                 "start": start,
                 "end": end,
                 "family": family,
-                "usable_hours": round(float(window.get("usable_hours", 0.0)), 3),
+                "usable_hours": round(usable_hours, 3),
             }
         )
 

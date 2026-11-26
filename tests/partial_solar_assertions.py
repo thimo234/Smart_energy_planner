@@ -5,7 +5,8 @@ from datetime import datetime
 def assert_executable_plan(case, slots, windows, *, initial, reserve, minimum=2.,
                            full=10., max_charge=3., max_discharge=3., margin=.08,
                            initial_cost=None, state=None, allow_estimated=False,
-                           require_new_pv_profit=False):
+                           require_new_pv_profit=False, committed_full=False,
+                           allow_refill_backed_discharge=False):
     """Check physical stock, original reserve, source gates and acquisition margins.
 
     Absolute kWh, no clipping: only an integrated full boundary permits a lower
@@ -14,8 +15,10 @@ def assert_executable_plan(case, slots, windows, *, initial, reserve, minimum=2.
     Unknown historical stock is not assigned a fabricated acquisition cost.
     """
     energy = initial
-    saw_full = initial >= full - .005
-    floor = minimum if saw_full else reserve
+    saw_full = committed_full or initial >= full - .005
+    awaiting_refill = False
+    may_spend_before_refill = allow_refill_backed_discharge and not saw_full and energy >= reserve-.005
+    floor = minimum if saw_full or may_spend_before_refill else reserve
     grid_hold = False if state is None else state['grid_hold']
     lots = ([[max(0., initial-minimum), initial_cost]] if state is None
             else [list(lot) for lot in state['lots']])
@@ -64,11 +67,13 @@ def assert_executable_plan(case, slots, windows, *, initial, reserve, minimum=2.
                         pv_basis_kwh += amount
                         pv_basis_cost += amount*float(cost)
                 if amount > 1e-9:
+                    may_spend_before_refill = False
                     floor = reserve
                 case.assertLessEqual(energy, full+.005)
                 if energy >= full-.005:
                     saw_full = True
                     grid_hold = False
+                    awaiting_refill = False
                     floor = minimum
             elif mode.startswith('ontladen'):
                 amount = (max_discharge if mode == 'ontladen_naar_net'
@@ -111,11 +116,13 @@ def assert_executable_plan(case, slots, windows, *, initial, reserve, minimum=2.
                 case.assertLessEqual(remaining, .005, 'sold nonexistent stock')
                 energy -= amount
                 sold += amount
+                awaiting_refill |= may_spend_before_refill and energy < reserve-.005
                 case.assertGreaterEqual(energy, floor-.005,
                     'original reserve released without an integrated full boundary')
             case.assertGreaterEqual(energy, minimum-.005)
     # No-sale physical compatibility is not a NEW-PV profit proof. Existing free
     # stock must not masquerade as turnover of the new purchase.
+    case.assertFalse(awaiting_refill, 'discharge below reserve was not followed by an executable full refill')
     pv_sold = min(pv_bought, max(0., sold-existing_free))
     verified = require_new_pv_profit and pv_sold > 1e-6 and not allow_estimated
     if require_new_pv_profit:

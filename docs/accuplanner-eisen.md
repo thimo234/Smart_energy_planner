@@ -4,13 +4,15 @@
 
 - Per accuplanner staan twee Home Assistant-knoppen: `Planning goedkeuren`
   en `Planning afkeuren en vernieuwen`. Goedkeuren verandert de planning niet.
-  Afkeuren vraagt na het opslaan een normale verversing aan voor die planner;
-  reserve-, winst- en cyclusregels blijven ongewijzigd. Bij dezelfde invoer
-  kan dezelfde planning opnieuw verschijnen.
+  Afkeuren vraagt na het opslaan een verversing aan voor die planner en laat
+  v2 een ander geldig plan proberen. Is er geen geldig alternatief, dan mag
+  het afgekeurde plan alleen terugkomen als het alle harde controles doorstaat;
+  de planner vermeldt waarom er geen alternatief is gevonden.
 - De beoordeling, het tijdstip en een momentopname van het beoordeelde plan
   met tarieven en prognoses worden lokaal in Home Assistant bewaard, maximaal
-  50 beoordelingen per planner. Deze feedback dient voor latere analyse;
-  er wordt niet automatisch getraind en er gaat geen feedback naar buiten.
+  50 beoordelingen per planner. Historische feedback helpt bij het rangschikken
+  van vergelijkbare geldige opties; zij wijzigt geen reserve-, winst- of
+  cyclusregels. Er gaat geen feedback naar buiten.
 - Lokaal getest met HA-doubles voor losse en huishoudplanners. De knoppen zijn
   na installatie nog in Home Assistant te controleren.
 
