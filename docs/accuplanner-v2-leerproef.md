@@ -26,7 +26,8 @@ Velden per regel:
   `measured_solar_kwh` en `measured_demand_kwh`. Prijzen zijn €/kWh. Geef de
   originele scorerwaarden `net_solar_kwh`, `solar_transition` en `price_known`
   mee als ze afwijken van respectievelijk zon min vraag, `false` en `true`.
-- `baseline`: de door de beleidslaag toegelaten v1-vensters.
+- `baseline`: de eerder vastgelegde en door de beleidslaag toegelaten vensters,
+  als gewone kandidaat in de offline vergelijking.
 - `candidates`: maximaal acht door dezelfde beleidslaag toegelaten plannen
   in de originele volgorde; elk heeft `id`, `kind` (`solar` of `grid`) en
   `windows`. Kandidaten moeten al gecontroleerd zijn op reserve, winst en

@@ -2,7 +2,7 @@
 
 ## Verversing per kwartier
 
-- V1 en v2 gebruiken per accuplanner de normale coordinatorverversing van
+- V2 gebruikt per accuplanner de normale coordinatorverversing van
   15 minuten. Gewone updates van tarieven, prognoses en metingen starten
   geen extra berekening; de volgende verversing leest de nieuwste waarden.
 - Bronuitval en herstel, het bereiken van de ingestelde ondergrens of reserve
@@ -11,27 +11,22 @@
   Geplande schakeltijden en het verversingsgedrag van andere planners wijzigen
   niet. Offline getest in `test_household_flows`.
 
-## Experimentele planner v2
+## Accuplanner v2
 
-- V1 blijft de standaard wanneer beide experimentele schakelaars uit staan.
-  ‘Experimentele planner v2 (volledige accuplanning)’ staat standaard uit en
-  krijgt voorrang als beide opties aan staan. De bestaande instelling voor
-  ‘alleen zonneladen’ wordt niet automatisch omgezet.
-- V2 vergelijkt een beperkt aantal uitvoerbare accuvarianten met v1. Het
-  probeert andere zonneblokken of beperkt de beschikbare inkoopmomenten en
-  berekent daarna opnieuw ontladen voor huisverbruik en toegestane teruglevering.
-  De bestaande simulatie bewaakt SOC, reserve, winst en overgangsmarge.
-  V2 laat een al gebonden laadfase ongemoeid en voert geen deelinkoop in.
-- Een nieuw uitsluitend zonneblok moet volledig kunnen vullen; inkoop mag in
-  de gepubliceerde planning niet vóór vol worden afgebroken. Een alternatief
-  mag de hoogst geplande SOC niet verlagen. Het moet in de normale en de 25%
-  lagere zonneprognose minstens dezelfde eindvoorraad behouden en mag in geen
-  van beide duurder zijn. Schakelen weegt mee in de rangschikking.
-  De lagere zonneprognose is een gevoeligheidstest, geen garantie bij live weer.
-- Bij ongeschikte of ontbrekende gegevens, geen beter plan, overschrijding
-  van het rekenbudget of een fout blijft v1 leidend. De kaart en de Battery
-  Strategy-attributen tonen de gekozen planner en de reden. Offline te testen
-  met `PYTHONPATH=tests python -m unittest test_battery_optimizer_v2 -q`.
+- Alle accuconfiguraties gebruiken v2, zowel met uur- als kwartierprijzen. De
+  voormalige moduskeuzes zijn verwijderd. Bestaande opties en opgeslagen
+  accustatus hoeven niet te worden gewist of gemigreerd.
+- V2 beoordeelt uitvoerbare varianten voor zonneladen, netladen, huisverbruik
+  en toegestane teruglevering. Elke variant vertrekt vanuit dezelfde gemeten
+  cyclusstatus. De gedeelde regels voor SOC, reserve, overgangsmarge,
+  winstgevendheid en een lopende laadverplichting blijven van toepassing.
+- Geen nieuwe deelinkoop. Een alternatief zonneblok moet volledig kunnen
+  vullen. Vergelijk kandidaten op de gepubliceerde opdrachten, kosten en
+  eindvoorraad bij de gewone én 25% lagere zonneprognose, geplande piek-SOC
+  en schakelgedrag. De lagere prognose is geen garantie bij live weer.
+- Bij overschrijding van het rekenbudget behoudt v2 het beste plan dat al
+  gevalideerd is. Zonder geldig plan volgen geen nieuwe laad- of
+  ontlaadopdrachten. De kaart en Battery Strategy-attributen tonen de reden.
 
 Dit is de blijvende afsprakenlijst voor werkzaamheden aan de accuplanner.
 De eisen hieronder komen uit het gesprek met de gebruiker. Ze beschrijven het

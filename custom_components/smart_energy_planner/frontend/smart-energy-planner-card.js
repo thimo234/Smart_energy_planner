@@ -103,18 +103,16 @@ class SmartEnergyPlannerCard extends HTMLElement {
 
   plannerEngineNotice(plannerState) {
     const {battery_planner_engine: engine, battery_planner_engine_reason: reason} = plannerState.attributes || {};
-    if (!engine) return '';
+    if (engine !== 'v2') return '';
     const reasons = {
       battery_cost_and_cloud_risk: 'Accuplan gekozen op kosten, minder zon en schakelgedrag.',
       active_charge: 'De bestaande laadfase blijft leidend.',
-      outside_solar_scope: 'Dit plan valt buiten de modus voor alleen zonneladen.',
-      invalid_reference_plan: 'Het bestaande accuplan kon niet betrouwbaar worden vergeleken.',
-      no_better_battery_plan: 'Geen beter accuplan gevonden binnen de bestaande regels.',
+      no_valid_plan: 'Geen geldig accuplan gevonden; geen nieuwe accuopdracht.',
       missing_data: 'Onvoldoende gegevens om accuvarianten te vergelijken.',
       time_budget: 'De accuplanner bereikte de rekentijdlimiet.',
-      optimizer_error: 'De accuvarianten konden niet worden berekend.',
+      optimizer_error: 'De accuvarianten konden niet worden berekend; geen nieuwe accuopdracht.',
     };
-    return `<div class="legend">Planner ${engine === 'v2' ? 'v2 (experimenteel)' : 'v1'}${Object.hasOwn(reasons, reason) ? ` · ${reasons[reason]}` : ''}</div>`;
+    return `<div class="legend">Planner v2${Object.hasOwn(reasons, reason) ? ` · ${reasons[reason]}` : ''}</div>`;
   }
 
   renderHeader(horizonStart, horizonEnd) {

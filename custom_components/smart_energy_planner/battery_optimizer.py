@@ -121,9 +121,9 @@ def evaluate_battery_plan(slots, windows, *, now, initial, capacity, max_charge,
     return BatteryScore(cost, peak, stock, switches, incomplete_grid_fill or grid_fill, completed_solar_fill)
 
 
-def optimize_battery_plan(*, baseline, candidates, simulate, settings, clock=monotonic,
+def optimize_battery_plan(*, candidates, simulate, settings, clock=monotonic,
                           cloudy_solar_factors=None):
-    """Return the selected policy-approved variant, or a V1 fallback reason.
+    """Return the best validated candidate found within the search budget.
 
     Offline replay can supply a slot-aligned cloud scenario; the live caller
     uses the original fixed factor. Nominal scoring and guards are unchanged.
@@ -141,32 +141,30 @@ def optimize_battery_plan(*, baseline, candidates, simulate, settings, clock=mon
         objective = .5 * (normal.cost + cloudy.cost) + normal.switches * _SWITCH_COST
         return normal, objective, cloudy
 
-    reference = assess(simulate(baseline))
-    if clock() >= deadline:
-        return None, 'time_budget'
-    if reference is None:
-        return None, 'invalid_reference_plan'
-    best, best_value = None, reference[1] - .01
+    best = incumbent = reserve_only = None
     candidates = iter(candidates)
     for _ in range(_MAX_CANDIDATES):
+        if clock() >= deadline:
+            return best or reserve_only, 'time_budget'
         candidate = next(candidates, None)
         if candidate is None:
             break
-        if clock() >= deadline:
-            return None, 'time_budget'
-        if candidate == baseline:
-            continue
         trial = assess(simulate(candidate))
+        if trial is not None:
+            nominal, value, cloudy = trial
+            if candidate[0] == 'reserve_only':
+                reserve_only = candidate
+            elif ((candidate[0] == 'continuation' or not nominal.incomplete_grid_fill)
+                    and (candidate[0] != 'solar' or nominal.completed_solar_fill)
+                    and (incumbent is None or (
+                        nominal.peak >= incumbent[0].peak - EPSILON
+                        and nominal.cost <= incumbent[0].cost + 1e-9
+                        and cloudy.cost <= incumbent[2].cost + 1e-9
+                        and nominal.end >= incumbent[0].end - EPSILON
+                        and cloudy.end >= incumbent[2].end - EPSILON
+                        and value < incumbent[1] - .01))):
+                best, incumbent = candidate, trial
         if clock() >= deadline:
-            return None, 'time_budget'
-        if (trial is not None and not trial[0].incomplete_grid_fill
-                and trial[0].peak >= reference[0].peak - EPSILON
-                and (candidate[0] != 'solar' or trial[0].completed_solar_fill)
-                and trial[0].cost <= reference[0].cost + 1e-9
-                and trial[2].cost <= reference[2].cost + 1e-9
-                and trial[0].end >= reference[0].end - EPSILON
-                and trial[2].end >= reference[2].end - EPSILON and trial[1] < best_value):
-            best, best_value = candidate, trial[1]
-    if clock() >= deadline:
-        return None, 'time_budget'
-    return (best, 'battery_cost_and_cloud_risk') if best is not None else (None, 'no_better_battery_plan')
+            return best or reserve_only, 'time_budget'
+    best = best or reserve_only
+    return (best, 'battery_cost_and_cloud_risk') if best is not None else (None, 'no_valid_plan')

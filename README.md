@@ -193,20 +193,18 @@ Battery strategy values:
 - `laden_met_zonne_energie`
 - `laden_van_net`
 
-## Experimental planner v2
+## Battery planner v2
 
-In the battery planner options, turn on **Experimental planner v2 (full battery planning)**
-to compare complete schedules for solar charging, grid charging, home discharge
-and eligible battery export. V2 compares a bounded set of charging alternatives
-and recalculates the resulting discharge schedule using the existing battery and
-pricing rules. It does not permit new partial grid purchases. It scores published
-commands under both the original and a lower-sun forecast, and accounts for mode
-changes. V1 remains the default and is used for an ongoing charge or whenever v2
-cannot find a suitable improvement within its compute budget.
-The main card and Battery Strategy attributes show the selected planner and
-why it was chosen. The separate solar-only option stays available. Full planning
-is off by default and takes priority if both options are on. Turn both off to
-return to v1.
+All battery planners (hourly and quarter-hourly) use v2 automatically. Existing
+configurations and stored battery state are kept; the old optimizer options
+are no longer used. V2 evaluates solar and grid charging, home discharge and
+eligible export using the battery's existing reserve and profitability rules.
+It preserves validated ongoing charge commitments and does not admit new
+partial grid purchases. Candidates are scored under both the original and a
+lower-sun forecast, taking mode changes into account. If the time budget is
+reached, the best validated plan found so far is kept. With no valid plan,
+the planner issues no new charge or discharge command. The card and Battery
+Strategy attributes show the outcome.
 
 ## Battery reserve
 

@@ -92,5 +92,5 @@ class PlannerResult:
     demand_accuracy: dict | None = None
     demand_weather_sources: dict | None = None
     forecast_generated_at: str | None = None
-    battery_planner_engine: str = "v1"
+    battery_planner_engine: str | None = None
     battery_planner_engine_reason: str = "disabled"

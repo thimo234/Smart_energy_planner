@@ -221,7 +221,7 @@ class BatteryPlannerSensor(PlannerSensor):
             "price_spread": data.price_spread,
             "next_cheap_window_start": data.next_window_start,
             "next_cheap_window_end": data.next_window_end,
-            "battery_planner_engine": getattr(data, "battery_planner_engine", "v1"),
+            "battery_planner_engine": getattr(data, "battery_planner_engine", None),
             "battery_planner_engine_reason": getattr(data, "battery_planner_engine_reason", "disabled"),
             "battery_soc_percent": getattr(data, "battery_soc_percent", None),
             "battery_total_energy_kwh": getattr(data, "battery_total_energy_kwh", 0.0),

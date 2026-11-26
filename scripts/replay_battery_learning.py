@@ -179,9 +179,9 @@ def backtest(cases):
             raise ValueError('use one non-overlapping replay per local day')
         settings, measured = prepare(case, now)
         slots = settings['slots']
-        baseline = ('baseline', 'v1')
+        baseline = ('recorded', 'recorded')
         plans: dict[tuple[str, str], list] = {baseline: plan_windows(case['baseline'], settings)}
-        ids = {'v1'}
+        ids = {baseline[1]}
         for variant in case['candidates']:
             kind, identifier = variant['kind'], variant['id']
             if kind not in ('solar', 'grid') or not isinstance(identifier, str) or not identifier or identifier in ids:
@@ -197,9 +197,11 @@ def backtest(cases):
             # The frozen clock makes the offline comparison independent of host load.
             # The production candidate limit and all scorer checks still apply.
             selected, reason = _optimizer.optimize_battery_plan(
-                baseline=baseline, candidates=tuple(plans)[1:], simulate=plans.__getitem__,
+                candidates=plans, simulate=plans.__getitem__,
                 settings=settings, clock=lambda: 0, cloudy_solar_factors=option)
-            selected = selected or baseline
+            if selected is None:
+                plans['idle', 'idle'] = []
+                selected = ('idle', 'idle')
             row[label] = dict(plan=selected[1], reason=reason,
                               **actual_score(plans[selected], settings, measured, expensive))
         results.append(row)
