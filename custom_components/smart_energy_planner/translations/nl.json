@@ -1,4 +1,12 @@
 {
+  "entity": {
+    "button": {
+      "approve_plan": {"name": "Planning goedkeuren"},
+      "reject_plan": {"name": "Planning afkeuren en vernieuwen"},
+      "approve_plan_standalone": {"name": "{planner}: planning goedkeuren"},
+      "reject_plan_standalone": {"name": "{planner}: planning afkeuren en vernieuwen"}
+    }
+  },
   "selector": {
     "price_window_action": {
       "options": {"edit": "Planner wijzigen", "add": "Planner toevoegen", "remove": "Planner verwijderen"}

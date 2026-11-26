@@ -51,7 +51,7 @@ from .frontend_resource import (
     lovelace_uses_storage_resources,
 )
 
-PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
+PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
 _CARD_STATIC_URL = "/smart_energy_planner"
 _CARD_STATIC_PATH = Path(__file__).parent / "frontend"
 _CARD_FILENAME = "smart-energy-planner-card.js"

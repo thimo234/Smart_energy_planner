@@ -213,6 +213,99 @@ class FlowContractTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PlatformContractTest(unittest.IsolatedAsyncioTestCase):
+    def load_buttons(self):
+        storage = {}
+
+        class Store:
+            def __init__(self, hass, version, key):
+                self.key = key
+
+            async def async_load(self):
+                return storage.get(self.key)
+
+            async def async_save(self, data):
+                storage[self.key] = data
+
+        class CoordinatorEntity:
+            def __init__(self, coordinator):
+                self.coordinator = coordinator
+
+        doubles = {
+            'homeassistant.components.button': module('button', ButtonEntity=object),
+            'homeassistant.helpers.storage': module('storage', Store=Store),
+            'homeassistant.helpers.update_coordinator': module('update_coordinator', CoordinatorEntity=CoordinatorEntity),
+            'homeassistant.exceptions': module('exceptions', HomeAssistantError=RuntimeError),
+        }
+        spec = importlib.util.spec_from_file_location(
+            'custom_components.smart_energy_planner.button', ROOT / 'button.py')
+        assert spec is not None and spec.loader is not None
+        obj = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, doubles):
+            spec.loader.exec_module(obj)
+        return obj, storage
+
+    async def test_feedback_votes_store_original_plan_and_refresh_only_on_rejection(self):
+        buttons, storage = self.load_buttons()
+        home = entry()
+        home.subentries = {'hour': sub('hour'), 'quarter': sub('quarter'),
+                           'price': sub('price', 'price_window')}
+        def coordinator(resolution, kind='battery'):
+            return NS(_config={'planner_kind': kind}, async_request_refresh=AsyncMock(),
+                      data=NS(price_resolution=resolution, battery_soc_percent=20,
+                              planned_battery_mode_windows=[{'mode': 'idle'}],
+                              upcoming_energy_price_windows=[{'price': 0.38}],
+                              battery_planner_engine='v2', battery_planner_engine_reason='ok'))
+        hour, quarter = coordinator('hourly'), coordinator('quarterly')
+        children = {'hour': hour, 'quarter': quarter, 'price': coordinator('hourly', 'price_window')}
+        hass = NS(data={DOMAIN: {'home': children, **children}})
+        add = Mock()
+        await buttons.async_setup_entry(hass, home, add)
+        self.assertEqual({c.kwargs['config_subentry_id'] for c in add.call_args_list}, {'hour', 'quarter'})
+        self.assertEqual(add.call_count, 2)
+        good, bad = next(c.args[0] for c in add.call_args_list if c.kwargs['config_subentry_id'] == 'hour')
+        self.assertEqual([good._attr_translation_key, bad._attr_translation_key], ['approve_plan', 'reject_plan'])
+        await good.async_press()
+        hour.async_request_refresh.assert_not_awaited()
+        def refresh():
+            records = next(iter(storage.values()))['records']
+            self.assertEqual([r['vote'] for r in records], ['approved', 'rejected'])
+            hour.data.planned_battery_mode_windows[0]['mode'] = 'grid_charge'
+        hour.async_request_refresh.side_effect = refresh
+        await bad.async_press()
+        hour.async_request_refresh.assert_awaited_once()
+        quarter.async_request_refresh.assert_not_awaited()
+        records = next(iter(storage.values()))['records']
+        self.assertEqual(records[-1]['plan']['planned_battery_mode_windows'], [{'mode': 'idle'}])
+        self.assertEqual(records[-1]['plan']['price_resolution'], 'hourly')
+
+    async def test_feedback_survives_entity_reload_and_keeps_bounded_history(self):
+        buttons, storage = self.load_buttons()
+        planner = entry('legacy', 'battery')
+        coordinator = NS(_config={}, data=NS(battery_planner_engine='v2'), async_request_refresh=AsyncMock())
+        hass = NS(data={DOMAIN: {'legacy': coordinator}})
+        add = Mock()
+        await buttons.async_setup_entry(hass, planner, add)
+        good, _ = add.call_args.args[0]
+        await good.async_press()
+        await buttons.async_setup_entry(hass, planner, add)
+        new_good, _ = add.call_args.args[0]
+        self.assertEqual(good._attr_unique_id, new_good._attr_unique_id)
+        for _ in range(buttons.FEEDBACK_LIMIT + 1):
+            await new_good.async_press()
+        records = next(iter(storage.values()))['records']
+        self.assertEqual(len(records), buttons.FEEDBACK_LIMIT)
+        self.assertTrue(all(r['vote'] == 'approved' for r in records))
+        coordinator.async_request_refresh.assert_not_awaited()
+
+    async def test_no_vote_or_refresh_without_a_published_plan(self):
+        buttons, storage = self.load_buttons()
+        coordinator = NS(data=None, async_request_refresh=AsyncMock())
+        feedback = buttons.PlanFeedback(NS(), 'hour', coordinator)
+        with self.assertRaisesRegex(RuntimeError, 'No battery plan'):
+            await feedback.async_vote(reject=True)
+        self.assertEqual(storage, {})
+        coordinator.async_request_refresh.assert_not_awaited()
+
     async def test_parent_cannot_register_another_coordinators_identity(self):
         home = entry()
         home.subentries = {'a': sub('a')}
@@ -281,7 +374,7 @@ def load_runtime():
         'homeassistant.config_entries': module('entries', ConfigEntry=object, ConfigEntryNotReady=RuntimeError),
         'homeassistant.const': module('const', EVENT_HOMEASSISTANT_STARTED='started',
                                      STATE_UNKNOWN='unknown', STATE_UNAVAILABLE='unavailable',
-                                     Platform=NS(SENSOR='sensor', BINARY_SENSOR='binary_sensor')),
+                                     Platform=NS(SENSOR='sensor', BINARY_SENSOR='binary_sensor', BUTTON='button')),
         'homeassistant.core': module('core', CoreState=NS(running='running'), Event=object,
             EventStateChangedData=object, HomeAssistant=object, callback=lambda func: func),
         'homeassistant.helpers': helpers,

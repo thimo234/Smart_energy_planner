@@ -1,4 +1,12 @@
 {
+  "entity": {
+    "button": {
+      "approve_plan": {"name": "Approve plan"},
+      "reject_plan": {"name": "Reject and refresh plan"},
+      "approve_plan_standalone": {"name": "{planner}: approve plan"},
+      "reject_plan_standalone": {"name": "{planner}: reject and refresh plan"}
+    }
+  },
   "selector": {
     "price_window_action": {
       "options": {"edit": "Edit planner", "add": "Add planner", "remove": "Remove planner"}

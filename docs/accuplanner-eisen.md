@@ -1,5 +1,19 @@
 # Eisen aan de accuplanner
 
+## Handmatige feedback op een planning
+
+- Per accuplanner staan twee Home Assistant-knoppen: `Planning goedkeuren`
+  en `Planning afkeuren en vernieuwen`. Goedkeuren verandert de planning niet.
+  Afkeuren vraagt na het opslaan een normale verversing aan voor die planner;
+  reserve-, winst- en cyclusregels blijven ongewijzigd. Bij dezelfde invoer
+  kan dezelfde planning opnieuw verschijnen.
+- De beoordeling, het tijdstip en een momentopname van het beoordeelde plan
+  met tarieven en prognoses worden lokaal in Home Assistant bewaard, maximaal
+  50 beoordelingen per planner. Deze feedback dient voor latere analyse;
+  er wordt niet automatisch getraind en er gaat geen feedback naar buiten.
+- Lokaal getest met HA-doubles voor losse en huishoudplanners. De knoppen zijn
+  na installatie nog in Home Assistant te controleren.
+
 ## Verversing per kwartier
 
 - V2 gebruikt per accuplanner de normale coordinatorverversing van
