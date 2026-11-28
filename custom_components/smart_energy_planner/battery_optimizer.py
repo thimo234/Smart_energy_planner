@@ -368,7 +368,9 @@ def optimize_battery_plan(*, candidates, simulate, settings, clock=monotonic,
         objective = .5 * (normal.cost + cloudy.cost) + normal.switches * _SWITCH_COST
         return normal, objective, cloudy
 
-    best = incumbent = reserve_only = rejected = preferred_topup = None
+    best = incumbent = reserve_only = preferred_topup = None
+    rejected = False
+    best_has_commands = reserve_has_commands = False
     incumbent_preference = (False, 0)
     timed_out = False
     candidates = iter(candidates)
@@ -387,13 +389,13 @@ def optimize_battery_plan(*, candidates, simulate, settings, clock=monotonic,
             preference = (vote == 'approved', preferences.get(feedback_pattern(windows), 0) if preferences else 0)
             if vote == 'rejected' and candidate[0] != 'continuation':
                 mark('manually_rejected')
-                if rejected is None or value < rejected[0]:
-                    rejected = value, candidate
+                rejected = True
             elif (candidate[0] == 'night_topup' and nominal.night_topup_completed
                   and (preferred_topup is None or value < preferred_topup[0])):
                 preferred_topup = value, candidate
             elif candidate[0] == 'reserve_only':
                 reserve_only = candidate
+                reserve_has_commands = any(w['mode'] != IDLE for w in windows)
             elif (incumbent is None or (
                         nominal.peak >= incumbent[0].peak - EPSILON
                         and nominal.cost <= incumbent[0].cost + 1e-9
@@ -403,14 +405,19 @@ def optimize_battery_plan(*, candidates, simulate, settings, clock=monotonic,
                         and (value < incumbent[1] - .01 or (preference > incumbent_preference
                             and value <= incumbent[1] + 1e-9)))):
                 best, incumbent = candidate, trial
+                best_has_commands = any(w['mode'] != IDLE for w in windows)
                 incumbent_preference = preference
         if clock() >= deadline:
             timed_out = True
             break
     if preferred_topup is not None:
         return preferred_topup[1], 'time_budget' if timed_out else 'night_topup_with_solar'
-    if (best := best or reserve_only) is not None:
+    if best is None:
+        best, best_has_commands = reserve_only, reserve_has_commands
+    if best is not None:
+        if not best_has_commands:
+            return best, 'no_battery_action_timeout' if timed_out else 'no_battery_action'
         return best, 'time_budget' if timed_out else 'battery_cost_and_cloud_risk'
-    if rejected is not None:
-        return rejected[1], 'feedback_search_timeout' if timed_out else 'no_feedback_alternative'
+    if rejected:
+        return None, 'feedback_search_timeout' if timed_out else 'no_feedback_alternative'
     return None, 'time_budget' if timed_out else 'no_valid_plan'

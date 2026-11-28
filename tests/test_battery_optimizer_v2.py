@@ -246,7 +246,30 @@ class OptimizerScoreTest(unittest.TestCase):
             settings=settings, feedback=feedback)
         self.assertEqual(result[0], options[1])
         self.assertEqual(optimize_battery_plan(candidates=options[:1], simulate=lambda _: original,
-            clock=lambda: 0., settings=settings, feedback=feedback), (options[0], 'no_feedback_alternative'))
+            clock=lambda: 0., settings=settings, feedback=feedback), (None, 'no_feedback_alternative'))
+
+        ticks = iter((0., 0., 1.))
+        self.assertEqual(optimize_battery_plan(candidates=options, simulate=lambda _: original,
+            clock=lambda: next(ticks), settings=settings, feedback=feedback), (None, 'feedback_search_timeout'))
+
+    def test_idle_candidate_reports_no_commands(self):
+        for standby in (False, True):
+            with self.subTest(standby=standby):
+                idle = self.window(0, 'accu_uit')
+                windows = [{**idle, 'standby': standby}]
+                self.assertEqual(optimize_battery_plan(candidates=[('reserve_only', None)],
+                    simulate=lambda _: windows, clock=lambda: 0., settings=dict(
+                        slots=self.slots, now=self.now, initial=0., capacity=2.,
+                        max_charge=2., max_discharge=2.)), (('reserve_only', None), 'no_battery_action'))
+
+    def test_standby_discharge_window_is_still_a_command(self):
+        windows = [{**self.window(0, 'ontladen'), 'standby': True}]
+        with patch.dict(optimize_battery_plan.__globals__, evaluate_battery_plan=Mock(
+                return_value=BatteryScore(cost=0., peak=0., end=1., switches=1,
+                                          incomplete_grid_fill=False, completed_solar_fill=False))):
+            self.assertEqual(optimize_battery_plan(candidates=[('reserve_only', None)],
+                simulate=lambda _: windows, clock=lambda: 0., settings={}),
+                (('reserve_only', None), 'battery_cost_and_cloud_risk'))
 
     def test_old_feedback_breaks_ties_without_skipping_the_hard_checks(self):
         options = [('grid', 1), ('grid', 2)]
@@ -296,7 +319,7 @@ class OptimizerScoreTest(unittest.TestCase):
                 namespace = optimize_battery_plan.__globals__
                 with patch.dict(namespace, evaluate_battery_plan=Mock(side_effect=[score(-.4), score(-.4), clear, cloudy])):
                     result = optimize_battery_plan(candidates=[incumbent, candidate],
-                        simulate=lambda _: [self.window(0, 'accu_uit')], settings={}, clock=lambda: 0.)
+                        simulate=lambda _: [self.window(0, 'ontladen')], settings={}, clock=lambda: 0.)
                 self.assertEqual(result, (incumbent, 'battery_cost_and_cloud_risk'))
 
 
@@ -331,8 +354,8 @@ class OptimizerIntegrationTest(unittest.TestCase):
                         end=(now + timedelta(hours=i + 1)).isoformat())
 
         values = [.35, .10, .10] + [.35] * 11 + [.85] * 5 + [.35] * 5
-        for profitable in (True, False):
-            with self.subTest(profitable=profitable):
+        for profitable, tight_budget in ((True, False), (False, False), (True, True)):
+            with self.subTest(profitable=profitable, tight_budget=tight_budget):
                 data = dict(
                     upcoming_energy_price_windows=[dict(point(i), price=v if profitable else .35, price_known=True)
                                                    for i, v in enumerate(values)],
@@ -342,8 +365,19 @@ class OptimizerIntegrationTest(unittest.TestCase):
                                                   for i in range(len(values))],
                     estimated_hourly_solar_forecast=[dict(point(i), estimated_kwh=2.) for i in (10, 11)],
                 )
-                _, slots, result = replay_full_plan(timestamp=now.isoformat(), fixture_data=data,
-                    soc=30., discharging=True, reserve=20., isolated_cycles=True, snapshot_exports=True)
+                namespace = coordinator()._build_plan_for_horizon.__globals__
+                optimizer = namespace['optimize_battery_plan']
+
+                def search(**kwargs):
+                    if tight_budget:
+                        # Exactly one trial can finish before the deadline.
+                        ticks = iter((0., 0.))
+                        kwargs['clock'] = lambda: next(ticks, 60.)
+                    return optimizer(**kwargs)
+
+                with patch.dict(namespace, optimize_battery_plan=search):
+                    _, slots, result = replay_full_plan(timestamp=now.isoformat(), fixture_data=data,
+                        soc=30., discharging=True, reserve=20., isolated_cycles=True, snapshot_exports=True)
                 if profitable:
                     # A fully checked top-up remains executable when the
                     # live search budget expires before all trials finish.

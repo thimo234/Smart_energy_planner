@@ -108,6 +108,10 @@ class SmartEnergyPlannerCard extends HTMLElement {
       battery_cost_and_cloud_risk: 'Accuplan gekozen op kosten, minder zon en schakelgedrag.',
       active_charge: 'De bestaande laadfase blijft leidend.',
       no_valid_plan: 'Geen geldig accuplan gevonden; geen nieuwe accuopdracht.',
+      no_battery_action: 'De accu blijft stand-by: geen laad- of ontlaadvenster geselecteerd.',
+      no_battery_action_timeout: 'De accu blijft stand-by: binnen de rekentijdlimiet is geen laad- of ontlaadvenster geselecteerd.',
+      no_feedback_alternative: 'Geen geldig alternatief voor de afgekeurde planning; geen nieuwe accuopdracht.',
+      feedback_search_timeout: 'Geen geldig alternatief binnen de rekentijdlimiet; geen nieuwe accuopdracht.',
       missing_data: 'Onvoldoende gegevens om accuvarianten te vergelijken.',
       time_budget: 'De accuplanner bereikte de rekentijdlimiet.',
       optimizer_error: 'De accuvarianten konden niet worden berekend; geen nieuwe accuopdracht.',
@@ -1909,7 +1913,7 @@ class SmartEnergyPlannerMiniCard extends SmartEnergyPlannerCard {
       else backgrounds.push({start:slot.start,end:slot.end,mode:slot.mode});
     });
     const curvePaths = {demand:curve('demand'),solar:curve('solar')};
-    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)">${this.forecastNotice(state)}<svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
+    this.innerHTML = `<ha-card style="display:block;overflow:hidden;background:transparent;border:0;box-shadow:none;color:var(--primary-text-color,#222)">${this.plannerEngineNotice(state)}${this.forecastNotice(state)}<svg viewBox="0 0 480 150" preserveAspectRatio="none" style="display:block;width:100%;height:${Math.min(150, Math.max(80, Number(this.config.height) || 150))}px;touch-action:pan-y" role="img" aria-label="Energie vandaag, 00:00 tot 23:59">
       <defs><clipPath id="${clipId}-past"><rect x="${left}" y="0" width="${splitX-left}" height="132"/></clipPath><clipPath id="${clipId}-future"><rect x="${splitX}" y="0" width="${right-splitX}" height="132"/></clipPath>
       <linearGradient id="${clipId}-fade" gradientUnits="userSpaceOnUse" x1="${splitX}" x2="${x(new Date(+now+1800000))}"><stop offset="0" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity=".6"/></linearGradient>
       <mask id="${clipId}-blend" maskUnits="userSpaceOnUse" x="0" y="0" width="480" height="150"><rect width="480" height="150" fill="url(#${clipId}-fade)"/></mask></defs>

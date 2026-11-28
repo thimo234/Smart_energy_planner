@@ -5,9 +5,9 @@
 - Per accuplanner staan twee Home Assistant-knoppen: `Planning goedkeuren`
   en `Planning afkeuren en vernieuwen`. Goedkeuren verandert de planning niet.
   Afkeuren vraagt na het opslaan een verversing aan voor die planner en laat
-  v2 een ander geldig plan proberen. Is er geen geldig alternatief, dan mag
-  het afgekeurde plan alleen terugkomen als het alle harde controles doorstaat;
-  de planner vermeldt waarom er geen alternatief is gevonden.
+  v2 een ander geldig plan proberen. Is er geen geldig alternatief, dan geeft
+  v2 geen nieuwe accuopdracht en vermeldt het dashboard of de rekentijd op was.
+  Een gemeten lopende laadcyclus blijft onder de bestaande cyclusregels vallen.
 - De beoordeling, het tijdstip en een momentopname van het beoordeelde plan
   met tarieven en prognoses worden lokaal in Home Assistant bewaard, maximaal
   50 beoordelingen per planner. Historische feedback helpt bij het rangschikken

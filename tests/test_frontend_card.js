@@ -24,6 +24,16 @@ assert.match(Card.prototype.plannerEngineNotice({attributes: {
 assert.match(Card.prototype.plannerEngineNotice({attributes: {
   battery_planner_engine: 'v2', battery_planner_engine_reason: 'time_budget',
 }}), /Planner v2.*rekentijdlimiet/);
+for (const [reason, message] of [
+  ['no_battery_action', /stand-by/],
+  ['no_battery_action_timeout', /stand-by.*rekentijdlimiet/],
+  ['no_feedback_alternative', /Geen geldig alternatief/],
+  ['feedback_search_timeout', /Geen geldig alternatief binnen de rekentijdlimiet/],
+]) {
+  assert.match(Card.prototype.plannerEngineNotice({attributes: {
+    battery_planner_engine: 'v2', battery_planner_engine_reason: reason,
+  }}), message);
+}
 assert.equal(Card.prototype.plannerEngineNotice({attributes: {}}), '');
 const Mini = registered.get('smart-energy-planner-mini-card');
 assert.ok(Mini);
@@ -40,6 +50,16 @@ assert.equal(mini.historicalSoc(new Date('2026-08-07T10:30:00Z')),63);
 assert.equal(mini.historicalSoc(new Date('2026-08-07T11:00:00Z')),52);
 assert.equal(mini.historicalSoc(new Date('2026-08-07T12:30:00Z')),undefined, 'unavailable SOC must not be replaced by a current or older valid value');
 mini._hass = {states:{'sensor.house':{attributes:{unit_of_measurement:'W'}}}};
+mini.querySelector = () => ({addEventListener() {}});
+for (const [windows, reason, notice] of [
+  [[], 'no_feedback_alternative', /Geen geldig alternatief/],
+  [[{mode:'accu_uit', start:'2026-08-07T00:00:00Z', end:'2026-08-08T00:00:00Z'}], 'no_battery_action', /stand-by/],
+]) {
+  mini._hass.states['sensor.planner'] = {attributes:{battery_planner_engine:'v2',
+    battery_planner_engine_reason:reason, planned_battery_mode_windows:windows}};
+  mini.render();
+  assert.match(mini.innerHTML, notice);
+}
 mini._history = {'sensor.house':[
   {state:'1000', last_changed:'2026-08-07T10:00:00Z', attributes:{unit_of_measurement:'W'}},
   {state:'3000', last_changed:'2026-08-07T10:15:00Z', attributes:{unit_of_measurement:'W'}},

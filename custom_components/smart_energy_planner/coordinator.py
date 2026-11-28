@@ -1290,7 +1290,8 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 retry._store_battery_cycle_state_snapshot = lambda timestamp: None
                 replacement = retry._build_plan_for_horizon(**inputs)
                 if (replacement.battery_planner_engine_reason not in
-                        ('optimizer_error', 'no_valid_plan', 'missing_data', 'publication_mismatch')
+                        ('optimizer_error', 'no_valid_plan', 'missing_data', 'publication_mismatch',
+                         'feedback_search_timeout', 'no_feedback_alternative')
                         and (replacement.battery_planner_engine_reason != 'time_budget'
                              or replacement.planned_battery_mode_windows)):
                     result = replacement
@@ -2440,9 +2441,11 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                 # A measured commitment cannot be replaced by a new cycle.
                 yield 'continuation', None
                 return
-            yield 'reserve_only', None
+            # Prove the time-sensitive top-up before a reserve-only trial can
+            # consume the search budget. Publication checks apply to both.
             if target is not None and night:
                 yield 'night_topup', frozenset(s['start'] for s in night)
+            yield 'reserve_only', None
             yield unrestricted
             grid = next((row[2] for row in assessed if row[0] == unrestricted), [])
             if grid:
@@ -2539,7 +2542,7 @@ class SmartEnergyPlannerCoordinator(DataUpdateCoordinator[PlannerResult]):
                          '_discharge_session_started'):
                 if hasattr(admitted, attr):
                     setattr(self, attr, getattr(admitted, attr))
-            return (solar, purchased, executable), 'active_charge' if continuing and reason != 'time_budget' else reason
+            return (solar, purchased, executable), 'active_charge' if continuing and reason == 'battery_cost_and_cloud_risk' else reason
         except Exception:
             _LOGGER.exception("Battery optimization failed; no new battery commands")
             return None, 'optimizer_error'
